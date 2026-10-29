@@ -3,7 +3,7 @@
 //! Antigravity / gcloud OAuth (`ya29.`) tokens are Google access tokens, not
 //! Gemini API keys. Against the generativelanguage OpenAI-compat host they are
 //! rejected with 401 UNAUTHENTICATED even with `x-goog-user-project`; against
-//! `cloudcode-pa.googleapis.com` over the native Gemini protocol
+//! `daily-cloudcode-pa.googleapis.com` over the native Gemini protocol
 //! (`v1internal:streamGenerateContent`) the exact same token returns 200.
 //!
 //! This module translates nur-cli's Responses-shaped [`ResponseRequest`] into a
@@ -83,10 +83,14 @@ pub fn build_body(req: &ResponseRequest, project: &str, model: &str) -> Value {
         let decls: Vec<Value> = tools
             .iter()
             .map(|t| {
+                // `parameters` is Gemini's OpenAPI-subset Schema proto, which
+                // refuses JSON Schema forms nur's tools use (`"type": [..]`
+                // unions, `anyOf`, ...). `parametersJsonSchema` takes the
+                // schema as written.
                 json!({
                     "name": t.name,
                     "description": t.description.clone().unwrap_or_default(),
-                    "parameters": t
+                    "parametersJsonSchema": t
                         .parameters
                         .clone()
                         .unwrap_or_else(|| json!({ "type": "object", "properties": {} })),
@@ -501,9 +505,9 @@ mod tests {
     fn cloud_code_body_uses_caller_normalized_bare_model_id() {
         // Client normalizes via normalize_antigravity_model_id before build_body;
         // document that the wire model must be bare (no models/ prefix).
-        let bare = crate::providers::normalize_antigravity_model_id("models/gemini-2.5-flash");
+        let bare = crate::providers::normalize_antigravity_model_id("models/gemini-3.8-flash-low");
         let body = build_body(&sample_request(), "proj-x", &bare);
-        assert_eq!(body["model"], "gemini-2.5-flash");
+        assert_eq!(body["model"], "gemini-3.8-flash-low");
         assert!(!body["model"].as_str().unwrap_or("").starts_with("models/"));
         assert_eq!(body["project"], "proj-x");
         assert!(body["request"]["contents"].is_array());

@@ -901,6 +901,9 @@ pub struct StreamAccumulator {
     pub reasoning: String,
     /// tool_calls by index: (id, name, arguments-fragments).
     calls: Vec<(String, String, String)>,
+    /// Provider `index` -> slot, where a reused index opened a new slot for a
+    /// new call id; the id-less fragments that follow belong to that call.
+    index_slot: std::collections::HashMap<usize, usize>,
     usage: Option<Value>,
     think: ThinkSplitter,
     /// finish_reason from the provider, e.g. "length" for truncation.
@@ -989,7 +992,31 @@ impl StreamAccumulator {
                 for tc in tcs {
                     let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
                     let idx = match tc.get("index").and_then(|v| v.as_u64()) {
-                        Some(i) => i as usize,
+                        // A provider-sent index is a slot number, not a size:
+                        // `index: 4294967295` must not allocate that many
+                        // slots. And a gateway that numbers every call 0
+                        // must not merge two ids into one call.
+                        Some(i) => {
+                            let i = usize::try_from(i)
+                                .ok()
+                                .filter(|i| *i <= self.calls.len() + 64)
+                                .unwrap_or(self.calls.len());
+                            let current = self.index_slot.get(&i).copied().unwrap_or(i);
+                            match self.calls.get(current) {
+                                Some(slot)
+                                    if !id.is_empty() && !slot.0.is_empty() && slot.0 != id =>
+                                {
+                                    let fresh = self
+                                        .calls
+                                        .iter()
+                                        .position(|c| c.0 == id)
+                                        .unwrap_or(self.calls.len());
+                                    self.index_slot.insert(i, fresh);
+                                    fresh
+                                }
+                                _ => current,
+                            }
+                        }
                         // No `index` field: every parallel call used to collapse
                         // into slot 0, concatenating their argument fragments
                         // into one unparseable blob and losing all but one call
@@ -1513,6 +1540,25 @@ mod tests {
         assert_eq!(calls[0].name, "grep");
         assert_eq!(calls[0].arguments, "{\"p\":\"x\"}");
         assert_eq!(resp.usage.as_ref().unwrap().output_tokens, 4);
+    }
+
+    /// A gateway that numbers every parallel call 0 (and one sending an
+    /// absurd index) must still yield one call per id, with each id-less
+    /// fragment on the call its index last opened.
+    #[test]
+    fn a_reused_or_absurd_index_keeps_calls_apart() {
+        let mut acc = StreamAccumulator::default();
+        acc.push(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"grep","arguments":"{\"p\":"}}]}}]}));
+        acc.push(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"a\"}"}}]}}]}));
+        acc.push(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c2","function":{"name":"grep","arguments":"{\"p\":"}}]}}]}));
+        acc.push(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"b\"}"}}]}}]}));
+        acc.push(&json!({"choices":[{"delta":{"tool_calls":[{"index":4294967295u64,"id":"c3","function":{"name":"ls","arguments":"{}"}}]}}]}));
+        let resp = to_api_response(acc.finish()).unwrap();
+        let calls = resp.function_calls();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].arguments, "{\"p\":\"a\"}");
+        assert_eq!(calls[1].arguments, "{\"p\":\"b\"}");
+        assert_eq!(calls[2].name, "ls");
     }
 
     /// Parallel tool calls streamed without an `index` field (some gateways,

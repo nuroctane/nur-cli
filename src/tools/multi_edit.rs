@@ -89,7 +89,16 @@ fn apply_edits(original: &str, edits: &[Value]) -> Result<(String, usize)> {
             .get("replace_all")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let count = content.matches(old).count();
+        // CRLF files match line-ending-insensitively, like `edit_file`:
+        // read_file shows lines without `\r`, so the model sends LF, and each
+        // replaced line keeps the ending it had.
+        let crlf = content.contains("\r\n");
+        let (haystack, needle) = if crlf {
+            (content.replace("\r\n", "\n"), old.replace("\r\n", "\n"))
+        } else {
+            (content.clone(), old.to_string())
+        };
+        let count = haystack.matches(needle.as_str()).count();
         if count == 0 {
             return Err(NurError::Tool(format!(
                 "edits[{i}]: old_string not found (earlier edits in this call were not written)"
@@ -100,7 +109,9 @@ fn apply_edits(original: &str, edits: &[Value]) -> Result<(String, usize)> {
                 "edits[{i}]: old_string matched {count} times; set replace_all=true or make unique"
             )));
         }
-        content = if replace_all {
+        content = if crlf {
+            super::edit_file::splice_normalized(&content, &haystack, &needle, new, replace_all)
+        } else if replace_all {
             content.replace(old, new)
         } else {
             content.replacen(old, new, 1)
@@ -120,6 +131,19 @@ mod tests {
                 serde_json::json!({ "old_string": old, "new_string": new, "replace_all": all })
             })
             .collect()
+    }
+
+    /// read_file shows CRLF lines without `\r`, so a multi-line old_string
+    /// arrives LF-only: it must still match, and the result must stay CRLF.
+    #[test]
+    fn lf_edits_apply_to_a_crlf_file_and_keep_its_endings() {
+        let (out, n) = apply_edits(
+            "fn a() {\r\n    1\r\n}\r\n",
+            &edits(&[("fn a() {\n    1\n", "fn a() {\n    2\n    3\n", false)]),
+        )
+        .unwrap();
+        assert_eq!(out, "fn a() {\r\n    2\r\n    3\r\n}\r\n");
+        assert_eq!(n, 1);
     }
 
     /// `"".replace` would interleave `new` between every character.

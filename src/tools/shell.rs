@@ -67,9 +67,41 @@ struct Capture {
 
 type Sink = Arc<Mutex<Capture>>;
 
-/// Lossy UTF-8 conversion that reuses the buffer when it is already valid.
+/// Output as text: UTF-8 when it is (reusing the buffer), else, on Windows,
+/// the console's OEM code page, which Windows PowerShell 5.1, cmd and most
+/// native tools emit there. Lossy UTF-8 turned every accented path or
+/// compiler message from those shells into U+FFFD.
 fn bytes_to_string(bytes: Vec<u8>) -> String {
-    String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+    String::from_utf8(bytes).unwrap_or_else(|e| {
+        let bytes = e.into_bytes();
+        oem_decode(&bytes).unwrap_or_else(|| String::from_utf8_lossy(&bytes).into_owned())
+    })
+}
+
+#[cfg(windows)]
+fn oem_decode(bytes: &[u8]) -> Option<String> {
+    use windows_sys::Win32::Globalization::{GetOEMCP, MultiByteToWideChar};
+    let len = i32::try_from(bytes.len()).ok()?;
+    if len == 0 {
+        return Some(String::new());
+    }
+    // SAFETY: both buffers are valid for the lengths passed; the first call
+    // only measures, the second writes at most `wide.len()` units.
+    unsafe {
+        let page = GetOEMCP();
+        let needed = MultiByteToWideChar(page, 0, bytes.as_ptr(), len, std::ptr::null_mut(), 0);
+        if needed <= 0 {
+            return None;
+        }
+        let mut wide = vec![0u16; needed as usize];
+        let written = MultiByteToWideChar(page, 0, bytes.as_ptr(), len, wide.as_mut_ptr(), needed);
+        (written > 0).then(|| String::from_utf16_lossy(&wide[..written as usize]))
+    }
+}
+
+#[cfg(not(windows))]
+fn oem_decode(_bytes: &[u8]) -> Option<String> {
+    None
 }
 
 /// Move the captured bytes out of the sink (no clone under the lock).
@@ -481,6 +513,7 @@ pub fn run_in_shell_with(
         .env("NPM_CONFIG_YES", "true")
         .env("DEBIAN_FRONTEND", "noninteractive")
         .env("PYTHONUNBUFFERED", "1");
+    super::scrub_provider_keys(&mut cmd);
     // The model's scratch space (see `agent::scratch`): durable, inside the
     // sandbox, and the place the prompt sends throwaway files instead of /tmp.
     if let Some(scratch) = crate::agent::scratch::ensure(cwd) {
@@ -494,7 +527,15 @@ pub fn run_in_shell_with(
             cmd.args(["-c", command]);
         }
         ShellKind::Pwsh | ShellKind::PowerShell => {
-            cmd.args(["-NoProfile", "-NonInteractive", "-Command", command]);
+            // Cmdlet output (Get-Content, Select-String, ...) follows these;
+            // Windows PowerShell 5.1 otherwise writes the OEM code page.
+            let utf8 = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);                        $OutputEncoding=[Text.UTF8Encoding]::new($false);";
+            cmd.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("{utf8} {command}"),
+            ]);
         }
         ShellKind::Cmd => {
             // Verbatim, not a normal argument: Rust escapes inner quotes as \",
@@ -796,6 +837,19 @@ mod tests {
         assert_eq!(clamp_timeout_ms(0), 1_000);
         assert_eq!(clamp_timeout_ms(30_000), 30_000);
         assert_eq!(clamp_timeout_ms(999_999), MAX_TIMEOUT_MS);
+    }
+
+    /// cmd and Windows PowerShell 5.1 write the OEM code page; decoding that
+    /// as UTF-8 turned every non-ASCII character into U+FFFD. UTF-8 output
+    /// must still pass through untouched.
+    #[test]
+    fn non_utf8_shell_output_is_decoded_not_replaced() {
+        assert_eq!(bytes_to_string("café ✓".as_bytes().to_vec()), "café ✓");
+        let oem = bytes_to_string(vec![b'c', b'a', b'f', 0x82]);
+        if cfg!(windows) {
+            assert!(!oem.contains('\u{fffd}'), "{oem:?}");
+            assert_eq!(oem.chars().count(), 4);
+        }
     }
 
     // Failure modes: tail lost (errors sit at the tail), cut inside a UTF-8

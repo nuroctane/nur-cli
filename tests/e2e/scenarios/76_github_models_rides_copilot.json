@@ -1,0 +1,37 @@
+{
+  "description": "GitHub retired GitHub Models on 2026-07-30 and models.github.ai answers a bare 'OK' to every path; the github-models route sends the same GitHub sign-in to Copilot, with Copilot's headers and none of the retired GitHub API ones.",
+  "provider": "github-models",
+  "model": "gpt-4.1",
+  "env": {
+    "GITHUB_TOKEN": "e2e-github-token-0001"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"github-models\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"gpt-4.1\"\n"
+  },
+  "prompt": "Say hello.",
+  "script": [
+    {
+      "text": "Hello from Copilot."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 1,
+    "stdout_contains": [
+      "Hello from Copilot."
+    ],
+    "protocol": "chat/completions",
+    "absent_request_fields": [
+      "reasoning_effort"
+    ],
+    "headers": {
+      "present": [
+        "copilot-integration-id",
+        "editor-version"
+      ],
+      "absent": [
+        "x-github-api-version"
+      ]
+    }
+  }
+}

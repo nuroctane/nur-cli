@@ -198,6 +198,13 @@ fn stage_pack(pack: &Pack, source: &PackSource, tmp: &Path) -> Result<()> {
 fn locate_pack(version: &str) -> Result<(PackSource, &'static str)> {
     if let Some(path) = std::env::var_os("NUR_SKILL_PACK").filter(|v| !v.is_empty()) {
         let path = PathBuf::from(path);
+        // The override skips the signature check by design (tests and local
+        // packs), so a shipped binary says so every time it is used.
+        #[cfg(not(any(test, debug_assertions)))]
+        crate::theme::print_info(&format!(
+            "NUR_SKILL_PACK set: installing unsigned skills from {}",
+            path.display()
+        ));
         if path.is_dir() {
             return Ok((PackSource::Checkout(path), "NUR_SKILL_PACK"));
         }

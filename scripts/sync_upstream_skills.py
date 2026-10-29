@@ -165,7 +165,11 @@ SKIP_DIR_NAMES = {
     "dist",
     "build",
     "references",  # not a skill root
+    "fixtures",  # upstream test data (sample plugins), not skills
 }
+
+# Upstream scaffolds that ship as a SKILL.md but carry no instructions.
+PLACEHOLDER_DESCRIPTIONS = ("Replace with description of the skill",)
 
 
 def run(cmd, cwd=None, timeout=180):
@@ -246,6 +250,9 @@ def find_skill_dirs(root: Path) -> list[Path]:
             continue
         parent = md.parent
         if parent.name in SKIP_DIR_NAMES:
+            continue
+        head = md.read_text(encoding="utf-8", errors="replace")[:2000]
+        if any(text in head for text in PLACEHOLDER_DESCRIPTIONS):
             continue
         # Temp clone folders look like 61-owner-repo.git — never vendor those names.
         # Skip pack roots that are just catalogs named SKILL.md at repo root

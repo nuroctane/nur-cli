@@ -152,7 +152,8 @@ nur auth import --from <codex|claude|grok|kimi|cursor|opencode|antigravity|droid
 
 #### `nur auth status`
 
-Show auth status. Never prints the full key.
+Show the active credential, then every provider holding one (the `/auth`
+view). Never prints the full key.
 
 ```bash
 nur auth status
@@ -458,6 +459,7 @@ nur gateway [--token <TOKEN>] [--chat <CHAT_ID>]
 |------|-------------|
 | `--token` | Bot token (else `$TELEGRAM_BOT_TOKEN`) |
 | `--chat` | The one chat the bot answers (else `$TELEGRAM_CHAT_ID`). Required to run anything: without it the bot only pairs, replying to each sender with their chat id and running nothing, because every turn auto-approves tools, `bash` included |
+| `--user` | In a group chat, the one sender the bot obeys (else `$TELEGRAM_USER_ID`). A group (negative chat id) runs nothing without it, since every member could otherwise drive an auto-approved agent; the bot replies with the sender's user id to pair. Private chats do not need it |
 
 ---
 

@@ -63,8 +63,23 @@ const WINDOW: usize = 4096;
 
 impl RuleWatch {
     pub fn load(cwd: &Path, configured: &[StreamRuleSpec]) -> Self {
+        Self::load_trusted(cwd, configured, crate::agent::skill_trust::is_trusted(cwd))
+    }
+
+    fn load_trusted(cwd: &Path, configured: &[StreamRuleSpec], trusted: bool) -> Self {
         let mut specs: Vec<StreamRuleSpec> = configured.to_vec();
-        if let Ok(text) = std::fs::read_to_string(cwd.join(".nur").join("stream-rules.toml")) {
+        let project = cwd.join(crate::agent::skill_trust::PROJECT_STREAM_RULES);
+        // A cloned repo's rules can inject instructions or drop answers, so
+        // they wait for the same trust as its skills.
+        if project.is_file() && !trusted {
+            let mut watch = Self::compile(specs);
+            watch.invalid.push(
+                ".nur/stream-rules.toml is held until you trust this project: /skills trust"
+                    .to_string(),
+            );
+            return watch;
+        }
+        if let Ok(text) = std::fs::read_to_string(&project) {
             match toml::from_str::<ProjectFile>(&text) {
                 Ok(file) => specs.extend(file.rule),
                 Err(error) => {
@@ -212,7 +227,18 @@ mod tests {
             "[[rule]]\nname = \"no-unwrap\"\npattern = '\\.unwrap\\(\\)'\nrule = \"Handle the error.\"\n",
         )
         .unwrap();
-        let watch = RuleWatch::load(&dir, &[spec("box-leak", "Box::leak")]);
+        // Untrusted, the project's rule stays off and says so; the user's own
+        // configured rules still apply.
+        let held = RuleWatch::load_trusted(&dir, &[spec("box-leak", "Box::leak")], false);
+        assert!(held.check("x.unwrap()").is_none());
+        assert!(held.rule("box-leak").is_some());
+        assert!(
+            held.invalid[0].contains("/skills trust"),
+            "{:?}",
+            held.invalid
+        );
+
+        let watch = RuleWatch::load_trusted(&dir, &[spec("box-leak", "Box::leak")], true);
         assert!(watch.invalid.is_empty(), "{:?}", watch.invalid);
         assert_eq!(watch.check("x.unwrap()").unwrap().name, "no-unwrap");
         assert!(watch.rule("box-leak").is_some());

@@ -247,6 +247,28 @@ pub trait Tool: Send + Sync {
 }
 
 /// Stateful tool host (todos/plan/steer share with TUI).
+/// Drop model-provider keys from a tool subprocess's environment, unless
+/// `[tools] pass_provider_keys = true` (see [`crate::providers::is_model_provider_key`]).
+pub(crate) fn scrub_provider_keys(cmd: &mut std::process::Command) {
+    static PASS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let pass = *PASS.get_or_init(|| {
+        crate::config::load_config()
+            .map(|cfg| cfg.tools.pass_provider_keys)
+            .unwrap_or(false)
+    });
+    if pass {
+        return;
+    }
+    for (name, _) in std::env::vars_os() {
+        if name
+            .to_str()
+            .is_some_and(crate::providers::is_model_provider_key)
+        {
+            cmd.env_remove(name);
+        }
+    }
+}
+
 pub struct ToolHost {
     pub todos: SharedTodos,
     pub plan: SharedPlan,
@@ -652,10 +674,7 @@ pub(crate) fn commit_file_write(
     updated: &str,
     tool: &str,
 ) -> Result<Option<String>> {
-    if crate::config::load_config()
-        .map(|c| c.proposal_mode)
-        .unwrap_or(false)
-    {
+    if crate::config::proposal_mode_on() {
         let entry =
             crate::agent::proposal::stage_write(&ctx.session_id, &ctx.cwd, path_arg, updated, tool)
                 .map_err(NurError::Tool)?;

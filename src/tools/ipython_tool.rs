@@ -131,9 +131,10 @@ fn run_bash_shell(cwd: &std::path::Path, cmd: &str) -> Result<String> {
     let (prog, args) = ("cmd.exe", vec!["/C".to_string(), cmd.to_string()]);
     #[cfg(not(windows))]
     let (prog, args) = ("sh", vec!["-c".to_string(), cmd.to_string()]);
-    let out = std::process::Command::new(prog)
-        .args(&args)
-        .current_dir(cwd)
+    let mut command = std::process::Command::new(prog);
+    command.args(&args).current_dir(cwd);
+    super::scrub_provider_keys(&mut command);
+    let out = command
         .output()
         .map_err(|e| NurError::Tool(format!("repl %%bash failed: {e}")))?;
     let mut s = String::new();

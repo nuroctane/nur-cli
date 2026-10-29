@@ -42,6 +42,9 @@ pub struct PermissionRules {
     ask: Vec<String>,
     /// The project's allow rules while they are untrusted: shown, never applied.
     held: Vec<String>,
+    /// Rules files that exist but do not parse, with the parse error. Their
+    /// deny rules cannot be read, so every call asks until they are fixed.
+    broken: Vec<String>,
 }
 
 impl PermissionRules {
@@ -56,7 +59,7 @@ impl PermissionRules {
 
     fn load_with(cwd: &Path, home: &Path, store: &Path) -> Self {
         let mut out = Self::default();
-        if let Some(f) = read_rules(home) {
+        if let Some(f) = out.read(home) {
             out.allow.extend(f.allow);
             out.deny.extend(f.deny);
             out.ask.extend(f.ask);
@@ -66,7 +69,7 @@ impl PermissionRules {
             // Started in the home directory: that file is the user's own.
             return out;
         }
-        if let Some(f) = read_rules(&project) {
+        if let Some(f) = out.read(&project) {
             out.deny.extend(f.deny);
             out.ask.extend(f.ask);
             if is_trusted(store, cwd, &f.allow) {
@@ -76,6 +79,21 @@ impl PermissionRules {
             }
         }
         out
+    }
+
+    /// Read one rules file. A file that exists but does not parse fails
+    /// closed: a typo in a deny list must not silently drop every rule in it.
+    fn read(&mut self, path: &Path) -> Option<PermissionsFile> {
+        let text = std::fs::read_to_string(path).ok()?;
+        match toml::from_str(&text) {
+            Ok(file) => Some(file),
+            Err(error) => {
+                self.broken
+                    .push(format!("{}: {}", path.display(), error.message().trim()));
+                self.ask.push("*:*".to_string());
+                None
+            }
+        }
     }
 
     /// If any rule matches, return the strongest decision (deny > ask > allow).
@@ -92,6 +110,14 @@ impl PermissionRules {
         let mut views = vec![canon.clone()];
         if let Some(parts) = &shell {
             views.extend(parts.commands.iter().map(|c| format!("bash:{c}")));
+            // ...and the command a wrapper runs: `sudo rm`, `env X=1 rm`,
+            // `xargs rm`, `{ rm -rf x; }`, `bash -c 'rm -rf ~'`. These views
+            // only ever tighten (deny/ask); allow keeps to the literal text.
+            if let Some(cmd) = canon.strip_prefix("bash:") {
+                let mut inner = Vec::new();
+                unwrapped_commands(cmd, 0, &mut inner);
+                views.extend(inner.into_iter().map(|c| format!("bash:{c}")));
+            }
         }
         let any_view = |rules: &[String]| {
             views
@@ -142,6 +168,12 @@ impl PermissionRules {
     /// What an untrusted project asks to auto-approve, or `None` when nothing
     /// is held back.
     pub fn held_notice(&self) -> Option<String> {
+        if !self.broken.is_empty() {
+            return Some(format!(
+                "permissions file does not parse, so every tool call asks until it is fixed: {}",
+                self.broken.join("; ")
+            ));
+        }
         if self.held.is_empty() {
             return None;
         }
@@ -246,7 +278,49 @@ pub fn canonical(tool: &str, args_json: &str) -> String {
 /// that exact command only. A browser grant names the action: the browser is
 /// the user's real, logged-in profile, so an "always" for `click` must never
 /// bless `exec`. Every other tool is granted by name.
+/// Write tools, by the name their `path` argument goes with.
+const WRITE_TOOLS: &[&str] = &[
+    "write_file",
+    "edit_file",
+    "multi_edit",
+    "apply_patch",
+    "hashline_edit",
+];
+
+/// Where a write lands that changes how the project, its tools or nur
+/// behave rather than its content: git internals (hooks and `core.fsmonitor`
+/// run code on the next `git status`), CI workflows, editor tasks, and nur's
+/// own project rules. Returns that directory's name.
+pub fn protected_write_dir(tool: &str, args_json: &str) -> Option<&'static str> {
+    if !WRITE_TOOLS.contains(&tool) {
+        return None;
+    }
+    let args: serde_json::Value = serde_json::from_str(args_json).ok()?;
+    let path = args
+        .get("path")?
+        .as_str()?
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    if parts.contains(&".git") {
+        return Some(".git");
+    }
+    // A workspace-relative or absolute path: the directory may sit at any
+    // depth of an absolute one, so match the component, not the prefix.
+    [".github", ".nur", ".vscode"]
+        .into_iter()
+        .find(|dir| parts.contains(dir))
+}
+
 pub fn session_grant_keys(tool: &str, args_json: &str) -> Vec<String> {
+    // An "always" for writing source files must not also cover a hook,
+    // a workflow or the project's own permission rules.
+    if protected_write_dir(tool, args_json).is_some() {
+        return vec![format!("{tool}={}", canonical(tool, args_json))];
+    }
     match tool {
         "enclave" => vec![canonical(tool, args_json)],
         "browser" | "terminal_browser" => vec![canonical(tool, args_json)],
@@ -331,6 +405,109 @@ pub(crate) fn program(command: &str) -> Option<String> {
         .unwrap_or(name)
         .to_ascii_lowercase();
     (!name.is_empty()).then_some(name)
+}
+
+/// Words that run the rest of the command line: shell keywords and grouping,
+/// and wrappers whose own flags (some taking a value) come first.
+fn strip_wrappers(command: &str) -> String {
+    let mut words: Vec<&str> = command.split_whitespace().collect();
+    let mut from_stdin = false;
+    loop {
+        let Some(first) = words.first().copied() else {
+            break;
+        };
+        let name = first.rsplit(['/', '\\']).next().unwrap_or(first);
+        let name = name
+            .strip_suffix(".exe")
+            .unwrap_or(name)
+            .to_ascii_lowercase();
+        let takes_value: &[&str] = match name.as_str() {
+            "{" | "}" | "!" | "then" | "do" | "else" | "elif" | "if" | "while" | "until"
+            | "time" | "exec" | "nohup" | "command" | "builtin" | "noglob" => &[],
+            "sudo" | "doas" => &["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t"],
+            "env" => &["-u", "-C", "-S"],
+            "nice" | "ionice" => &["-n", "-c"],
+            "timeout" => &["-s", "-k"],
+            "xargs" => &["-I", "-n", "-P", "-L", "-d", "-a", "-s", "-E"],
+            "stdbuf" | "chrt" | "taskset" => &[],
+            _ if first.contains('=') && !first.starts_with('=') && !first.starts_with('-') => &[],
+            _ => break,
+        };
+        words.remove(0);
+        from_stdin |= name == "xargs";
+        // The wrapper's own options, and the values those options take.
+        while let Some(word) = words.first().copied() {
+            if takes_value.contains(&word) {
+                words.drain(..words.len().min(2));
+            } else if word.starts_with('-') || (word.contains('=') && !word.starts_with('=')) {
+                words.remove(0);
+            } else {
+                break;
+            }
+        }
+        // `timeout 5 cmd`, `nice 10 cmd`: a bare number before the command.
+        if matches!(name.as_str(), "timeout" | "nice")
+            && words
+                .first()
+                .is_some_and(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        {
+            words.remove(0);
+        }
+    }
+    // `xargs rm -rf` takes its operands from stdin; stand one in so a rule
+    // written as `rm -rf *` still sees an argument.
+    if from_stdin && !words.is_empty() {
+        words.push("{stdin}");
+    }
+    words.join(" ")
+}
+
+/// The script a shell runs from its arguments (`bash -c '…'`, `sh -lc …`,
+/// `cmd /c …`, `pwsh -Command …`, `eval …`).
+fn shell_payload(command: &str) -> Option<String> {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    let program = program(command)?;
+    let at = match program.as_str() {
+        "bash" | "sh" | "zsh" | "dash" | "ksh" | "fish" => words
+            .iter()
+            .position(|w| w.starts_with('-') && !w.starts_with("--") && w.ends_with('c'))?,
+        "cmd" => words
+            .iter()
+            .position(|w| w.eq_ignore_ascii_case("/c") || w.eq_ignore_ascii_case("/k"))?,
+        "powershell" | "pwsh" => words.iter().position(|w| {
+            let w = w.to_ascii_lowercase();
+            w == "-c" || w == "-command" || w == "/c" || w == "/command"
+        })?,
+        "eval" => 0,
+        _ => return None,
+    };
+    let rest = words[at + 1..].join(" ");
+    let rest = rest.trim();
+    let unquoted = ['\'', '"']
+        .iter()
+        .find_map(|q| rest.strip_prefix(*q).and_then(|r| r.strip_suffix(*q)))
+        .unwrap_or(rest);
+    (!unquoted.trim().is_empty()).then(|| unquoted.trim().to_string())
+}
+
+/// Every command `cmd` runs once wrappers are peeled and `-c` scripts are
+/// opened, to a bounded depth.
+fn unwrapped_commands(cmd: &str, depth: usize, out: &mut Vec<String>) {
+    for part in shell_parts(cmd).commands {
+        let core = strip_wrappers(&part);
+        if core.is_empty() {
+            continue;
+        }
+        if depth < 4 {
+            if let Some(script) = shell_payload(&core) {
+                unwrapped_commands(&script, depth + 1, out);
+            }
+        }
+        // Inside a `-c` script every command is hidden from the outer view.
+        if depth > 0 || core != part {
+            out.push(core);
+        }
+    }
 }
 
 /// Pattern forms:
@@ -497,11 +674,6 @@ pub fn project_permissions_path(cwd: &Path) -> PathBuf {
     cwd.join(".nur").join("permissions.toml")
 }
 
-fn read_rules(path: &Path) -> Option<PermissionsFile> {
-    let text = std::fs::read_to_string(path).ok()?;
-    toml::from_str(&text).ok()
-}
-
 fn same_file(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
@@ -554,9 +726,20 @@ pub fn trust_project(cwd: &Path) -> std::io::Result<Vec<String>> {
 }
 
 fn trust_project_in(path: &Path, cwd: &Path) -> std::io::Result<Vec<String>> {
-    let allow = read_rules(&project_permissions_path(cwd))
-        .map(|f| f.allow)
-        .unwrap_or_default();
+    let file = project_permissions_path(cwd);
+    let allow = match std::fs::read_to_string(&file) {
+        Ok(text) => {
+            toml::from_str::<PermissionsFile>(&text)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("{} does not parse: {}", file.display(), e.message().trim()),
+                    )
+                })?
+                .allow
+        }
+        Err(_) => Vec::new(),
+    };
     let mut store = read_trust_store(path);
     let key = project_key(cwd);
     if allow.is_empty() {
@@ -699,6 +882,86 @@ mod tests {
         assert_eq!(bash("git status | rm -rf x"), deny);
         assert_eq!(bash("git push && npm publish"), Some(RuleDecision::Ask));
         assert_eq!(bash(r#"echo "rm -rf /""#), allow);
+
+        // Wrappers and shells hide the command from a prefix match; deny and
+        // ask still see it. Allow never widens through an unwrapped view.
+        for hidden in [
+            "bash -c 'rm -rf ~'",
+            "sh -lc \"rm -rf /tmp/x\"",
+            "sudo rm -rf /",
+            "sudo -u root rm -rf /",
+            "env FOO=1 rm -rf x",
+            "xargs -n 1 rm -rf",
+            "{ rm -rf x; }",
+            "if true; then rm -rf x; fi",
+            "time rm -rf x",
+            "timeout 5 rm -rf x",
+            "nohup bash -c 'sudo rm -rf x'",
+            "cmd /c rm -rf x",
+            "pwsh -Command rm -rf x",
+        ] {
+            assert_eq!(bash(hidden), deny, "{hidden}");
+        }
+        assert_eq!(bash("sudo git status"), None);
+    }
+
+    /// One "always" for write_file used to cover every write for the session,
+    /// a git hook and the project's own permission rules included.
+    #[test]
+    fn an_always_for_writes_does_not_cover_hooks_workflows_or_rules() {
+        let write = |path: &str| serde_json::json!({ "path": path, "contents": "x" }).to_string();
+        assert_eq!(
+            session_grant_keys("write_file", &write("src/a.rs")),
+            vec!["write_file"]
+        );
+        for (path, dir) in [
+            (".git/hooks/pre-commit", ".git"),
+            (r"C:\repo\.git\config", ".git"),
+            (".github/workflows/ci.yml", ".github"),
+            ("./.nur/permissions.toml", ".nur"),
+            (".vscode/tasks.json", ".vscode"),
+        ] {
+            assert_eq!(
+                protected_write_dir("write_file", &write(path)),
+                Some(dir),
+                "{path}"
+            );
+            assert_ne!(
+                session_grant_keys("write_file", &write(path)),
+                vec!["write_file"]
+            );
+        }
+        assert_eq!(
+            protected_write_dir("read_file", &write(".git/config")),
+            None
+        );
+        assert_eq!(
+            protected_write_dir("write_file", &write("docs/gitignore.md")),
+            None
+        );
+    }
+
+    /// A typo used to drop every rule in the file without a word, deny rules
+    /// included. Now the file fails closed and says why.
+    #[test]
+    fn a_rules_file_that_does_not_parse_makes_every_call_ask() {
+        let dir = std::env::temp_dir().join(format!("nur-perm-broken-{}", std::process::id()));
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let rules = home.join("permissions.toml");
+        std::fs::write(
+            &rules,
+            "deny = [\"bash:rm *\"
+",
+        )
+        .unwrap();
+        let r = PermissionRules::load_with(&dir, &rules, &dir.join("trust.json"));
+        assert_eq!(
+            r.decide("read_file", r#"{"path":"a.rs"}"#),
+            Some(RuleDecision::Ask)
+        );
+        assert!(r.held_notice().unwrap().contains("does not parse"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

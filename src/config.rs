@@ -67,7 +67,7 @@ pub const PRICE_OUTPUT_PER_MTOK: f64 = 4.25;
 /// not imply an unlimited single completion.
 /// Schema >=14: Meta Model API stock default is Muse Spark 1.2 (Llama 4
 /// Maverick is no longer on this host).
-pub const CONFIG_SCHEMA: u32 = 14;
+pub const CONFIG_SCHEMA: u32 = 15;
 
 const RETIRED_PROVIDER_IDS: &[&str] = &[
     "anyscale",
@@ -858,6 +858,12 @@ pub struct ToolsConfig {
     /// every call as written. Needs sgrep installed to change anything.
     #[serde(default = "default_true")]
     pub sgrep_first: bool,
+    /// `false` (default): model-provider keys (`OPENAI_API_KEY`,
+    /// `NUR_API_KEY`, ...) are removed from the environment of the commands
+    /// tools run, so a `printenv` or an injected `curl` cannot leak them.
+    /// `true` passes them through, for scripts that call a provider themselves.
+    #[serde(default)]
+    pub pass_provider_keys: bool,
 }
 fn default_tool_profile() -> String {
     "lean".into()
@@ -867,6 +873,7 @@ impl Default for ToolsConfig {
         ToolsConfig {
             profile: default_tool_profile(),
             sgrep_first: true,
+            pass_provider_keys: false,
         }
     }
 }
@@ -1310,6 +1317,18 @@ pub fn migrate_config(cfg: &mut Config) -> bool {
     if cfg.config_schema < 14 && cfg.provider == "meta" {
         cfg.model = crate::providers::normalize_meta_model_id(&cfg.model);
     }
+    if cfg.config_schema < 15 {
+        // 2026 retirements: Groq's Llama/Qwen line, Fireworks' and NVIDIA's
+        // Llama 3.3, Baseten's DeepSeek V3, Friendli's Qwen3 235B, Poolside's
+        // Laguna M.1, Copilot's gpt-5.5 and Cloud Code's gemini-2.5-flash;
+        // Glama and Hyperbolic moved hosts, and GitHub Models now rides Copilot.
+        if crate::providers::uses_catalog_host(&cfg.provider, &cfg.base_url) {
+            cfg.model = crate::providers::normalize_model_for(&cfg.provider, &cfg.model);
+        }
+        if let Some(base) = crate::providers::moved_base_url(&cfg.provider, &cfg.base_url) {
+            cfg.base_url = base.to_string();
+        }
+    }
     cfg.config_schema = CONFIG_SCHEMA;
     true
 }
@@ -1463,6 +1482,23 @@ pub fn ensure_dirs() -> Result<()> {
     fs::create_dir_all(&home)?;
     fs::create_dir_all(sessions_dir())?;
     Ok(())
+}
+
+/// Whether file writes stage as proposals, read straight from the config
+/// file: no migration write on every tool call. A config that does not parse
+/// but mentions the setting is treated as on, so a typo elsewhere in the file
+/// cannot quietly let writes reach the workspace.
+pub fn proposal_mode_on() -> bool {
+    let Ok(text) = fs::read_to_string(config_path()) else {
+        return false;
+    };
+    match toml::from_str::<toml::Value>(&text) {
+        Ok(value) => value
+            .get("proposal_mode")
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false),
+        Err(_) => text.contains("proposal_mode"),
+    }
 }
 
 pub fn load_config() -> Result<Config> {
@@ -2469,6 +2505,69 @@ min_reduction = 0.5
         assert!(migrate_config(&mut cfg));
         assert_eq!(cfg.model, crate::providers::XAI_DEFAULT_MODEL);
         assert_eq!(cfg.config_schema, CONFIG_SCHEMA);
+    }
+
+    // Failure modes: a retired default left in place (404 every turn), a moved
+    // host left in place (DNS failure), a custom proxy host rewritten.
+    #[test]
+    fn migrate_heals_the_october_retirements_and_moved_hosts() {
+        let mut groq = Config {
+            config_schema: 14,
+            provider: "groq".into(),
+            base_url: "https://api.groq.com/openai/v1".into(),
+            model: "llama-3.3-70b-versatile".into(),
+            ..Default::default()
+        };
+        assert!(migrate_config(&mut groq));
+        assert_eq!(groq.model, "openai/gpt-oss-120b");
+
+        let mut glama = Config {
+            config_schema: 14,
+            provider: "glama".into(),
+            base_url: "https://gateway.glama.ai/v1/".into(),
+            model: "openai/gpt-5.6-terra".into(),
+            ..Default::default()
+        };
+        assert!(migrate_config(&mut glama));
+        assert_eq!(glama.base_url, crate::providers::GLAMA_BASE_URL);
+        assert_eq!(glama.model, "openai/gpt-5.6-terra");
+
+        let mut github_models = Config {
+            config_schema: 14,
+            provider: "github-models".into(),
+            base_url: "https://models.github.ai/inference".into(),
+            model: "openai/gpt-5".into(),
+            ..Default::default()
+        };
+        assert!(migrate_config(&mut github_models));
+        assert_eq!(
+            github_models.base_url,
+            crate::providers::GITHUB_COPILOT_BASE_URL
+        );
+        assert_eq!(
+            github_models.model,
+            crate::providers::GITHUB_COPILOT_DEFAULT_MODEL
+        );
+
+        let mut proxied = Config {
+            config_schema: 14,
+            provider: "hyperbolic".into(),
+            base_url: "https://proxy.internal/hyperbolic/v1".into(),
+            ..Default::default()
+        };
+        assert!(migrate_config(&mut proxied));
+        assert_eq!(proxied.base_url, "https://proxy.internal/hyperbolic/v1");
+
+        // A proxy may still serve an id the provider itself withdrew.
+        let mut groq_proxy = Config {
+            config_schema: 14,
+            provider: "groq".into(),
+            base_url: "https://llm.internal/groq/v1".into(),
+            model: "llama-3.3-70b-versatile".into(),
+            ..Default::default()
+        };
+        assert!(migrate_config(&mut groq_proxy));
+        assert_eq!(groq_proxy.model, "llama-3.3-70b-versatile");
     }
 
     #[test]

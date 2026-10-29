@@ -37,10 +37,18 @@ fn write_store(path: &Path, store: &BTreeMap<String, String>) -> std::io::Result
     crate::config::atomic_write(path, &json)
 }
 
-/// Every SKILL.md the project roots would contribute, as (root-relative)
-/// paths sorted for a stable digest.
+/// Project stream rules inject text into the conversation the way a skill
+/// body does, so the same trust covers them.
+pub const PROJECT_STREAM_RULES: &str = ".nur/stream-rules.toml";
+
+/// Every SKILL.md the project roots would contribute, plus the project's
+/// stream rules, as paths sorted for a stable digest.
 fn project_skill_files(cwd: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
+    let rules = cwd.join(PROJECT_STREAM_RULES);
+    if rules.is_file() {
+        files.push(rules);
+    }
     for root in PROJECT_ROOTS {
         let dir = cwd.join(root);
         if dir.is_dir() {

@@ -578,7 +578,12 @@ impl Tool for HashlineEdit {
         super::guard_unchanged_since_read(&full)?;
         let bytes = std::fs::read(&full)
             .map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
-        let text = String::from_utf8_lossy(&bytes).into_owned();
+        // A lossy decode would write U+FFFD over every byte that is not UTF-8.
+        let text = String::from_utf8(bytes).map_err(|_| {
+            NurError::Tool(format!(
+                "{path} is not UTF-8 text; hashline_edit would corrupt its encoding"
+            ))
+        })?;
         let current = file_tag(&text);
         if current != tag {
             return Err(NurError::Tool(format!(

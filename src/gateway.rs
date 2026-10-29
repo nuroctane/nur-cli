@@ -26,6 +26,8 @@ const TG_MAX: usize = 4096;
 pub struct Update {
     pub update_id: i64,
     pub chat_id: i64,
+    /// The sender (`from.id`); absent for channel posts.
+    pub from_id: Option<i64>,
     pub text: String,
 }
 
@@ -60,9 +62,14 @@ pub fn parse_updates(body: &Value) -> Vec<Update> {
         else {
             continue;
         };
+        let from_id = msg
+            .get("from")
+            .and_then(|f| f.get("id"))
+            .and_then(|v| v.as_i64());
         out.push(Update {
             update_id,
             chat_id,
+            from_id,
             text: text.to_string(),
         });
     }
@@ -78,17 +85,39 @@ pub fn next_offset(updates: &[Update], current: i64) -> i64 {
         .unwrap_or(current)
 }
 
-/// Whether `chat_id` may use the bot. Fail closed: every turn runs with tools
+/// Who may drive the bot: the one allowed chat, and in a group (Telegram
+/// gives groups negative ids) only the one allowed sender, since every
+/// member could otherwise run an auto-approved agent with `bash`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Allowed {
+    pub chat: Option<i64>,
+    pub user: Option<i64>,
+}
+
+/// Whether `update` may use the bot. Fail closed: every turn runs with tools
 /// auto-approved, `bash` included, so a bot without an allowed chat runs
-/// nothing for anyone who finds it.
-pub fn authorized(chat_id: i64, allow: Option<i64>) -> bool {
-    allow == Some(chat_id)
+/// nothing for anyone who finds it, and a group without an allowed sender
+/// runs nothing either.
+pub fn authorized(update: &Update, allow: Allowed) -> bool {
+    if allow.chat != Some(update.chat_id) {
+        return false;
+    }
+    update.chat_id > 0 || (allow.user.is_some() && update.from_id == allow.user)
 }
 
 /// What an unauthorized sender is told. Before any chat is allowed it names
-/// the sender's own chat id, so pairing is one restart away.
-pub fn refusal(chat_id: i64, allow: Option<i64>) -> String {
-    match allow {
+/// the sender's own chat id, so pairing is one restart away; an allowed group
+/// without an allowed sender names the sender's user id the same way.
+pub fn refusal(update: &Update, allow: Allowed) -> String {
+    let chat_id = update.chat_id;
+    match allow.chat {
+        Some(chat) if chat == chat_id && allow.user.is_none() => match update.from_id {
+            Some(user) => format!(
+                "a group chat also needs the one sender this gateway obeys. Your user id is \
+                 {user}: restart it with `--user {user}` (or TELEGRAM_USER_ID={user})."
+            ),
+            None => "not authorized".to_string(),
+        },
         Some(_) => "not authorized".to_string(),
         None => format!(
             "this gateway has no allowed chat yet, so it runs nothing. Your chat id is \
@@ -177,6 +206,7 @@ pub async fn run_gateway(
     mut usage: UsageTracker,
     token: Option<String>,
     allow_chat: Option<i64>,
+    allow_user: Option<i64>,
 ) -> Result<()> {
     let token = token
         .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())
@@ -188,11 +218,16 @@ pub async fn run_gateway(
                     .into(),
             )
         })?;
-    let allow_chat = allow_chat.or_else(|| {
-        std::env::var("TELEGRAM_CHAT_ID")
+    let env_id = |name: &str| {
+        std::env::var(name)
             .ok()
-            .and_then(|s| s.trim().parse().ok())
-    });
+            .and_then(|s| s.trim().parse::<i64>().ok())
+    };
+    let allow_chat = allow_chat.or_else(|| env_id("TELEGRAM_CHAT_ID"));
+    let allow = Allowed {
+        chat: allow_chat,
+        user: allow_user.or_else(|| env_id("TELEGRAM_USER_ID")),
+    };
 
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
@@ -252,17 +287,32 @@ pub async fn run_gateway(
                 }
             },
         };
+        // `{"ok":false}` (409 from a second poller, 401, 429) or a non-JSON
+        // body has no updates; re-polling at once spins the CPU and extends a
+        // rate limit. Wait what Telegram asks, or a few seconds.
+        if body.get("ok").and_then(Value::as_bool) != Some(true) {
+            let wait = body
+                .pointer("/parameters/retry_after")
+                .and_then(Value::as_u64)
+                .unwrap_or(3)
+                .clamp(1, 300);
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(wait)) => {}
+            }
+            continue;
+        }
         let updates = parse_updates(&body);
         offset = next_offset(&updates, offset);
         for up in updates {
             if cancel.is_cancelled() {
                 break;
             }
-            if !authorized(up.chat_id, allow_chat) {
+            if !authorized(&up, allow) {
                 if allow_chat.is_none() {
                     theme::print_info(&format!("chat {} asked to connect", up.chat_id));
                 }
-                send(&http, &token, up.chat_id, &refusal(up.chat_id, allow_chat)).await;
+                send(&http, &token, up.chat_id, &refusal(&up, allow)).await;
                 continue;
             }
             theme::print_info(&format!("‹{}› {}", up.chat_id, truncate(&up.text, 80)));
@@ -325,6 +375,7 @@ mod tests {
             Update {
                 update_id: 1,
                 chat_id: 99,
+                from_id: None,
                 text: "hi".into()
             }
         );
@@ -333,6 +384,7 @@ mod tests {
             Update {
                 update_id: 4,
                 chat_id: 7,
+                from_id: None,
                 text: "yo".into()
             }
         );
@@ -344,11 +396,13 @@ mod tests {
             Update {
                 update_id: 5,
                 chat_id: 1,
+                from_id: None,
                 text: "a".into(),
             },
             Update {
                 update_id: 9,
                 chat_id: 1,
+                from_id: None,
                 text: "b".into(),
             },
         ];
@@ -360,11 +414,33 @@ mod tests {
     // turns (bash included) for anyone on Telegram who finds it.
     #[test]
     fn only_the_allowed_chat_runs_anything() {
-        assert!(!authorized(5, None));
-        assert!(authorized(5, Some(5)));
-        assert!(!authorized(5, Some(6)));
-        assert!(refusal(42, None).contains("--chat 42"));
-        assert_eq!(refusal(42, Some(7)), "not authorized");
+        let msg = |chat_id: i64, from_id: Option<i64>| Update {
+            update_id: 1,
+            chat_id,
+            from_id,
+            text: "hi".into(),
+        };
+        let chat = |id: i64| Allowed {
+            chat: Some(id),
+            user: None,
+        };
+        assert!(!authorized(&msg(5, Some(5)), Allowed::default()));
+        assert!(authorized(&msg(5, Some(5)), chat(5)));
+        assert!(!authorized(&msg(5, Some(5)), chat(6)));
+        assert!(refusal(&msg(42, Some(42)), Allowed::default()).contains("--chat 42"));
+        assert_eq!(refusal(&msg(42, Some(42)), chat(7)), "not authorized");
+
+        // An allowed group still obeys one sender only: every member could
+        // otherwise run an auto-approved agent.
+        assert!(!authorized(&msg(-100, Some(9)), chat(-100)));
+        assert!(refusal(&msg(-100, Some(9)), chat(-100)).contains("--user 9"));
+        let group = Allowed {
+            chat: Some(-100),
+            user: Some(9),
+        };
+        assert!(authorized(&msg(-100, Some(9)), group));
+        assert!(!authorized(&msg(-100, Some(10)), group));
+        assert!(!authorized(&msg(-100, None), group));
     }
 
     #[test]

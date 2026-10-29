@@ -1,0 +1,20 @@
+{
+  "description": "A deny rule written for a command also holds when a wrapper or a nested shell runs it: `bash -c 'rm ...'` and `sudo rm ...` used to present a first word the rule never matched.",
+  "prompt": "Remove the build directory.",
+  "setup_files": {
+    "build/keep.txt": "still here\n"
+  },
+  "setup_home_files": {
+    "permissions.toml": "deny = [\"bash:rm *\"]\n"
+  },
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "bash -c 'rm -rf build'"}}]},
+    {"text": "Refused."}
+  ],
+  "expect": {
+    "requests": 2,
+    "stdout_contains": ["Refused."],
+    "tool_results": [{"request": 2, "contains": ["permissions.toml"]}],
+    "files": {"build/keep.txt": "still here\n"}
+  }
+}

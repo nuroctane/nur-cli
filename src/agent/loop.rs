@@ -3492,8 +3492,12 @@ impl AgentRunner {
             return true;
         }
 
-        // 4) Ask rule forces a prompt even in auto.
-        if self.permissions.decide(name, args) == Some(RuleDecision::Ask) {
+        // 4) Ask rule forces a prompt even in auto. So does a write inside
+        // `.git/`: a hook or `core.fsmonitor` there runs code on the next git
+        // command, and no task needs the model editing git's internals.
+        if self.permissions.decide(name, args) == Some(RuleDecision::Ask)
+            || super::permissions::protected_write_dir(name, args) == Some(".git")
+        {
             return self.prompt_approval(name, args, tx, cancel).await;
         }
 
@@ -3698,18 +3702,37 @@ fn plan_command_read_only(command: &str) -> bool {
         .iter()
         .map(|w| w.trim_matches(['"', '\'']))
         .collect();
+    let positionals = || args.iter().filter(|a| !a.starts_with('-')).count();
+    let has_flag = |flags: &[&str]| {
+        args.iter().any(|a| {
+            flags
+                .iter()
+                .any(|f| a == f || a.starts_with(&format!("{f}=")))
+        })
+    };
+    // A PowerShell script block runs arbitrary code inside a reading cmdlet
+    // (`Select-Object @{e={Remove-Item x}}`, `ForEach-Object {…}`).
+    if program.contains('-') && command.contains('{') {
+        return false;
+    }
     match program.as_str() {
-        // Pure readers on both shells. `env` is absent: it runs whatever
-        // follows the assignments. `sed`/`awk`/`xargs` are absent: they carry
-        // `-i` / `system()` / a nested command.
-        "ls" | "pwd" | "cat" | "head" | "tail" | "wc" | "file" | "stat" | "grep" | "egrep"
-        | "fgrep" | "rg" | "sgrep" | "sort" | "uniq" | "tr" | "cut" | "diff" | "comm" | "jq"
-        | "echo" | "printf" | "true" | "false" | "which" | "where" | "whereis" | "uname"
-        | "whoami" | "hostname" | "date" | "printenv" | "id" | "df" | "du" | "ps" | "tree"
-        | "basename" | "dirname" | "realpath" | "readlink" | "xxd" | "od" | "sha256sum"
-        | "md5sum" | "cd" | "type" | "dir" | "findstr" | "select-string" | "select-object"
-        | "sort-object" | "measure-object" | "compare-object" | "format-table" | "format-list"
-        | "out-string" => true,
+        // Pure readers on both shells. `env` and `printenv` are absent: one
+        // runs whatever follows the assignments, the other prints every
+        // provider key into the transcript. `sed`/`awk`/`xargs` are absent:
+        // they carry `-i` / `system()` / a nested command.
+        "ls" | "pwd" | "cat" | "head" | "tail" | "wc" | "stat" | "grep" | "egrep" | "fgrep"
+        | "rg" | "sgrep" | "tr" | "cut" | "diff" | "comm" | "jq" | "echo" | "printf" | "true"
+        | "false" | "which" | "where" | "whereis" | "uname" | "whoami" | "hostname" | "date"
+        | "id" | "df" | "du" | "ps" | "basename" | "dirname" | "realpath" | "readlink" | "od"
+        | "sha256sum" | "md5sum" | "cd" | "type" | "dir" | "findstr" | "select-string"
+        | "select-object" | "sort-object" | "measure-object" | "compare-object"
+        | "format-table" | "format-list" | "out-string" => true,
+        // Readers with a writing form that needs no shell redirect.
+        "sort" => !has_flag(&["-o", "--output"]),
+        "tree" => !has_flag(&["-o"]),
+        "file" => !has_flag(&["-C", "--compile"]),
+        "uniq" => positionals() <= 1, // `uniq IN OUT` writes OUT
+        "xxd" => !has_flag(&["-r", "-revert"]) && positionals() <= 1,
         // PowerShell's Get-* verb reads by convention.
         p if p.starts_with("get-") => true,
         "find" => !args.iter().any(|a| {
@@ -3726,8 +3749,18 @@ fn plan_command_read_only(command: &str) -> bool {
 /// The read-only side of git: inspection subcommands, plus the list/read
 /// forms of the dual-purpose ones (`git branch` reads, `git branch x` writes).
 fn plan_git_read_only(args: &[&str]) -> bool {
-    // `--output=<file>` writes a patch without any shell redirect.
-    if args.iter().any(|a| a.starts_with("--output")) {
+    // `--output=<file>` writes a patch without any shell redirect, and these
+    // run a program the arguments name: `-c core.fsmonitor=<cmd> status`,
+    // `-c diff.external=<cmd>` / `--ext-diff`, `grep -O<cmd>`, `--upload-pack`.
+    if args.iter().any(|a| {
+        a.starts_with("--output")
+            || matches!(*a, "-c" | "--ext-diff")
+            || a.starts_with("--config-env")
+            || a.starts_with("--exec-path")
+            || a.starts_with("--upload-pack")
+            || a.starts_with("--open-files-in-pager")
+            || a.starts_with("-O")
+    }) {
         return false;
     }
     // Skip git's global options (`-C dir`, `-c k=v`, `--git-dir=…`,
@@ -5141,6 +5174,10 @@ mod tests {
             "FOO=1 rg bar",
             "find src -name '*.rs'",
             "jq .package.json package.json",
+            "sort names.txt",
+            "uniq -c names.txt",
+            "xxd blob.bin",
+            "tree src",
         ] {
             assert!(plan_shell_read_only(ro), "read-only: {ro}");
         }
@@ -5168,6 +5205,21 @@ mod tests {
             "find . -exec rm {} +",
             "env FOO=1 rm x",
             "xargs rm",
+            // Git options that run a program the arguments name.
+            "git -c core.fsmonitor=evil status",
+            "git -c diff.external=evil diff",
+            "git diff --ext-diff",
+            "git grep -Oevil foo",
+            // Readers with a redirect-free writing form.
+            "sort -o ~/.ssh/authorized_keys payload.txt",
+            "sort --output=out.txt in.txt",
+            "uniq in.txt out.txt",
+            "tree -o out.txt",
+            "xxd -r dump.hex out.bin",
+            // Prints every provider key into the transcript.
+            "printenv",
+            // A script block runs code inside a reading cmdlet.
+            "Get-ChildItem | Select-Object @{e={Remove-Item x}}",
         ] {
             assert!(!plan_shell_read_only(ask), "should ask: {ask}");
         }

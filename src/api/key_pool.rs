@@ -125,23 +125,37 @@ pub fn block_for(error: &NurError) -> Option<Duration> {
         return None;
     };
     let lower = message.to_ascii_lowercase();
-    let quota = [
+    let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
+    // Phrases only a spent account produces. Anthropic reports a low credit
+    // balance as a 400, so these count on 400 too.
+    let spent = has(&[
         "insufficient_quota",
-        "quota exceeded",
         "quota_exceeded",
         "credit balance",
         "out of credits",
-        "billing",
-        "usage limit",
         "payment required",
         "exceeded your current quota",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle));
+    ]);
+    // Looser words that also appear in ordinary validation errors ("billing"
+    // in a parameter name): only on the statuses that mean quota.
+    let spent_loosely = has(&["billing", "usage limit", "quota exceeded"]);
+    // A 403 about one model or one region is the request's problem; benching
+    // the key for a day would rotate away from a key that works.
+    let request_scoped_403 = has(&["model"])
+        && has(&[
+            "not available",
+            "access",
+            "not allowed",
+            "not supported",
+            "permission",
+        ])
+        || has(&["region", "country", "location"]);
     match status {
         402 => Some(QUOTA_BLOCK),
-        _ if quota => Some(QUOTA_BLOCK),
+        400 | 403 | 429 if spent => Some(QUOTA_BLOCK),
+        403 | 429 if spent_loosely => Some(QUOTA_BLOCK),
         429 | 503 | 529 => Some(RATE_LIMIT_BLOCK),
+        403 if request_scoped_403 => None,
         401 | 403 => Some(AUTH_BLOCK),
         0 if lower.contains("rate limit") || lower.contains("too many requests") => {
             Some(RATE_LIMIT_BLOCK)
@@ -239,6 +253,20 @@ mod tests {
         );
         // About the request, not the key: rotating would not help.
         assert_eq!(block_for(&api(400, "unsupported parameter")), None);
+        // A validation error that merely names billing, and a 403 about one
+        // model or region, are about the request: the key keeps working.
+        assert_eq!(block_for(&api(400, "unknown field billing_address")), None);
+        assert_eq!(
+            block_for(&api(403, "model gpt-x is not available for this key")),
+            None
+        );
+        assert_eq!(block_for(&api(403, "not available in your region")), None);
+        // A spent account still benches the key, whatever the status.
+        assert_eq!(
+            block_for(&api(400, "Your credit balance is too low")),
+            Some(QUOTA_BLOCK)
+        );
+        assert_eq!(block_for(&api(403, "forbidden")), Some(AUTH_BLOCK));
         assert_eq!(block_for(&api(500, "internal error")), None);
         assert_eq!(block_for(&NurError::Other("connection reset".into())), None);
     }

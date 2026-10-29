@@ -473,6 +473,14 @@ fn call_tool(name: &str, args_json: &str) -> std::result::Result<String, String>
 
 /// The sandbox's whole policy, in one place.
 fn script_may_call(name: &str, args: &Value) -> std::result::Result<(), String> {
+    // The first fetch to a domain asks for approval, which guards against a
+    // page or file steering the model into sending data to a host. A script
+    // cannot ask, so the network reads go through the direct call.
+    if matches!(name, "web_fetch" | "web_search") {
+        return Err(format!(
+            "{name} cannot be called from a script: a new domain needs approval. Call it directly."
+        ));
+    }
     if DENIED.contains(&name) {
         return Err(format!(
             "{name} cannot be called from a script: it starts new work, speaks to the user or \

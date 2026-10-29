@@ -97,7 +97,15 @@ $env:Path = "$cargoBin;$env:Path"
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     Write-Step "Rust/cargo not found - installing rustup (stable)..."
     $rustup = Join-Path $env:TEMP "rustup-init-nur-cli.exe"
-    Invoke-WebRequest -Uri "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe" -OutFile $rustup
+    $rustupUrl = "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe"
+    Invoke-WebRequest -Uri $rustupUrl -OutFile $rustup
+    # Run it only if it matches the checksum rustup publishes beside it.
+    $want = ((Invoke-WebRequest -Uri "$rustupUrl.sha256" -UseBasicParsing).Content -split '\s+')[0].Trim().ToLowerInvariant()
+    $got = (Get-FileHash -Algorithm SHA256 $rustup).Hash.ToLowerInvariant()
+    if (-not $want -or $want -ne $got) {
+        Remove-Item $rustup -Force -ErrorAction SilentlyContinue
+        throw "rustup-init.exe checksum mismatch (expected $want, got $got); not running it"
+    }
     & $rustup -y --default-toolchain stable
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "rustup-init failed; trying winget..."
@@ -136,13 +144,18 @@ function Install-Prereq([string]$cmd, [string]$wingetId, [scriptblock]$fallback,
     }
 }
 Install-Prereq "node"   "OpenJS.NodeJS.LTS"      $null                                     "plur, ruflo, executor, browser"
-Install-Prereq "bun"    "Oven-sh.Bun"            { irm https://bun.sh/install.ps1 | iex }  "omp coding-agent backend"
-Install-Prereq "uv"     "astral-sh.uv"           { irm https://astral.sh/uv/install.ps1 | iex } "graphify"
+# Fallback installers are pinned to a known release, not whatever "latest" is.
+$BunVersion = "1.3.14"
+$UvVersion = "0.12.9"
+Install-Prereq "bun"    "Oven-sh.Bun"            { & ([scriptblock]::Create((irm https://bun.sh/install.ps1))) -Version $BunVersion }  "omp coding-agent backend"
+Install-Prereq "uv"     "astral-sh.uv"           { irm "https://astral.sh/uv/$UvVersion/install.ps1" | iex } "graphify"
 Install-Prereq "rg"     "BurntSushi.ripgrep.MSVC" $null                                    "fast grep / glob"
 Install-Prereq "ffmpeg" "Gyan.FFmpeg"            $null                                     "extract_frames / design-from-video"
 # sgrep (local semantic code search; the model's first search tool). A plain
 # cargo build; `nur ecosystem ensure` retries it later when this step fails.
-Install-Prereq "sgrep"  ""                        { cargo install --git https://github.com/context-dot-dev/sgrep --locked } "sgrep semantic search"
+# The commit matches src/ecosystem/lock.json, which `nur ecosystem ensure` uses.
+$SgrepRev = "dde0c13c8d6081f9c6d6d1d33580eebf1034aecf"
+Install-Prereq "sgrep"  ""                        { cargo install --git https://github.com/context-dot-dev/sgrep --rev $SgrepRev --locked } "sgrep semantic search"
 # Make fresh installs visible to this session (winget links, node, bun, uv).
 $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.bun\bin;" +
             "$env:LOCALAPPDATA\Microsoft\WinGet\Links;$env:ProgramFiles\nodejs;" + $env:Path

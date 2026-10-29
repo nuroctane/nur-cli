@@ -1029,7 +1029,28 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _from_browser_or_rebound(self) -> bool:
+        """Refuse what only a web page produces: an Origin header (a browser
+        posting cross-site) or a Host that is not loopback (DNS rebinding).
+        nur's own client sends neither, so this costs it nothing."""
+        if self.headers.get("Origin"):
+            return True
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host.startswith("["):
+            name = host[1:].split("]", 1)[0]
+        else:
+            name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+        return name not in ("127.0.0.1", "localhost", "::1")
+
+    def _refuse_web(self) -> bool:
+        if self._from_browser_or_rebound():
+            self._json(403, {"error": "browser or non-loopback request refused"})
+            return True
+        return False
+
     def do_GET(self):
+        if self._refuse_web():
+            return
         if self.path.startswith("/health"):
             self._json(
                 200,
@@ -1056,6 +1077,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"detail": {"error_type": "not_found", "message": self.path}})
 
     def do_POST(self):
+        if self._refuse_web():
+            return
         if self.path == "/shutdown":
             supplied = self.headers.get("X-Nur-Bridge-Instance", "")
             if not self.instance or not secrets.compare_digest(supplied, self.instance):

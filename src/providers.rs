@@ -72,19 +72,42 @@ impl ApiStyle {
 /// generativelanguage OpenAI-compat endpoint even with `x-goog-user-project`,
 /// but 200 against this host over the native Gemini protocol
 /// (`v1internal:streamGenerateContent`).
-pub const ANTIGRAVITY_CLOUD_CODE_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
+///
+/// This is the *daily* host, the one Antigravity clients use for generate,
+/// stream, `loadCodeAssist`, `onboardUser` and `fetchAvailableModels`. The
+/// production `cloudcode-pa` host identified nur as the Gemini CLI, and Google
+/// retired that client for individuals: every individual account got "This
+/// client is no longer supported for Gemini Code Assist for individuals"
+/// (observed 2026-10-29). Mixing the two hosts can grant incompatible
+/// entitlements, so every Cloud Code call uses this one.
+pub const ANTIGRAVITY_CLOUD_CODE_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
 
-/// User-Agent the Gemini CLI / Antigravity send on Cloud Code (`cloudcode-pa`)
-/// requests. Mirrors `google-api-nodejs-client` so the backend treats nur as a
-/// known client fingerprint.
-pub const CLOUD_CODE_USER_AGENT: &str = "google-api-nodejs-client/9.15.1";
+/// Antigravity Hub release nur presents on Cloud Code. Cloud Code serves its
+/// newer models only to Hub clients at 2.23.0 or later. The changelist and the
+/// platform belong to that release's macOS arm64 build, the manifest the
+/// version is read from, so the three move together. Prior art:
+/// NoeFabris/opencode-antigravity-auth `src/constants.ts` (MIT).
+pub const ANTIGRAVITY_HUB_VERSION: &str = "2.24.0";
+const ANTIGRAVITY_HUB_CHANGELIST: &str = "1000335682";
+const ANTIGRAVITY_HUB_PLATFORM: &str = "os_type=darwin; arch=arm64";
 
-/// `X-Goog-Api-Client` value used by Gemini CLI / VS Code Cloud Shell editor.
-pub const CLOUD_CODE_API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
+/// The Hub's User-Agent, the only identity header it sends on content,
+/// project and quota requests (no `X-Goog-Api-Client`, no `Client-Metadata`).
+pub fn cloud_code_user_agent() -> String {
+    format!(
+        "antigravity/hub/{ANTIGRAVITY_HUB_VERSION} (aidev_client; {ANTIGRAVITY_HUB_PLATFORM}; cl={ANTIGRAVITY_HUB_CHANGELIST})"
+    )
+}
 
-/// `Client-Metadata` JSON for Gemini plugin type (IDE unspecified).
-pub const CLOUD_CODE_CLIENT_METADATA: &str =
-    r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#;
+/// `onboardUser` is a control-plane call: the Hub appends its Node API client
+/// to the User-Agent there and sends `X-Goog-Api-Client`.
+pub fn cloud_code_onboard_user_agent() -> String {
+    format!(
+        "{} google-api-nodejs-client/10.3.0",
+        cloud_code_user_agent()
+    )
+}
+pub const CLOUD_CODE_ONBOARD_API_CLIENT: &str = "gl-node/22.21.1";
 
 /// The three catalog ids that share Google's OAuth login and Cloud Code backend.
 pub const GOOGLE_FAMILY_IDS: &[&str] = &["google", "antigravity", "google-oauth"];
@@ -329,10 +352,9 @@ pub fn normalize_xai_model_id(model: &str) -> String {
     m.to_string()
 }
 
-/// Current Gemini Pro id on the first-party Gemini API.
-///
-/// Gateways (OpenCode Zen, OpenRouter) expose a bare `gemini-3.1-pro`, but
-/// `generativelanguage.googleapis.com` only accepts the `-preview` suffix.
+/// Current stable Gemini id on the first-party Gemini API (Google's
+/// recommended model for new projects; 3.7 Flash was deprecated onto it on
+/// 2026-10-08).
 pub const GOOGLE_DEFAULT_MODEL: &str = "gemini-3.8-flash";
 
 /// Rewrite a retired Gemini id onto one the Gemini API still serves.
@@ -366,21 +388,18 @@ pub fn normalize_google_model_id(model: &str) -> String {
 
 /// Default model for the Antigravity Cloud Code backend.
 ///
-/// The catalog's Google default (`gemini-3.1-pro-preview`) is a
-/// generativelanguage id that Cloud Code does not serve; `gemini-2.5-flash` is
-/// the id proven working (HTTP 200) against `v1internal:streamGenerateContent`
-/// with an agy OAuth token.
-pub const ANTIGRAVITY_DEFAULT_MODEL: &str = "gemini-2.5-flash";
+/// Cloud Code's Antigravity catalog (`agy models`, `fetchAvailableModels`)
+/// lists Gemini only as `gemini-3.8-flash-{high,medium,low}`, plus Claude and
+/// GPT-OSS tiers; `gemini-2.5-flash` is no longer served (2026-10-29). The
+/// effort lives in the id, so the default is the high variant.
+pub const ANTIGRAVITY_DEFAULT_MODEL: &str = "gemini-3.8-flash-high";
 
 /// Rewrite a model id onto one the Cloud Code (`cloudcode-pa`) backend serves.
 ///
-/// The `-preview` first-party suffixes and the retired ids handled by
-/// [`normalize_google_model_id`] are not accepted here. agy advertises
-/// `gemini-3.6-flash-*`, `gemini-2.5-flash`, and friends; anything empty or a
-/// known generativelanguage-only id falls back to [`ANTIGRAVITY_DEFAULT_MODEL`].
-///
-/// Cloud Code wants bare ids (`gemini-2.5-flash`), not the generativelanguage
-/// resource form (`models/gemini-2.5-flash`).
+/// generativelanguage-style ids (`-preview` suffixes, bare flash ids, the
+/// retired Pro line) are not served there and fall back to
+/// [`ANTIGRAVITY_DEFAULT_MODEL`]. Cloud Code wants bare ids, not the
+/// generativelanguage resource form (`models/gemini-3.8-flash-high`).
 pub fn normalize_antigravity_model_id(model: &str) -> String {
     let m = model.trim();
     // Strip optional `models/` resource prefix (listModels / OpenAI-compat form).
@@ -388,11 +407,17 @@ pub fn normalize_antigravity_model_id(model: &str) -> String {
     if m.is_empty() {
         return ANTIGRAVITY_DEFAULT_MODEL.to_string();
     }
-    // generativelanguage-only ids Cloud Code rejects → map to a known-good id.
+    // generativelanguage-only or withdrawn ids Cloud Code rejects.
     const NOT_ON_CLOUD_CODE: &[&str] = &[
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
         "gemini-3.1-pro-preview",
         "gemini-3-pro-preview",
         "gemini-3-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
         "gemini-2.5-pro-preview-03-25",
         "gemini-2.5-pro-preview-05-06",
         "gemini-2.5-pro-preview-06-05",
@@ -481,6 +506,10 @@ pub fn normalize_deepseek_model_id(model: &str) -> String {
     m.to_string()
 }
 
+/// NVIDIA's hosted catalog dropped `meta/llama-3.3-70b-instruct`; this is
+/// a tool-calling general model its `/v1/models` still lists (2026-10-29).
+pub const NVIDIA_DEFAULT_MODEL: &str = "minimaxai/minimax-m3.1-flash";
+
 /// Current Inception id — their catalog returns exactly this one model.
 pub const INCEPTION_DEFAULT_MODEL: &str = "mercury-2";
 
@@ -511,8 +540,144 @@ pub fn normalize_model_for(provider_id: &str, model: &str) -> String {
         "deepseek" => normalize_deepseek_model_id(model),
         "inception" => normalize_inception_model_id(model),
         "meta" => normalize_meta_model_id(model),
-        _ => model.trim().to_string(),
+        "antigravity" => normalize_antigravity_model_id(model),
+        "github-models" => normalize_github_models_model_id(model),
+        _ => match retired_model_replacement(provider_id, model.trim()) {
+            Some(replacement) => replacement.to_string(),
+            None => model.trim().to_string(),
+        },
     }
+}
+
+/// Exact ids a provider has withdrawn, with the replacement it names (or the
+/// catalog default where it names none). Each row is a retirement confirmed
+/// against the provider's own deprecation page or a live 404 / missing
+/// `/models` entry; dates are the shutdowns.
+const RETIRED_MODELS: &[(&str, &str, &str)] = &[
+    // console.groq.com/docs/deprecations
+    ("groq", "llama-3.3-70b-versatile", "openai/gpt-oss-120b"), // 2026-08-16
+    ("groq", "llama-3.1-8b-instant", "openai/gpt-oss-20b"),     // 2026-08-16
+    ("groq", "qwen/qwen3-32b", "openai/gpt-oss-120b"),          // 2026-07-17
+    (
+        "groq",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "openai/gpt-oss-120b",
+    ), // 2026-07-17
+    (
+        "groq",
+        "moonshotai/kimi-k2-instruct-0905",
+        "openai/gpt-oss-120b",
+    ), // 2026-04-15
+    (
+        "groq",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "openai/gpt-oss-120b",
+    ), // 2026-03-09
+    ("groq", "qwen/qwen3.6-27b", "qwen/qwen3.8-27b"),           // 2026-09-14
+    // docs.fireworks.ai/updates/changelog: serverless removal 2026-05-14
+    (
+        "fireworks",
+        "accounts/fireworks/models/llama-v3p3-70b-instruct",
+        "accounts/fireworks/models/glm-5p3",
+    ),
+    // baseten.co changelog: DeepSeek V3 0324 deprecation notice
+    ("baseten", "deepseek-ai/DeepSeek-V3-0324", "zai-org/GLM-5.3"),
+    // Gone from the serverless /models list (2026-10-29)
+    (
+        "friendli",
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "zai-org/GLM-5.3",
+    ),
+    (
+        "nvidia",
+        "meta/llama-3.3-70b-instruct",
+        NVIDIA_DEFAULT_MODEL,
+    ),
+    // 404 "please check the model you provided" (2026-10-29)
+    ("poolside", "poolside/laguna-m.1", "poolside/laguna-s-2.1"),
+    // Copilot /models no longer lists it; chat answers model_not_supported
+    ("github-copilot", "gpt-5.5", GITHUB_COPILOT_DEFAULT_MODEL),
+];
+
+/// GitHub Copilot's inference API.
+pub const GITHUB_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
+/// The model every Copilot plan includes. `/models` no longer lists `gpt-5.5`
+/// (its chat answers `model_not_supported`), and Copilot Free with a `gh`
+/// token serves this one only (2026-10-29). Copilot ids are bare, never
+/// `publisher/model`.
+pub const GITHUB_COPILOT_DEFAULT_MODEL: &str = "gpt-4.1";
+
+/// Routes that speak GitHub Copilot's API: Copilot itself, and GitHub Models,
+/// whose own service GitHub retired and whose sign-in Copilot accepts.
+pub fn is_copilot_route(provider_id: &str) -> bool {
+    matches!(provider_id, "github-copilot" | "github-models")
+}
+
+/// A GitHub Models id (`openai/gpt-5`, `meta/Llama-…`) has no Copilot
+/// counterpart by name, so it lands on the default; a bare id is a Copilot
+/// model the user picked and passes through.
+fn normalize_github_models_model_id(model: &str) -> String {
+    let m = model.trim();
+    if m.is_empty() || m.contains('/') {
+        GITHUB_COPILOT_DEFAULT_MODEL.to_string()
+    } else {
+        m.to_string()
+    }
+}
+
+/// Glama's gateway moved under glama.ai; `gateway.glama.ai` no longer
+/// resolves (2026-10-29).
+pub const GLAMA_BASE_URL: &str = "https://glama.ai/api/gateway/openai/v1";
+/// Hyperbolic decommissioned `api.hyperbolic.xyz/v1` ("This inference
+/// endpoint has been decommissioned") and relaunched inference here, on
+/// `sk_live_` keys from app.hyperbolic.ai (HyperbolicLabs/hyperbolic-ts#29).
+pub const HYPERBOLIC_BASE_URL: &str = "https://api.hyperbolic.ai/inference/v1";
+
+/// Hosts a provider moved off, with where it went. A saved config still
+/// pointing at the old one would fail on every turn (DNS or 404).
+const RETIRED_BASE_URLS: &[(&str, &str, &str)] = &[
+    ("glama", "https://gateway.glama.ai/v1", GLAMA_BASE_URL),
+    (
+        "hyperbolic",
+        "https://api.hyperbolic.xyz/v1",
+        HYPERBOLIC_BASE_URL,
+    ),
+    (
+        "github-models",
+        "https://models.github.ai/inference",
+        GITHUB_COPILOT_BASE_URL,
+    ),
+];
+
+/// Is `base_url` the provider's own host (catalog or OAuth route), rather than
+/// a proxy or self-hosted endpoint the user pointed it at? Model retirements
+/// are facts about the provider's host; a proxy may still serve the old id.
+pub fn uses_catalog_host(provider_id: &str, base_url: &str) -> bool {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return true;
+    }
+    let same = |known: &str| known.trim_end_matches('/').eq_ignore_ascii_case(base);
+    by_id(provider_id).is_some_and(|p| same(p.base_url))
+        || oauth_base_url(provider_id).is_some_and(same)
+        || moved_base_url(provider_id, base).is_some()
+}
+
+/// The current host for a saved `base_url` its provider has moved off.
+/// Custom hosts (proxies, mirrors) are never matched.
+pub fn moved_base_url(provider_id: &str, base_url: &str) -> Option<&'static str> {
+    let base = base_url.trim().trim_end_matches('/');
+    RETIRED_BASE_URLS
+        .iter()
+        .find(|(provider, old, _)| *provider == provider_id && old.eq_ignore_ascii_case(base))
+        .map(|(_, _, new)| *new)
+}
+
+fn retired_model_replacement(provider_id: &str, model: &str) -> Option<&'static str> {
+    RETIRED_MODELS
+        .iter()
+        .find(|(provider, retired, _)| *provider == provider_id && *retired == model)
+        .map(|(_, _, replacement)| *replacement)
 }
 
 /// Strip `opencode-go/` or `opencode/` from a picker / config model id.
@@ -712,8 +877,11 @@ pub fn opencode_request_route(model: &str, current_base: &str) -> (String, Strin
     (bare, normalized.to_string())
 }
 
-/// Fallback fingerprint when `~/.grok/version.json` is absent (must be ≥ min).
-pub const XAI_GROK_CLI_DEFAULT_VERSION: &str = "0.2.101";
+/// Fallback fingerprint when `~/.grok/version.json` is absent: the current
+/// stable Grok CLI (2026-10-29). The proxy refuses releases below
+/// [`XAI_GROK_CLI_MIN_VERSION`] with 426.
+pub const XAI_GROK_CLI_DEFAULT_VERSION: &str = "1.0.70";
+pub const XAI_GROK_CLI_MIN_VERSION: &str = "0.1.202";
 
 // ── Reasoning effort ───────────────────────────────────────────────────────
 //
@@ -883,6 +1051,21 @@ pub fn effort_levels(provider_id: &str, model: &str) -> &'static [&'static str] 
             EFFORT_OPENAI_MAX
         }
         "openai" | "openai-cc" if model.starts_with("gpt-6") => EFFORT_OPENAI_GPT6,
+        // Copilot forwards `reasoning.effort` to its GPT-5+ (Responses) models
+        // and 400s it everywhere else ("model gpt-4.1-2025-04-14 does not
+        // support reasoning effort"), Claude and Gemini included.
+        "github-copilot" | "github-models" => {
+            let model = model.to_ascii_lowercase();
+            if model.starts_with("gpt-6") {
+                EFFORT_OPENAI_GPT6
+            } else if model == "gpt-5.6" || model.starts_with("gpt-5.6-") {
+                EFFORT_OPENAI_MAX
+            } else if model.starts_with("gpt-5") {
+                EFFORT_OPENAI
+            } else {
+                &[]
+            }
+        }
         "nous" | "paperinstruments" => EFFORT_NOUS,
         "morph" if is_morph_deepseek(model) => EFFORT_MORPH_DEEPSEEK,
         "morph" => EFFORT_MORPH,
@@ -1058,7 +1241,11 @@ pub fn xai_grok_cli_version() -> String {
                 for field in ["version", "stable_version", "latest_version"] {
                     if let Some(version) = value.get(field).and_then(|v| v.as_str()) {
                         let version = version.trim();
-                        if !version.is_empty() {
+                        // An install older than the proxy floor would get a
+                        // 426; the env overrides above stay the user's call.
+                        if !version.is_empty()
+                            && version_at_least(version, XAI_GROK_CLI_MIN_VERSION)
+                        {
                             return version.to_string();
                         }
                     }
@@ -1067,6 +1254,16 @@ pub fn xai_grok_cli_version() -> String {
         }
     }
     XAI_GROK_CLI_DEFAULT_VERSION.to_string()
+}
+
+/// Dotted numeric version comparison; a part that is not a number counts as 0.
+fn version_at_least(version: &str, floor: &str) -> bool {
+    let parts = |v: &str| -> Vec<u32> {
+        v.split('.')
+            .map(|p| p.trim().parse().unwrap_or(0))
+            .collect()
+    };
+    parts(version) >= parts(floor)
 }
 
 /// The full catalog. First entry (`meta` = Meta Model API vendor) is the default.
@@ -1270,7 +1467,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "poolside",
         name: "Poolside",
         base_url: POOLSIDE_BASE_URL,
-        default_model: "poolside/laguna-m.1",
+        default_model: "poolside/laguna-s-2.1",
         env_key: "POOLSIDE_API_KEY",
         style: CC,
         note: "Laguna · agentic coding · /model = live list",
@@ -1335,7 +1532,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "groq",
         name: "Groq",
         base_url: "https://api.groq.com/openai/v1",
-        default_model: "llama-3.3-70b-versatile",
+        default_model: "openai/gpt-oss-120b",
         env_key: "GROQ_API_KEY",
         style: CC,
         note: "LPU · very fast",
@@ -1387,7 +1584,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "fireworks",
         name: "Fireworks AI",
         base_url: "https://api.fireworks.ai/inference/v1",
-        default_model: "accounts/fireworks/models/llama-v3p3-70b-instruct",
+        default_model: "accounts/fireworks/models/glm-5p3",
         env_key: "FIREWORKS_API_KEY",
         style: CC,
         note: "fast open models",
@@ -1421,7 +1618,7 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "hyperbolic",
         name: "Hyperbolic",
-        base_url: "https://api.hyperbolic.xyz/v1",
+        base_url: HYPERBOLIC_BASE_URL,
         default_model: "meta-llama/Llama-3.3-70B-Instruct",
         env_key: "HYPERBOLIC_API_KEY",
         style: CC,
@@ -1455,7 +1652,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "nvidia",
         name: "NVIDIA NIM",
         base_url: "https://integrate.api.nvidia.com/v1",
-        default_model: "meta/llama-3.3-70b-instruct",
+        default_model: NVIDIA_DEFAULT_MODEL,
         env_key: "NVIDIA_API_KEY",
         style: CC,
         note: "build.nvidia.com",
@@ -1479,7 +1676,7 @@ pub const PROVIDERS: &[Provider] = &[
         id: "baseten",
         name: "Baseten",
         base_url: "https://inference.baseten.co/v1",
-        default_model: "deepseek-ai/DeepSeek-V3-0324",
+        default_model: "zai-org/GLM-5.3",
         env_key: "BASETEN_API_KEY",
         style: CC,
         note: "model APIs · fast",
@@ -1493,7 +1690,7 @@ pub const PROVIDERS: &[Provider] = &[
         // Friendli's serverless catalog is down to 7 models and no longer
         // carries any Meta/Llama entry; this is the general-purpose instruct
         // model among the survivors.
-        default_model: "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        default_model: "zai-org/GLM-5.3",
         env_key: "FRIENDLI_TOKEN",
         style: CC,
         note: "serverless endpoints",
@@ -1517,9 +1714,9 @@ pub const PROVIDERS: &[Provider] = &[
         id: "venice",
         name: "Venice AI",
         base_url: "https://api.venice.ai/api/v1",
-        // Venice's current agent examples use this tool-capable model; the old
-        // bare Llama 3.3 id is no longer a dependable catalog default.
-        default_model: "zai-org-glm-5-1",
+        // GLM 5.3 on Venice: function calling, reasoning and a 1M context
+        // per its /models (2026-10-29); GLM 5.1 there stops at 200K.
+        default_model: "z-ai-glm-5-3",
         env_key: "VENICE_API_KEY",
         style: CC,
         note: "private · uncensored",
@@ -1590,7 +1787,7 @@ pub const PROVIDERS: &[Provider] = &[
         base_url: "https://api.minimaxi.com/anthropic/v1",
         // Casing and availability are verbatim from MiniMax's direct model list.
         // M3 is available through some gateways, not this minimaxi.com route.
-        default_model: "MiniMax-M2.7",
+        default_model: "MiniMax-M3.1-Flash",
         env_key: "MINIMAX_API_KEY",
         style: AM,
         note: "China API · Anthropic-compatible",
@@ -1720,7 +1917,7 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "glama",
         name: "Glama",
-        base_url: "https://gateway.glama.ai/v1",
+        base_url: GLAMA_BASE_URL,
         // Glama date-pins OpenAI ids (`openai/gpt-5.5-2026-04-23`); the 5.6 tier
         // is the only undated OpenAI family, so it will not re-rot.
         default_model: "openai/gpt-5.6-terra",
@@ -1842,23 +2039,23 @@ pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "github-models",
         name: "GitHub Models",
-        base_url: "https://models.github.ai/inference",
-        // `openai/gpt-4o` still resolves but is long superseded; `openai/gpt-5`
-        // is the newest OpenAI tier GitHub Models offers.
-        default_model: "openai/gpt-5",
+        // GitHub retired GitHub Models on 2026-07-30 (playground, catalog,
+        // inference and BYOK; models.github.ai now answers a bare "OK" to
+        // every path). The same GitHub sign-in reaches Copilot's inference
+        // API, so this route speaks Copilot: see [`is_copilot_route`].
+        base_url: GITHUB_COPILOT_BASE_URL,
+        default_model: GITHUB_COPILOT_DEFAULT_MODEL,
         env_key: "GITHUB_TOKEN",
         style: CC,
-        note: "gh CLI or PAT · free tier",
+        note: "gh CLI or PAT · via Copilot",
         key_optional: false,
         browser_auth: true,
     },
     Provider {
         id: "github-copilot",
         name: "GitHub Copilot",
-        base_url: "https://api.githubcopilot.com",
-        // GitHub retired GPT-4.1 for Copilot on 2026-06-01 and names GPT-5.5 as
-        // the replacement. Copilot uses bare ids, not `publisher/model`.
-        default_model: "gpt-5.5",
+        base_url: GITHUB_COPILOT_BASE_URL,
+        default_model: GITHUB_COPILOT_DEFAULT_MODEL,
         env_key: "COPILOT_GITHUB_TOKEN",
         style: CC,
         note: "Copilot subscription · gh OAuth or fine-grained PAT",
@@ -2812,6 +3009,34 @@ pub fn oauth_browser_provider_ids() -> &'static [&'static str] {
 ///
 /// Most catalog rows have one `env_key`. Meta Model API documents both
 /// `META_API_KEY` (Muse Code) and `MODEL_API_KEY` (Model API dashboard).
+/// Credentials nur reads for model access only. They are kept out of tool
+/// subprocesses (bash, background jobs, the REPL's shell): `printenv`, a
+/// stray `env` dump or a prompt-injected `curl` would otherwise put every key
+/// in the transcript or on the wire. General developer tokens that the user's
+/// own tools read (`GITHUB_TOKEN` for gh and git, `HF_TOKEN`, Cloudflare's
+/// token for wrangler, AWS's for the AWS CLI) stay.
+pub fn is_model_provider_key(name: &str) -> bool {
+    const KEEP: &[&str] = &[
+        "GITHUB_TOKEN",
+        "HF_TOKEN",
+        "CLOUDFLARE_API_TOKEN",
+        "AWS_BEARER_TOKEN_BEDROCK",
+    ];
+    let name = name.to_ascii_uppercase();
+    if KEEP.contains(&name.as_str()) {
+        return false;
+    }
+    if name == "NUR_API_KEY" {
+        return true;
+    }
+    let known = |key: &str| name == key || name == format!("{key}S");
+    PROVIDERS
+        .iter()
+        .chain(SIDECAR_PROVIDERS.iter())
+        .flat_map(|p| provider_env_keys(p.id))
+        .any(known)
+}
+
 pub fn provider_env_keys(provider_id: &str) -> Vec<&'static str> {
     match provider_id {
         "meta" => vec!["META_API_KEY", "MODEL_API_KEY"],
@@ -3537,7 +3762,7 @@ mod tests {
         assert_eq!(p.base_url, POOLSIDE_BASE_URL);
         assert_eq!(p.base_url, "https://inference.poolside.ai/v1");
         assert_eq!(p.env_key, "POOLSIDE_API_KEY");
-        assert_eq!(p.default_model, "poolside/laguna-m.1");
+        assert_eq!(p.default_model, "poolside/laguna-s-2.1");
         assert_eq!(p.style, ApiStyle::ChatCompletions);
         // A key is required, and there is no OAuth flow to drive — the Platform
         // "browser sign-in" only issues a key for you to paste.
@@ -3913,12 +4138,22 @@ mod tests {
     fn antigravity_model_ids_strip_models_prefix_and_rewrite_preview() {
         // Cloud Code wants bare ids — generativelanguage `models/` form must go.
         assert_eq!(
-            normalize_antigravity_model_id("models/gemini-2.5-flash"),
-            "gemini-2.5-flash"
+            normalize_antigravity_model_id("models/gemini-3.8-flash-low"),
+            "gemini-3.8-flash-low"
         );
         assert_eq!(
+            normalize_antigravity_model_id("claude-sonnet-4-6"),
+            "claude-sonnet-4-6"
+        );
+        // Withdrawn from Cloud Code, and the bare generativelanguage id it
+        // never served: both 404 there, so both land on the default.
+        assert_eq!(
             normalize_antigravity_model_id("gemini-2.5-flash"),
-            "gemini-2.5-flash"
+            ANTIGRAVITY_DEFAULT_MODEL
+        );
+        assert_eq!(
+            normalize_antigravity_model_id("gemini-3.8-flash"),
+            ANTIGRAVITY_DEFAULT_MODEL
         );
         assert_eq!(
             normalize_antigravity_model_id("models/gemini-3.1-pro-preview"),
@@ -4009,11 +4244,12 @@ mod tests {
             v.chars().any(|c| c.is_ascii_digit()),
             "version should look like a CLI release: {v}"
         );
-        // The xAI proxy rejects CLI versions below 0.1.202.
+        // The xAI proxy rejects CLI versions below the floor.
+        assert!(!version_at_least("0.1.99", XAI_GROK_CLI_MIN_VERSION));
+        assert!(version_at_least("0.2.0", XAI_GROK_CLI_MIN_VERSION));
         assert!(
-            XAI_GROK_CLI_DEFAULT_VERSION.starts_with("0.2")
-                || XAI_GROK_CLI_DEFAULT_VERSION.starts_with("0.1.2"),
-            "default {XAI_GROK_CLI_DEFAULT_VERSION} is below the proxy floor 0.1.202"
+            version_at_least(XAI_GROK_CLI_DEFAULT_VERSION, XAI_GROK_CLI_MIN_VERSION),
+            "default {XAI_GROK_CLI_DEFAULT_VERSION} is below the proxy floor {XAI_GROK_CLI_MIN_VERSION}"
         );
     }
 

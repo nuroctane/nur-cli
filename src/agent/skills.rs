@@ -1525,17 +1525,33 @@ fn jev_pick_skill(user_text: &str, skills: &[Skill]) -> Option<Skill> {
     candidates.into_iter().find(|s| s.name == picked)
 }
 
+/// The closing `---` of a frontmatter block: `content` is the text after the
+/// opening fence, and the result is `(frontmatter_end, body_start)`. The fence
+/// is a line of its own; a `---` inside a value (an ASCII rule in a
+/// description) used to end the block early and drop every key after it,
+/// `disable-model-invocation` included.
+pub(crate) fn frontmatter_fence(content: &str) -> Option<(usize, usize)> {
+    let mut pos = 0usize;
+    for line in content.split_inclusive('\n') {
+        if pos > 0 && line.trim_end() == "---" {
+            return Some((pos, pos + line.len()));
+        }
+        pos += line.len();
+    }
+    None
+}
+
+/// A SKILL.md's text without its frontmatter.
+pub(crate) fn strip_frontmatter(text: &str) -> Option<String> {
+    let content = text.strip_prefix("---")?;
+    let (_, body_start) = frontmatter_fence(content)?;
+    Some(content[body_start..].trim().to_string())
+}
+
 fn read_skill_body(sk: &Skill) -> String {
     std::fs::read_to_string(&sk.path)
         .ok()
-        .map(|t| {
-            if let Some(content) = t.strip_prefix("---") {
-                if let Some(end) = content.find("---") {
-                    return content[end + 3..].trim().to_string();
-                }
-            }
-            t
-        })
+        .map(|t| strip_frontmatter(&t).unwrap_or(t))
         .unwrap_or_else(|| sk.body.clone())
 }
 
@@ -1757,7 +1773,7 @@ fn parse_skill_impl(path: &Path, include_body: bool) -> Option<Skill> {
             if let Some(content) = text.strip_prefix("---") {
                 // Stop once the whole frontmatter block is in (flags like
                 // `disable-model-invocation` may follow the description).
-                if content.find("---").is_some() {
+                if frontmatter_fence(content).is_some() {
                     break;
                 }
             } else if !text.trim().is_empty() {
@@ -1776,9 +1792,9 @@ fn parse_skill_impl(path: &Path, include_body: bool) -> Option<Skill> {
     // Optional YAML frontmatter
     let (name, description, body, disable_model_invocation, user_invocable) =
         if let Some(content) = text.strip_prefix("---") {
-            if let Some(end) = content.find("---") {
+            if let Some((end, body_start)) = frontmatter_fence(content) {
                 let fm = &content[..end];
-                let body = content[end + 3..].trim();
+                let body = content[body_start..].trim();
                 let fm_name = parse_frontmatter_scalar(fm, "name").filter(|s| !s.is_empty());
                 let desc = parse_frontmatter_scalar(fm, "description")
                     .filter(|s| s != ">-" && s != "|" && s != ">" && !s.is_empty())
@@ -2390,6 +2406,35 @@ body
         let sk = parse_skill(&path).unwrap();
         assert!(sk.disable_model_invocation);
         assert!(!sk.user_invocable);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `---` inside a value ended the block early, so a flag after it was
+    /// lost and a user-only skill became model-invocable.
+    #[test]
+    fn a_rule_inside_a_value_does_not_end_the_frontmatter() {
+        let dir = std::env::temp_dir().join(format!("nur-skill-fence-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("SKILL.md");
+        std::fs::write(
+            &path,
+            "---
+name: ranges
+description: pages 1---9 only
+disable-model-invocation: true
+---
+
+# Body
+",
+        )
+        .unwrap();
+        let sk = parse_skill(&path).unwrap();
+        assert!(sk.disable_model_invocation);
+        assert_eq!(sk.description, "pages 1---9 only");
+        assert_eq!(
+            strip_frontmatter(&std::fs::read_to_string(&path).unwrap()).as_deref(),
+            Some("# Body")
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

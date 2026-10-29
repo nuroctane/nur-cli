@@ -112,6 +112,29 @@ fn commandcode_style_for_model(model: &str) -> ApiStyle {
     }
 }
 
+/// GitHub Copilot serves its GPT-5 and later models (and `mai-code-1.1`) on
+/// `/responses` only; its `/models` lists them with no `/chat/completions`
+/// endpoint, and Chat Completions answers "The requested model is not
+/// supported". Claude, Gemini, Kimi and the GPT-4 line stay on Chat
+/// Completions, which every one of them lists (observed 2026-10-29).
+fn copilot_style_for_model(model: &str) -> ApiStyle {
+    let m = model.trim().to_ascii_lowercase();
+    let gpt_major = m
+        .strip_prefix("gpt-")
+        .and_then(|rest| rest.split(['.', '-']).next())
+        .and_then(|major| major.parse::<u32>().ok());
+    if gpt_major.is_some_and(|major| major >= 5)
+        || m.starts_with("mai-code-1.1")
+        || ["o1", "o3", "o4"]
+            .iter()
+            .any(|family| m == *family || m.starts_with(&format!("{family}-")))
+    {
+        ApiStyle::Responses
+    } else {
+        ApiStyle::ChatCompletions
+    }
+}
+
 /// Rough JWT shape check (`eyJ…`.`…`.`…`) used only to decide whether a Grok
 /// bearer should carry the CLI-proxy fingerprint headers.
 fn looks_like_jwt_bearer(token: &str) -> bool {
@@ -906,6 +929,9 @@ impl ApiClient {
             // Same host for every model — only the request shape flips.
             routed.style = commandcode_style_for_model(model);
         }
+        if crate::providers::is_copilot_route(&self.provider_id) {
+            routed.style = copilot_style_for_model(model);
+        }
         // A `[protocols]` entry settles the wire format when the family table
         // guesses wrong ("400 Model does not support this protocol"); it works
         // for every provider, including a custom id pointed at a gateway.
@@ -1138,15 +1164,9 @@ impl ApiClient {
                 req = req.header("x-goog-user-project", project_id);
             }
         }
-        // Match Gemini CLI / Antigravity identity on Cloud Code hosts.
+        // Antigravity Hub identity on Cloud Code: its User-Agent and nothing else.
         if self.style == ApiStyle::GeminiCloudCode {
-            req = req
-                .header("User-Agent", crate::providers::CLOUD_CODE_USER_AGENT)
-                .header("X-Goog-Api-Client", crate::providers::CLOUD_CODE_API_CLIENT)
-                .header(
-                    "Client-Metadata",
-                    crate::providers::CLOUD_CODE_CLIENT_METADATA,
-                );
+            req = req.header("User-Agent", crate::providers::cloud_code_user_agent());
         }
         if self.provider_id == "kimi" && oauth.is_some() {
             if let Ok(headers) = crate::oauth::kimi_request_headers() {
@@ -1172,12 +1192,7 @@ impl ApiClient {
                 .header("X-XAI-Token-Auth", "xai-grok-cli")
                 .header("User-Agent", format!("xai-grok-workspace/{ver}"));
         }
-        if self.provider_id == "github-models" {
-            req = req
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28");
-        }
-        if self.provider_id == "github-copilot" {
+        if crate::providers::is_copilot_route(&self.provider_id) {
             // Do NOT send X-GitHub-Api-Version — Copilot returns "invalid apiVersion".
             // Headers must look like VS Code Copilot Chat (see litellm / openclaw).
             req = req
@@ -1516,8 +1531,10 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                         .and_then(|v| v.to_str().ok())
                         .and_then(|s| s.parse::<u64>().ok())
                         .unwrap_or(0);
+                    // Honour the provider's wait, but never let one header
+                    // stall the turn for an hour between retries.
                     let base = if retry_after > 0 {
-                        std::time::Duration::from_secs(retry_after)
+                        std::time::Duration::from_secs(retry_after.min(60))
                     } else {
                         std::time::Duration::from_millis(300 * (1 << (attempt - 1)) + rand_jitter())
                     };
@@ -4430,7 +4447,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
     }
 
     #[test]
-    fn gemini_cloud_code_sends_cli_headers_without_user_project() {
+    fn gemini_cloud_code_sends_hub_headers_without_user_project() {
         // Match Gemini CLI / Antigravity: UA + X-Goog-Api-Client + Client-Metadata,
         // Bearer auth. Do NOT send x-goog-user-project (body already has project;
         // free-tier companion projects often 403 with that header).
@@ -4455,7 +4472,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             .auth_headers(
                 client
                     .http
-                    .post("https://cloudcode-pa.googleapis.com/v1internal:generateContent")
+                    .post("https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent")
                     .header("Content-Type", "application/json"),
             )
             .build()
@@ -4463,16 +4480,12 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
         let h = request.headers();
         assert_eq!(
             h.get("User-Agent").and_then(|v| v.to_str().ok()),
-            Some(crate::providers::CLOUD_CODE_USER_AGENT)
+            Some(crate::providers::cloud_code_user_agent().as_str())
         );
-        assert_eq!(
-            h.get("X-Goog-Api-Client").and_then(|v| v.to_str().ok()),
-            Some(crate::providers::CLOUD_CODE_API_CLIENT)
-        );
-        assert_eq!(
-            h.get("Client-Metadata").and_then(|v| v.to_str().ok()),
-            Some(crate::providers::CLOUD_CODE_CLIENT_METADATA)
-        );
+        // The Gemini CLI fingerprint is what Cloud Code now refuses for
+        // individuals; the Hub sends neither of these.
+        assert!(h.get("X-Goog-Api-Client").is_none());
+        assert!(h.get("Client-Metadata").is_none());
         assert_eq!(
             h.get("Authorization").and_then(|v| v.to_str().ok()),
             Some("Bearer ya29.tok")
@@ -4482,11 +4495,8 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             "x-goog-user-project must not be sent on Cloud Code requests"
         );
         assert!(
-            h.get("Client-Metadata")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("")
-                .contains("GEMINI"),
-            "Client-Metadata should identify GEMINI plugin"
+            h.get("Client-Metadata").is_none(),
+            "the Gemini CLI Client-Metadata is what Cloud Code refuses for individuals"
         );
     }
 
@@ -4522,7 +4532,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
     }
 
     #[test]
-    fn cloud_code_style_skips_user_project_header_and_sends_cli_identity() {
+    fn cloud_code_style_skips_user_project_header_and_sends_hub_identity() {
         // Free-tier managed projects 403 when x-goog-user-project is set;
         // body already carries project. Identity headers match gemini-cli/agy.
         let client = ApiClient {
@@ -4546,7 +4556,7 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
             .auth_headers(
                 client
                     .http
-                    .post("https://cloudcode-pa.googleapis.com/v1internal:generateContent"),
+                    .post("https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"),
             )
             .build()
             .unwrap();
@@ -4560,15 +4570,9 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
                 .headers()
                 .get("User-Agent")
                 .and_then(|v| v.to_str().ok()),
-            Some("google-api-nodejs-client/9.15.1")
+            Some(crate::providers::cloud_code_user_agent().as_str())
         );
-        assert_eq!(
-            request
-                .headers()
-                .get("X-Goog-Api-Client")
-                .and_then(|v| v.to_str().ok()),
-            Some("google-cloud-sdk vscode_cloudshelleditor/0.1")
-        );
+        assert!(request.headers().get("X-Goog-Api-Client").is_none());
     }
 
     #[test]
@@ -4619,7 +4623,10 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
         oauth_client.oauth = Some(crate::auth::OAuthRequestContext::default());
         let routed = oauth_client.with_style(ApiStyle::ChatCompletions);
         assert_eq!(routed.style, ApiStyle::GeminiCloudCode);
-        assert_eq!(routed.base_url, "https://cloudcode-pa.googleapis.com");
+        assert_eq!(
+            routed.base_url,
+            crate::providers::ANTIGRAVITY_CLOUD_CODE_BASE_URL
+        );
 
         let mut key_client = ApiClient::new(
             "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -4642,7 +4649,10 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
         client.provider_id = "antigravity".to_string();
         let routed = client.with_style(ApiStyle::GeminiCloudCode);
         assert_eq!(routed.style, ApiStyle::GeminiCloudCode);
-        assert_eq!(routed.base_url, "https://cloudcode-pa.googleapis.com");
+        assert_eq!(
+            routed.base_url,
+            crate::providers::ANTIGRAVITY_CLOUD_CODE_BASE_URL
+        );
     }
 
     /// The 400 a gateway returns for the wrong wire format must say which
@@ -4930,18 +4940,32 @@ data: {"type":"response.completed","response":{"id":"resp_tools","status":"compl
         );
     }
 
+    /// GitHub Models' own service is retired; its sign-in now rides Copilot,
+    /// which refuses `X-GitHub-Api-Version` ("invalid apiVersion") and needs
+    /// its integration headers. Failure modes: the retired GitHub headers
+    /// still sent, the Copilot ones missing, GPT-6 left on Chat Completions.
     #[test]
-    fn github_models_requests_use_the_current_api_contract() {
-        let mut client = ApiClient::new("https://models.github.ai/inference", "token").unwrap();
+    fn github_models_requests_speak_copilot() {
+        let mut client =
+            ApiClient::new(crate::providers::GITHUB_COPILOT_BASE_URL, "token").unwrap();
         client.provider_id = "github-models".to_string();
         client.style = ApiStyle::ChatCompletions;
         let request = client
             .auth_headers(client.http.get("https://example.test"))
             .build()
             .unwrap();
+        assert!(request.headers().get("X-GitHub-Api-Version").is_none());
         assert_eq!(
-            request.headers().get("X-GitHub-Api-Version").unwrap(),
-            "2022-11-28"
+            request.headers().get("Copilot-Integration-Id").unwrap(),
+            "vscode-chat"
+        );
+        assert_eq!(
+            client.routed_for_model("gpt-6-luna").style,
+            ApiStyle::Responses
+        );
+        assert_eq!(
+            client.routed_for_model("gpt-4.1").style,
+            ApiStyle::ChatCompletions
         );
     }
 

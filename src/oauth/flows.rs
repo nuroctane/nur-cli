@@ -73,8 +73,16 @@ fn oauth_error_summary(body: &str) -> String {
             .iter()
             .find_map(|pointer| value.pointer(pointer).and_then(|value| value.as_str()))
     });
+    // Server-supplied text reaches the terminal, the TUI and gateway
+    // replies: no escape sequences.
     detail
-        .map(|detail| detail.chars().take(240).collect())
+        .map(|detail| {
+            detail
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(240)
+                .collect()
+        })
         .unwrap_or_else(|| "response details withheld".into())
 }
 
@@ -5039,8 +5047,19 @@ pub mod antigravity {
     const OAUTH_APP_UNSET: &str = "Google browser sign-in needs an OAuth app: set NUR_GOOGLE_CLIENT_ID and NUR_GOOGLE_CLIENT_SECRET. Or sign in with the Antigravity/gcloud CLI and copy that session with `nur auth import --from antigravity`, or paste a Gemini API key.";
     const AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
     const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-    const LOAD_ASSIST_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
-    const ONBOARD_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:onboardUser";
+    /// Project setup runs on the same Cloud Code host as inference.
+    fn load_assist_url() -> String {
+        format!(
+            "{}/v1internal:loadCodeAssist",
+            crate::providers::ANTIGRAVITY_CLOUD_CODE_BASE_URL
+        )
+    }
+    fn onboard_url() -> String {
+        format!(
+            "{}/v1internal:onboardUser",
+            crate::providers::ANTIGRAVITY_CLOUD_CODE_BASE_URL
+        )
+    }
     const SCOPES: &[&str] = &[
         "https://www.googleapis.com/auth/cloud-platform",
         "https://www.googleapis.com/auth/userinfo.email",
@@ -5048,11 +5067,6 @@ pub mod antigravity {
         "https://www.googleapis.com/auth/cclog",
         "https://www.googleapis.com/auth/experimentsandconfigs",
     ];
-    // Aliased from providers.rs so the fingerprint cannot drift between the
-    // catalog docs and the wire.
-    const USER_AGENT: &str = crate::providers::CLOUD_CODE_USER_AGENT;
-    const API_CLIENT: &str = crate::providers::CLOUD_CODE_API_CLIENT;
-    const CLIENT_METADATA: &str = crate::providers::CLOUD_CODE_CLIENT_METADATA;
     /// Free-tier Code Assist uses a Google-managed project. Passing a project
     /// into `onboardUser` for free-tier causes Precondition Failed (gemini-cli).
     const FREE_TIER: &str = "free-tier";
@@ -5534,17 +5548,14 @@ foreach ($t in $targets) {
         })
     }
 
-    /// Call `loadCodeAssist` the way gemini-cli does: optional env project +
+    /// Call `loadCodeAssist` the way the Antigravity Hub does (`ideType` only;
+    /// platform and plugin type are not sent), plus an optional env project as
     /// `metadata.duetProject`. Returns the full parsed response.
     fn load_code_assist(
         access_token: &str,
         env_project: Option<&str>,
     ) -> Result<LoadAssistResponse> {
-        let mut metadata = serde_json::json!({
-            "ideType": "IDE_UNSPECIFIED",
-            "platform": "PLATFORM_UNSPECIFIED",
-            "pluginType": "GEMINI"
-        });
+        let mut metadata = serde_json::json!({ "ideType": "ANTIGRAVITY" });
         if let Some(p) = env_project.filter(|s| !s.is_empty()) {
             metadata["duetProject"] = serde_json::Value::String(p.to_string());
         }
@@ -5554,12 +5565,10 @@ foreach ($t in $targets) {
         }
 
         let resp = http()?
-            .post(LOAD_ASSIST_URL)
+            .post(load_assist_url())
             .header("Authorization", format!("Bearer {access_token}"))
             .header("Content-Type", "application/json")
-            .header("User-Agent", USER_AGENT)
-            .header("X-Goog-Api-Client", API_CLIENT)
-            .header("Client-Metadata", CLIENT_METADATA)
+            .header("User-Agent", crate::providers::cloud_code_user_agent())
             .json(&body)
             .send()
             .map_err(|e| NurError::Other(format!("loadCodeAssist request failed: {e}")))?;
@@ -5761,28 +5770,35 @@ foreach ($t in $targets) {
         project_id: Option<&str>,
         tier_id: &str,
     ) -> Result<Option<String>> {
+        // The Hub's control-plane body is snake_case and names its release.
         let mut body = serde_json::json!({
-            "tierId": tier_id,
+            "tier_id": tier_id,
             "metadata": {
-                "ideType": "IDE_UNSPECIFIED",
-                "platform": "PLATFORM_UNSPECIFIED",
-                "pluginType": "GEMINI"
+                "ide_type": "ANTIGRAVITY",
+                "ide_version": crate::providers::ANTIGRAVITY_HUB_VERSION,
+                "ide_name": "antigravity"
             },
         });
         if let Some(p) = project_id.filter(|s| !s.is_empty()) {
-            body["cloudaicompanionProject"] = serde_json::Value::String(p.to_string());
-            body["metadata"]["duetProject"] = serde_json::Value::String(p.to_string());
+            body["cloudaicompanion_project"] = serde_json::Value::String(p.to_string());
+            body["metadata"]["duet_project"] = serde_json::Value::String(p.to_string());
         }
 
         let mut last_err = String::new();
         for attempt in 0..12 {
             let resp = http()?
-                .post(ONBOARD_URL)
+                .post(onboard_url())
                 .header("Authorization", format!("Bearer {access_token}"))
                 .header("Content-Type", "application/json")
-                .header("User-Agent", USER_AGENT)
-                .header("X-Goog-Api-Client", API_CLIENT)
-                .header("Client-Metadata", CLIENT_METADATA)
+                .header("Accept", "*/*")
+                .header(
+                    "User-Agent",
+                    crate::providers::cloud_code_onboard_user_agent(),
+                )
+                .header(
+                    "X-Goog-Api-Client",
+                    crate::providers::CLOUD_CODE_ONBOARD_API_CLIENT,
+                )
                 .json(&body)
                 .send();
 
@@ -5800,11 +5816,11 @@ foreach ($t in $targets) {
             if !status.is_success() {
                 last_err = format!("{status}: {text}");
                 // Precondition on free-tier with project set: retry without project.
-                if tier_id == FREE_TIER && body.get("cloudaicompanionProject").is_some() {
+                if tier_id == FREE_TIER && body.get("cloudaicompanion_project").is_some() {
                     if let Some(o) = body.as_object_mut() {
-                        o.remove("cloudaicompanionProject");
+                        o.remove("cloudaicompanion_project");
                         if let Some(serde_json::Value::Object(m)) = o.get_mut("metadata") {
-                            m.remove("duetProject");
+                            m.remove("duet_project");
                         }
                     }
                 }
@@ -6064,17 +6080,14 @@ foreach ($t in $targets) {
 pub mod github {
     use super::*;
 
-    /// Sign in through the official GitHub CLI (`gh auth login --web`), then mint
-    /// a token for GitHub Models. No OAuth client secrets ship in-repo. If `gh`
-    /// is already authenticated, the existing session is reused. Users without
-    /// `gh` can still paste a GitHub PAT (with `models:read`) via "Enter API key".
+    /// Sign in through the official GitHub CLI (`gh auth login --web`) and use
+    /// its token on Copilot's API, which serves GitHub Models too since GitHub
+    /// retired that service. No OAuth client secrets ship in-repo. If `gh` is
+    /// already authenticated, the existing session is reused. Users without
+    /// `gh` can still paste a GitHub token via "Enter API key".
     pub fn login(provider_id: &str, tx: &ProgressTx, cancel: &CancelFlag) -> Result<OAuthTokens> {
-        // Already signed in? Reuse the existing gh token when it carries the
-        // permission required by the selected product.
-        let existing = fetch_token(provider_id).ok();
-        if let Some(t) = existing.as_ref().filter(|tokens| {
-            provider_id != "github-models" || models_scope_available(&tokens.access_token)
-        }) {
+        // Already signed in? Reuse the existing gh token.
+        if let Ok(t) = fetch_token(provider_id) {
             send(
                 tx,
                 BrowserLoginProgress::Status("using existing GitHub CLI session".into()),
@@ -6093,34 +6106,19 @@ pub mod github {
         // open the browser" prompt proceeds without a TTY.
         let gh = gh_bin().ok_or_else(|| {
             NurError::Other(
-                "gh not found on PATH. Install GitHub CLI (https://cli.github.com/), open a new terminal, then retry — or paste a GitHub PAT (models:read) via /login."
+                "gh not found on PATH. Install GitHub CLI (https://cli.github.com/), open a new terminal, then retry — or paste a GitHub token via /login."
                     .into(),
             )
         })?;
-        let args = if provider_id == "github-models" && existing.is_some() {
-            vec![
-                "auth",
-                "refresh",
-                "--hostname",
-                "github.com",
-                "--scopes",
-                "models",
-            ]
-        } else {
-            let mut args = vec![
-                "auth",
-                "login",
-                "--web",
-                "--hostname",
-                "github.com",
-                "--git-protocol",
-                "https",
-            ];
-            if provider_id == "github-models" {
-                args.extend(["--scopes", "models"]);
-            }
-            args
-        };
+        let args = [
+            "auth",
+            "login",
+            "--web",
+            "--hostname",
+            "github.com",
+            "--git-protocol",
+            "https",
+        ];
         let mut child = Command::new(&gh)
             .args(args)
             .stdin(Stdio::piped())
@@ -6129,7 +6127,7 @@ pub mod github {
             .spawn()
             .map_err(|e| {
                 NurError::Other(format!(
-                    "failed to launch gh ({e}). Install GitHub CLI, or paste a GitHub PAT (models:read)."
+                    "failed to launch gh ({e}). Install GitHub CLI, or paste a GitHub token."
                 ))
             })?;
         if let Some(mut stdin) = child.stdin.take() {
@@ -6147,7 +6145,7 @@ pub mod github {
             let msg = e.to_string();
             if msg.contains("login process failed") {
                 return Err(NurError::Other(
-                    "gh auth login failed - paste a GitHub PAT (models:read) as fallback.".into(),
+                    "gh auth login failed - paste a GitHub token as fallback.".into(),
                 ));
             }
             return Err(e);
@@ -6192,19 +6190,6 @@ pub mod github {
                 extra: serde_json::json!({"product": provider_id, "via": "gh auth login"}),
             }),
         })
-    }
-
-    fn models_scope_available(token: &str) -> bool {
-        http()
-            .and_then(|client| {
-                client
-                    .get("https://models.github.ai/catalog/models")
-                    .bearer_auth(token)
-                    .header("Accept", "application/vnd.github+json")
-                    .send()
-                    .map_err(|error| NurError::Other(error.to_string()))
-            })
-            .is_ok_and(|response| response.status().is_success())
     }
 
     pub fn refresh(auth: &Auth, _refresh: &str) -> Result<OAuthTokens> {

@@ -549,7 +549,10 @@ async fn real_main() -> Result<()> {
             Err(e) => {
                 // Provider mismatch: interactive → open TUI unauthed; headless → fail.
                 let msg = e.to_string();
-                if interactive && msg.contains("mismatch") {
+                if interactive
+                    && (msg.contains("mismatch")
+                        || matches!(e, error::NurError::SignInExpired { .. }))
+                {
                     theme::print_info(&msg);
                     String::new()
                 } else if interactive {
@@ -804,8 +807,18 @@ async fn real_main() -> Result<()> {
             )
             .await?;
         }
-        Some(Commands::Gateway { token, chat }) => {
-            gateway::run_gateway(client, cfg, cwd, session, usage, token.clone(), *chat).await?;
+        Some(Commands::Gateway { token, chat, user }) => {
+            gateway::run_gateway(
+                client,
+                cfg,
+                cwd,
+                session,
+                usage,
+                token.clone(),
+                *chat,
+                *user,
+            )
+            .await?;
         }
         Some(Commands::Bench { action }) => {
             bench::run_bench(action, client, cfg, cwd).await?;

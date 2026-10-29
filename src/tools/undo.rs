@@ -166,11 +166,24 @@ fn record_in(dir: &Path, abs_path: &Path) {
         prior,
         after_digest: None,
     };
-    let n = read_indices(dir)
+    let mut n = read_indices(dir)
         .into_iter()
         .max()
         .map(|m| m + 1)
         .unwrap_or(1);
+    // Reserve the slot first: two writes recording at once used to pick the
+    // same number, and the second checkpoint overwrote the first.
+    for _ in 0..64 {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join(format!("{n:06}.json")))
+        {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(_) => return,
+        }
+    }
     if let Ok(json) = serde_json::to_string(&cp) {
         let _ = atomic_write(&dir.join(format!("{n:06}.json")), json.as_bytes());
     }
@@ -213,6 +226,13 @@ fn undo_last_in(dir: &Path) -> std::result::Result<String, String> {
     }
 
     let msg = match (existed, bytes) {
+        // An unsealed new-file checkpoint is a write that never finished, so
+        // whatever sits at that path now was made by something else.
+        (false, _) if cp.after_digest.is_none() && path.exists() => {
+            return Err(format!(
+                "cannot undo {label}: the edit that would have created it did not finish, and                  the file there now was not written by it"
+            ));
+        }
         (false, _) => {
             let _ = std::fs::remove_file(&path);
             format!("removed {label} (was a new file)")
@@ -278,11 +298,26 @@ mod tests {
         let file = base.join("new.txt");
         record_in(&cp_dir, &file);
         std::fs::write(&file, "created by tool").unwrap();
+        seal_in(&cp_dir, &file);
         assert!(file.exists());
 
         let msg = undo_last_in(&cp_dir).unwrap();
         assert!(msg.contains("new.txt"));
         assert!(!file.exists(), "new file should be removed on undo");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A write that failed after recording left an unsealed checkpoint; a
+    /// file the user or a build later put at that path must survive /undo.
+    #[test]
+    fn undo_keeps_a_file_the_failed_write_never_made() {
+        let base = temp_dir();
+        let cp_dir = base.join("cp");
+        let file = base.join("later.txt");
+        record_in(&cp_dir, &file);
+        std::fs::write(&file, "made by a build").unwrap();
+        assert!(undo_last_in(&cp_dir).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "made by a build");
         let _ = std::fs::remove_dir_all(&base);
     }
 

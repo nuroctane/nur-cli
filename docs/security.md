@@ -78,6 +78,19 @@ front of the model, not a wall around it:
   `nur-cli` npm shim fetches only its own version over https with a mandatory
   checksum, and ecosystem tools never write credentials outside an approved
   tool launch.
+- **Provider keys stay out of tool commands**: model-provider keys
+  (`OPENAI_API_KEY`, `NUR_API_KEY` and the rest of the catalog's key
+  variables) are removed from the environment of everything tools run
+  (`bash`, background jobs, the REPL's shell), so a `printenv` or a
+  prompt-injected `curl` cannot put them in the transcript. `GITHUB_TOKEN`,
+  `HF_TOKEN`, `CLOUDFLARE_API_TOKEN` and `AWS_BEARER_TOKEN_BEDROCK` pass
+  through for your own tools; your `hooks.toml` scripts keep the full
+  environment. `[tools] pass_provider_keys = true` passes every key.
+- **Protected project paths**: an "always" grant for a write tool covers
+  ordinary files only. A write under `.git/`, `.github/`, `.nur/` or
+  `.vscode/` needs its own approval, and a write inside `.git/` (hooks,
+  `core.fsmonitor`) asks even in `auto` mode, since it runs code on the next
+  git command.
 - **Workspace-root refusal**: nur refuses to run tools when the working
   directory is a filesystem root (`C:\`, `/`); pass `--cwd` or `/cd` into a
   project folder.
@@ -87,10 +100,13 @@ front of the model, not a wall around it:
   timed out cannot be retried unchanged for 15 minutes.
 - **Atomic IO**: all writes to `~/.nur/` use atomic file operations (write-to-temp, rename)
 - **Session bak**: each session save copies the previous file to `*.json.bak` first
-- **Optional rules**: `permissions.toml` deny/ask/allow; plan mode still blocks code authoring / VCS. A project's own `.nur/permissions.toml` cannot loosen anything until you trust it: its deny/ask rules apply at once, its allow rules wait for `/permissions trust` (or `nur permissions trust`), and an edit to that list holds it again. `bash` rules see every command in a chain: deny/ask fire on any of them, allow needs all of them and never covers a substitution or a redirect into a file ([details](configuration.md#permission-rules)). Rules hold for read-only tools too: a call a deny or ask rule names leaves the free parallel batch and takes the gated path
+- **Optional rules**: `permissions.toml` deny/ask/allow; plan mode still blocks code authoring / VCS. A project's own `.nur/permissions.toml` cannot loosen anything until you trust it: its deny/ask rules apply at once, its allow rules wait for `/permissions trust` (or `nur permissions trust`), and an edit to that list holds it again. `bash` rules see every command in a chain: deny/ask fire on any of them, allow needs all of them and never covers a substitution or a redirect into a file ([details](configuration.md#permission-rules)). Deny/ask also see the command a wrapper runs: `sudo`, `env`, `xargs`, `time`, `timeout`, `nohup`, `{ …; }`, `if … then`, and the script of `bash -c`, `sh -c`, `cmd /c`, `pwsh -Command` or `eval`. A rules file that does not parse fails closed: every tool call asks, and nur names the file and the error, until it is fixed. Rules hold for read-only tools too: a call a deny or ask rule names leaves the free parallel batch and takes the gated path
 - **What the model reads, it sees**: as in Claude Code and Codex, file contents and tool output reach your provider verbatim, secrets included. nur never redacts tool results, because a rewritten key corrupts the config edits the model makes. To keep a file away from the model, deny it, e.g. `deny = ["read_file:*.env"]` in `~/.nur/permissions.toml`. Rules match a tool's primary argument (the path for file tools, the command for `bash`), so a repo-wide `grep` or a `cat` in `bash` can still surface the file; deny those patterns too if that matters. (nur's own spill files, context store and memory still refuse secret-shaped bodies.)
 - **Optional hooks**: `hooks.toml` pre/post tool shell (local only; you control the script)
-- **Project skills are untrusted code-shaped text**: skills under a repo's own `.nur/skills`, `.claude/skills` or `.agents/skills` are inert until `/skills trust` records a digest of their `SKILL.md` files (same model as project permissions), so a cloned repo cannot inject instructions into the agent on first open. An edit to any project skill holds it again. A skill can also mark itself `disable-model-invocation: true` (user-only: no NL activation, and the `skill` tool refuses to read it to the model) or `user-invocable: false` (engine-only). Natural-language skill activation is opt-in (`[skills] auto_activate`).
+- **Plan mode's read-only shell set** excludes forms that write or run a program without a redirect: `sort -o`, `uniq IN OUT`, `tree -o`, `xxd -r`, `file -C`, git's `-c`, `--ext-diff`, `grep -O` and `--upload-pack`, `printenv`, and PowerShell script blocks. Those ask.
+- **Code mode scripts** may call read-only tools only, and never `web_fetch` or `web_search`: a new domain needs its approval prompt, which a script cannot show.
+- **Telegram gateway**: answers one chat (`--chat`); in a group it also obeys one sender only (`--user`), and runs nothing without it.
+- **Project skills are untrusted code-shaped text**: skills under a repo's own `.nur/skills`, `.claude/skills` or `.agents/skills` are inert until `/skills trust` records a digest of their `SKILL.md` files (same model as project permissions), so a cloned repo cannot inject instructions into the agent on first open. An edit to any project skill holds it again. The project's `.nur/stream-rules.toml` (rules that inject text into the conversation) falls under the same trust. A skill can also mark itself `disable-model-invocation: true` (user-only: no NL activation, and the `skill` tool refuses to read it to the model) or `user-invocable: false` (engine-only). Natural-language skill activation is opt-in (`[skills] auto_activate`).
 - **TypeSafe (Jev) guard**: the `typesafe` tool is declared read-only, so it runs without approval, and it refuses secret-shaped content in `state` / `query` / `candidates` before any request is sent. A loopback endpoint needs no key (local engine); a hosted endpoint needs `TYPESAFE_API_KEY`
 
 ---
@@ -145,7 +161,7 @@ external data, not instructions. See [enclave.md](./enclave.md).
 - May **read** a key already present in your environment and store it under `~/.nur/` on your machine
 - Do **not** write keys into the git checkout or GitHub
 - Write the binary to `~/.local/bin` and verify **SHA-256** of the installed binary
-- Best-effort prereq installs (Node, uv, …) are local to your machine
+- Best-effort prereq installs (Node, uv, …) are local to your machine. Their fallback installers are pinned to a release (bun, uv) or commit (sgrep, matching `src/ecosystem/lock.json`), and on Windows `rustup-init.exe` runs only if it matches the SHA-256 rustup publishes beside it
 
 ---
 

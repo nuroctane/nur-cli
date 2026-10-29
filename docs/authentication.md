@@ -48,7 +48,7 @@ regression checks, and remaining vendor-specific limitations.
 | **Hugging Face** | `HF_TOKEN` | - |
 | **Azure OpenAI** | `AZURE_OPENAI_API_KEY` | `az login` / Entra device code |
 | **Amazon Bedrock** | `AWS_BEARER_TOKEN_BEDROCK` | - (AWS SSO credentials require SigV4, which this route does not implement) |
-| **GitHub Models** | GitHub PAT (`models:read`) | `gh auth login` browser SSO |
+| **GitHub Models** | GitHub token (served by Copilot) | `gh auth login` browser SSO |
 | **Nous Portal** | `NOUS_API_KEY` | Nous Portal device code (`hermes-cli`) or import `~/.hermes/auth.json` |
 | Gemini, Groq, … | Vendor dashboard | - |
 | **Poolside** | `POOLSIDE_API_KEY` | Free developer key at [platform.poolside.ai](https://platform.poolside.ai/) → API Keys |
@@ -131,9 +131,9 @@ these providers:
 | **Anthropic** | Loopback PKCE (Claude Code client) | `$CLAUDE_CONFIG_DIR` or `~/.claude` | `api.anthropic.com` (Bearer + `oauth-2025-04-20` beta) |
 | **Kimi** | Device code | `~/.kimi` | `api.kimi.com/coding/v1` |
 | **Google Gemini** | Google Cloud ADC via `gcloud` | ADC store | `generativelanguage.googleapis.com` |
-| **Antigravity** | Google Cloud ADC via `gcloud auth login --update-adc` (or the Antigravity/`agy` CLI) | Windows Credential Manager (`gemini:antigravity`) or Gemini/Antigravity CLI files, else gcloud ADC | `cloudcode-pa.googleapis.com` (Cloud Code `v1internal`) |
+| **Antigravity** | Google Cloud ADC via `gcloud auth login --update-adc` (or the Antigravity/`agy` CLI) | Windows Credential Manager (`gemini:antigravity`) or Gemini/Antigravity CLI files, else gcloud ADC | `daily-cloudcode-pa.googleapis.com` (Cloud Code `v1internal`, Antigravity Hub client) |
 | **Azure OpenAI** | Entra device login via `az` | Azure CLI session | Configured Azure resource |
-| **GitHub Models** | GitHub login via `gh` (`models` scope) | GitHub CLI session | `models.github.ai/inference` |
+| **GitHub Models** | GitHub login via `gh` | GitHub CLI session | `api.githubcopilot.com` (GitHub retired `models.github.ai` on 2026-07-30) |
 | **GitHub Copilot** | GitHub login via `gh` | GitHub CLI session | `api.githubcopilot.com` |
 | **Cursor** | Cursor login via `cursor-agent` | `$CURSOR_AGENT_HOME` or `~/.cursor` / OS keychain | Chat runs through `cursor-agent -p` (nur tool harness by default); optional `CURSOR_API_KEY` |
 | **OpenCode** | OpenCode Console device sign-in (as OpenCode's CLI does it: client `opencode-cli`, refreshed at the Console) | nur's own store; `nur auth import --from opencode` reads `~/.local/share/opencode/auth.json` | Zen with the Console token as a bearer on every route. OpenCode Go takes API keys only: set `OPENCODE_API_KEY` to use Go beside the sign-in, or save the key with `--key` to use it for both |
@@ -422,6 +422,13 @@ Shows whether credentials are set, plus:
 - **method** (`api_key` or `oauth / browser`)
 - **expires** (relative: `in 42m`, `expired 3m ago`, or `no expiry`)
 - **key** fingerprint (first/last 4 chars only; never the full secret)
+- **signed in**: every other provider holding a credential, and where it lives
+  (`OAuth`, `saved key`, `env <VAR>`, `+N rotating`, `CLI available`), the same
+  per-provider view as `/auth`
+
+A saved browser sign-in whose refresh is refused (typically a refresh token
+another client rotated) fails with `the saved sign-in for '<id>' expired and
+could not be renewed (<reason>)`; sign in again with `nur auth login --provider <id>`.
 
 If `auth.provider` does not match the active config provider, status warns
 **mismatch**. Run `/login` before chatting so tokens are not sent to the wrong API.
@@ -477,14 +484,14 @@ structured output all work through the standard adapter.
 | | |
 |---|---|
 | Base URL | `https://inference.poolside.ai/v1` |
-| Default model | `poolside/laguna-m.1` - `/model` lists what your key can reach |
+| Default model | `poolside/laguna-s-2.1` - `/model` lists what your key can reach |
 | Key | `POOLSIDE_API_KEY`, or `/login` → **Poolside**. Free developer keys at [platform.poolside.ai](https://platform.poolside.ai/) → API Keys |
 | Auth | `Authorization: Bearer <key>` |
 
 **Self-hosted deployments** serve the same API under
 `https://<your-domain>/openai/v1` - pick Poolside in `/login` and set that as
 the base URL. Laguna is also reachable through OpenRouter
-(`poolside/laguna-m.1`) if you would rather bill there.
+(`poolside/laguna-s-2.1`) if you would rather bill there.
 
 Privacy tier is **Standard**: Poolside publishes no ZDR or no-training
 commitment for API traffic, and nur does not award a tier that is not

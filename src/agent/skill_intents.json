@@ -1,5 +1,5 @@
 {
-  "total_skills": 1711,
+  "total_skills": 1791,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -377,6 +377,38 @@
         "deep",
         "gerstner",
         "spectrum"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "3d-underwater-god-rays",
+      "description": "Add volumetric underwater god rays to a Three.js scene, marching one drifting swell field along every view ray at half resolution so the light shafts converge on the sun, parallax with the camera and carry rippling caustic streaks, with a shimmering surface underside, a sun that wobbles through the ",
+      "path": "skills/3d-underwater-god-rays/SKILL.md",
+      "triggers": [
+        "/3d underwater god rays",
+        "/3d-underwater-god-rays",
+        "3d underwater god rays",
+        "3d-underwater-god-rays",
+        "volumetric underwater",
+        "/underwater god rays",
+        "/underwater-god-rays",
+        "underwater god rays",
+        "underwater-god-rays",
+        "/3d underwater god",
+        "/3d-underwater-god",
+        "3d underwater god"
+      ],
+      "keywords": [
+        "underwater",
+        "rays",
+        "volumetric",
+        "three",
+        "scene",
+        "marching",
+        "drifting",
+        "swell",
+        "field",
+        "along"
       ],
       "aliases": []
     },
@@ -1375,7 +1407,7 @@
     },
     {
       "name": "ai-gateway",
-      "description": "Vercel AI Gateway guidance for setup, model discovery, authentication, routing, fallbacks, BYOK, budgets, spend reporting, observability, compatible APIs, and coding-agent configuration. Use when adding AI Gateway to an app, migrating provider calls, choosing models or providers, debugging gateway r",
+      "description": "Vercel AI Gateway guidance for setup, model discovery, authentication, routing, fallbacks, virtual models, evaluation models, BYOK, budgets, spend reporting, observability, compatible APIs, and coding-agent configuration. Use when adding AI Gateway to an app, migrating provider calls, choosing model",
       "path": "skills/ai-gateway/SKILL.md",
       "triggers": [
         "vercel gateway",
@@ -1394,7 +1426,7 @@
         "authentication",
         "routing",
         "fallbacks",
-        "byok"
+        "virtual"
       ],
       "aliases": []
     },
@@ -4051,6 +4083,31 @@
       "aliases": []
     },
     {
+      "name": "animation-performance",
+      "description": "Keep web animations inside the frame budget \u2014 animate composite-only properties, keep motion off the main thread when the page is busy, and find the cause when an animation drops frames. Covers the layout/paint/composite pipeline, cheaper property swaps, CSS vs WAAPI vs requestAnimationFrame, Framer",
+      "path": "skills/animation-performance/SKILL.md",
+      "triggers": [
+        "/animation performance",
+        "/animation-performance",
+        "animation performance",
+        "animation-performance",
+        "keep animations"
+      ],
+      "keywords": [
+        "animation",
+        "performance",
+        "keep",
+        "animations",
+        "inside",
+        "frame",
+        "budget",
+        "animate",
+        "composite",
+        "properties"
+      ],
+      "aliases": []
+    },
+    {
       "name": "animation-systems",
       "description": "Use when designing or implementing product-grade web motion like Stripe, Linear, Apple, and Vercel. Covers motion principles, easing/duration defaults, choreography patterns, scroll/hover interactions, performance, accessibility (reduced motion), and implementation guidance.",
       "path": "skills/animation-systems/SKILL.md",
@@ -4154,6 +4211,102 @@
       "aliases": []
     },
     {
+      "name": "api-gateway-backend-security-and-rate-limiting",
+      "description": "Secures and rate limits backend services behind Google Cloud API Gateway across OpenAPI 2.0 and OpenAPI 3.0.x API configurations, including MCP-enabled gateways. Use when configuring API key or JWT authentication, locking down Cloud Run or Cloud Run functions backends with a gateway service account,",
+      "path": "skills/api-gateway-backend-security-and-rate-limiting/SKILL.md",
+      "triggers": [
+        "/api gateway backend security and rate limiting",
+        "/api-gateway-backend-security-and-rate-limiting",
+        "api gateway backend security and rate limiting",
+        "api-gateway-backend-security-and-rate-limiting",
+        "/gateway backend security",
+        "/gateway-backend-security",
+        "gateway backend security",
+        "gateway-backend-security",
+        "/backend security and",
+        "/backend-security-and",
+        "/api gateway backend",
+        "/api-gateway-backend"
+      ],
+      "keywords": [
+        "gateway",
+        "backend",
+        "security",
+        "rate",
+        "limiting",
+        "secures",
+        "limits",
+        "services",
+        "behind",
+        "google"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "api-gateway-mcp-server",
+      "description": "Configures Google Cloud API Gateway to act as a remote Model Context Protocol (MCP) server (Public Preview) that exposes REST APIs as agent tools over HTTP (POST /mcp). Use when migrating OpenAPI 2.0 specs to OpenAPI 3.x for MCP, annotating specs with x-google-api-management.mcp and x-google-mcp-too",
+      "path": "skills/api-gateway-mcp-server/SKILL.md",
+      "triggers": [
+        "/api gateway mcp server",
+        "/api-gateway-mcp-server",
+        "api gateway mcp server",
+        "api-gateway-mcp-server",
+        "/gateway mcp server",
+        "/gateway-mcp-server",
+        "gateway mcp server",
+        "gateway-mcp-server",
+        "configures google",
+        "/api gateway mcp",
+        "/api-gateway-mcp",
+        "api gateway mcp"
+      ],
+      "keywords": [
+        "gateway",
+        "server",
+        "configures",
+        "google",
+        "cloud",
+        "remote",
+        "model",
+        "context",
+        "protocol",
+        "public"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "apigee-agent-gateway-governance",
+      "description": "Stands up an Apigee API proxy that a Google Cloud Agent Gateway calls as an ext-proc (Service Extension) callout on an agent's LLM traffic, to meter token usage per model, extract caller identity, and apply Model Armor prompt screening or a semantic cache. Use when wiring Apigee in as an AI gateway ",
+      "path": "skills/apigee-agent-gateway-governance/SKILL.md",
+      "triggers": [
+        "/apigee agent gateway governance",
+        "/apigee-agent-gateway-governance",
+        "apigee agent gateway governance",
+        "apigee-agent-gateway-governance",
+        "/agent gateway governance",
+        "/agent-gateway-governance",
+        "agent gateway governance",
+        "agent-gateway-governance",
+        "/apigee agent gateway",
+        "/apigee-agent-gateway",
+        "apigee agent gateway",
+        "apigee-agent-gateway"
+      ],
+      "keywords": [
+        "apigee",
+        "gateway",
+        "governance",
+        "stands",
+        "proxy",
+        "google",
+        "cloud",
+        "calls",
+        "proc",
+        "service"
+      ],
+      "aliases": []
+    },
+    {
       "name": "apple-design",
       "description": "Apple's approach to interface design and fluid, physical motion, translated for the web. Use when building or reviewing gesture-driven UI, spring animations, drag/swipe/sheet interactions, momentum and interruptible transitions, translucent materials and depth, typography (optical sizing, tracking, ",
       "path": "skills/apple-design/SKILL.md",
@@ -4207,6 +4360,102 @@
         "workflows",
         "designing",
         "terraform"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "application-integration-authoring",
+      "description": "Builds, versions, publishes, tests, and executes Google Cloud Application Integration workflows through the REST API and Python discovery client, and promotes versions across environments. Use when listing integrations, downloading or uploading integration versions as JSON, configuring API triggers ",
+      "path": "skills/application-integration-authoring/SKILL.md",
+      "triggers": [
+        "/application integration authoring",
+        "/application-integration-authoring",
+        "application integration authoring",
+        "application-integration-authoring",
+        "/application integration",
+        "/application-integration",
+        "application integration",
+        "application-integration",
+        "/integration authoring",
+        "/integration-authoring",
+        "integration authoring",
+        "integration-authoring"
+      ],
+      "keywords": [
+        "application",
+        "integration",
+        "authoring",
+        "builds",
+        "versions",
+        "publishes",
+        "tests",
+        "executes",
+        "google",
+        "cloud"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "application-integration-basics",
+      "description": "Explains Google Cloud Application Integration concepts, region provisioning, IAM roles, run-as service accounts, interface choices (REST, Python discovery client, Terraform, ADK), and platform limits. Use when setting up Application Integration in a Google Cloud project, enabling required APIs, prov",
+      "path": "skills/application-integration-basics/SKILL.md",
+      "triggers": [
+        "/application integration basics",
+        "/application-integration-basics",
+        "application integration basics",
+        "application-integration-basics",
+        "/application integration",
+        "/application-integration",
+        "application integration",
+        "application-integration",
+        "/integration basics",
+        "/integration-basics",
+        "integration basics",
+        "integration-basics"
+      ],
+      "keywords": [
+        "application",
+        "integration",
+        "basics",
+        "explains",
+        "google",
+        "cloud",
+        "concepts",
+        "region",
+        "provisioning",
+        "roles"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "application-integration-troubleshooting",
+      "description": "Diagnoses failed, stuck, or silent Google Cloud Application Integration runs and Integration Connectors tasks using the REST API, Cloud Logging, and Cloud Monitoring. Use when an integration fails, returns HTTP 200 without doing the expected work, hangs in a suspended or retry state, or hits IAM, ru",
+      "path": "skills/application-integration-troubleshooting/SKILL.md",
+      "triggers": [
+        "/application integration troubleshooting",
+        "/application-integration-troubleshooting",
+        "application integration troubleshooting",
+        "application-integration-troubleshooting",
+        "/integration troubleshooting",
+        "/integration-troubleshooting",
+        "integration troubleshooting",
+        "integration-troubleshooting",
+        "/application integration",
+        "/application-integration",
+        "application integration",
+        "application-integration"
+      ],
+      "keywords": [
+        "application",
+        "integration",
+        "troubleshooting",
+        "diagnoses",
+        "failed",
+        "stuck",
+        "silent",
+        "google",
+        "cloud",
+        "runs"
       ],
       "aliases": []
     },
@@ -4339,6 +4588,134 @@
         "qdrant",
         "weaviate",
         "chroma"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "assured-workloads-basics",
+      "description": "Provisions, inspects, updates, and deletes Google Cloud Assured Workloads V1 compliant folders, CMEK settings, Sovereign Controls by Partners, and service usage restrictions. Use when creating, listing, describing, updating, or deleting an Assured Workloads workload for any compliance regime or data",
+      "path": "skills/assured-workloads-basics/SKILL.md",
+      "triggers": [
+        "/assured workloads basics",
+        "/assured-workloads-basics",
+        "assured workloads basics",
+        "assured-workloads-basics",
+        "provisions inspects",
+        "/assured workloads",
+        "/assured-workloads",
+        "/workloads basics",
+        "/workloads-basics",
+        "assured workloads",
+        "assured-workloads",
+        "workloads basics"
+      ],
+      "keywords": [
+        "assured",
+        "workloads",
+        "basics",
+        "provisions",
+        "inspects",
+        "updates",
+        "deletes",
+        "google",
+        "cloud",
+        "compliant"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "assuredworkloads-environment-assessor",
+      "description": "Discover Google Cloud resource telemetry and effective Org Policies, evaluate brownfield workloads against sovereign data boundary and compliance standards (EU Data Boundary with Support, FedRAMP Moderate/High, DoD IL4/IL5, ITAR, CJIS, US/EU Regional Data Boundaries), and recommend the optimal Assur",
+      "path": "skills/assuredworkloads-environment-assessor/SKILL.md",
+      "triggers": [
+        "/assuredworkloads environment assessor",
+        "/assuredworkloads-environment-assessor",
+        "assuredworkloads environment assessor",
+        "assuredworkloads-environment-assessor",
+        "/assuredworkloads environment",
+        "/assuredworkloads-environment",
+        "assuredworkloads environment",
+        "assuredworkloads-environment",
+        "/environment assessor",
+        "/environment-assessor",
+        "environment assessor",
+        "environment-assessor"
+      ],
+      "keywords": [
+        "assuredworkloads",
+        "environment",
+        "assessor",
+        "discover",
+        "google",
+        "cloud",
+        "resource",
+        "telemetry",
+        "effective",
+        "policies"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "assuredworkloads-frameworks-author",
+      "description": "Authors custom cloud controls and customized frameworks for Assured Workloads when built-in resources cannot satisfy core requirements. Use when creating or synthesizing custom data boundary resources. Don't use for browsing or mapping existing built-in frameworks (use assuredworkloads-frameworks-na",
+      "path": "skills/assuredworkloads-frameworks-author/SKILL.md",
+      "triggers": [
+        "/assuredworkloads frameworks author",
+        "/assuredworkloads-frameworks-author",
+        "assuredworkloads frameworks author",
+        "assuredworkloads-frameworks-author",
+        "/assuredworkloads frameworks",
+        "/assuredworkloads-frameworks",
+        "assuredworkloads frameworks",
+        "assuredworkloads-frameworks",
+        "/frameworks author",
+        "/frameworks-author",
+        "frameworks author",
+        "frameworks-author"
+      ],
+      "keywords": [
+        "assuredworkloads",
+        "frameworks",
+        "author",
+        "authors",
+        "custom",
+        "cloud",
+        "controls",
+        "customized",
+        "assured",
+        "workloads"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "assuredworkloads-frameworks-navigator",
+      "description": "Acts as a Data Boundary Compliance Analyst that maps user compliance queries against Data Boundary Frameworks and cloud controls, validates matched resources, and recommends appropriate Frameworks or cloud controls. Use when mapping direct natural language workload requirements to Assured Workloads ",
+      "path": "skills/assuredworkloads-frameworks-navigator/SKILL.md",
+      "triggers": [
+        "/assuredworkloads frameworks navigator",
+        "/assuredworkloads-frameworks-navigator",
+        "assuredworkloads frameworks navigator",
+        "assuredworkloads-frameworks-navigator",
+        "/assuredworkloads frameworks",
+        "/assuredworkloads-frameworks",
+        "assuredworkloads frameworks",
+        "assuredworkloads-frameworks",
+        "/frameworks navigator",
+        "/frameworks-navigator",
+        "frameworks navigator",
+        "frameworks-navigator"
+      ],
+      "keywords": [
+        "assuredworkloads",
+        "frameworks",
+        "navigator",
+        "acts",
+        "data",
+        "boundary",
+        "compliance",
+        "analyst",
+        "maps",
+        "user"
       ],
       "aliases": []
     },
@@ -5078,7 +5455,7 @@
     },
     {
       "name": "auth",
-      "description": "Authentication integration guidance \u2014 Clerk (native Vercel Marketplace), Descope, and Auth0 setup for Next.js applications, plus Sign in with Vercel, Vercel Passport, and Vercel KMS. Covers proxy.ts auth patterns, sign-in/sign-up flows, and Marketplace provisioning. Use when implementing user authen",
+      "description": "Authentication integration guidance \u2014 Clerk (native Vercel Marketplace), Better Auth, Descope, and Auth0 setup for Next.js applications, plus Sign in with Vercel, Vercel Passport, and Vercel KMS. Covers server config, route handlers, proxy.ts auth patterns, sign-in/sign-up flows, and Marketplace pro",
       "path": "skills/auth/SKILL.md",
       "triggers": [
         "authentication integration",
@@ -5093,8 +5470,8 @@
         "native",
         "vercel",
         "marketplace",
-        "descope",
-        "auth0"
+        "better",
+        "descope"
       ],
       "aliases": []
     },
@@ -5240,6 +5617,38 @@
       "aliases": []
     },
     {
+      "name": "axiom-agent-created-orgs",
+      "description": "Provision a temporary Axiom organization with one unauthenticated API call, store its one-time token securely, and hand the claim URL to the user. Use when an agent needs an Axiom org and the user has none configured, or asks for a new or throwaway one.",
+      "path": "skills/axiom-agent-created-orgs/SKILL.md",
+      "triggers": [
+        "/axiom agent created orgs",
+        "/axiom-agent-created-orgs",
+        "axiom agent created orgs",
+        "axiom-agent-created-orgs",
+        "/axiom agent created",
+        "/axiom-agent-created",
+        "/agent created orgs",
+        "/agent-created-orgs",
+        "axiom agent created",
+        "axiom-agent-created",
+        "provision temporary",
+        "agent created orgs"
+      ],
+      "keywords": [
+        "axiom",
+        "created",
+        "orgs",
+        "provision",
+        "temporary",
+        "organization",
+        "unauthenticated",
+        "call",
+        "store",
+        "time"
+      ],
+      "aliases": []
+    },
+    {
       "name": "axiom-alerting",
       "description": "Create and manage Axiom monitors and notifiers via the v2 public API. Use when building alerting, routing notifications, validating monitor behavior, and maintaining alert configurations end-to-end.",
       "path": "skills/axiom-alerting/SKILL.md",
@@ -5261,6 +5670,158 @@
         "building",
         "routing",
         "notifications"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "axiom-building-dashboards",
+      "description": "Designs and builds Axiom dashboards via API. Covers chart types, APL and metrics/MPL query patterns, SmartFilters, layout, and configuration options. Use when creating dashboards, migrating from Splunk, or configuring chart options.",
+      "path": "skills/axiom-building-dashboards/SKILL.md",
+      "triggers": [
+        "/axiom building dashboards",
+        "/axiom-building-dashboards",
+        "axiom building dashboards",
+        "axiom-building-dashboards",
+        "/building dashboards",
+        "/building-dashboards",
+        "building dashboards",
+        "building-dashboards",
+        "/axiom building",
+        "/axiom-building",
+        "axiom building",
+        "axiom-building"
+      ],
+      "keywords": [
+        "axiom",
+        "building",
+        "dashboards",
+        "designs",
+        "builds",
+        "covers",
+        "chart",
+        "types",
+        "metrics",
+        "query"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "axiom-controlling-costs",
+      "description": "Analyzes Axiom query patterns to find unused data, then builds dashboards and monitors for cost optimization. Use when asked to reduce Axiom costs, find unused columns or field values, identify data waste, or track ingest spend.",
+      "path": "skills/axiom-controlling-costs/SKILL.md",
+      "triggers": [
+        "/axiom controlling costs",
+        "/axiom-controlling-costs",
+        "axiom controlling costs",
+        "axiom-controlling-costs",
+        "/axiom controlling",
+        "/axiom-controlling",
+        "/controlling costs",
+        "/controlling-costs",
+        "axiom controlling",
+        "axiom-controlling",
+        "controlling costs",
+        "controlling-costs"
+      ],
+      "keywords": [
+        "axiom",
+        "controlling",
+        "costs",
+        "analyzes",
+        "query",
+        "patterns",
+        "find",
+        "unused",
+        "data",
+        "builds"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "axiom-ingest",
+      "description": "Send data to Axiom. Picks an org from ~/.axiom.toml, or provisions a temporary one when none is configured, creates the dataset, ingests JSON, NDJSON, or CSV, and confirms with a query. Use when asked to send, ingest, upload, or load data or events into Axiom or a new Axiom dataset.",
+      "path": "skills/axiom-ingest/SKILL.md",
+      "triggers": [
+        "/axiom ingest",
+        "/axiom-ingest",
+        "axiom ingest",
+        "axiom-ingest"
+      ],
+      "keywords": [
+        "axiom",
+        "ingest",
+        "send",
+        "data",
+        "picks",
+        "toml",
+        "provisions",
+        "temporary",
+        "none",
+        "configured"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "axiom-metrics-chart",
+      "description": "Render saved Axiom metrics v2 or v3 JSON as line charts in a terminal or transcript. Uses Unicode/ASCII by default and supports PNG/SVG/sixel with gnuplot. Use when plotting metrics query results.",
+      "path": "skills/axiom-metrics-chart/SKILL.md",
+      "triggers": [
+        "/axiom metrics chart",
+        "/axiom-metrics-chart",
+        "axiom metrics chart",
+        "axiom-metrics-chart",
+        "/axiom metrics",
+        "/axiom-metrics",
+        "/metrics chart",
+        "/metrics-chart",
+        "axiom metrics",
+        "axiom-metrics",
+        "metrics chart",
+        "metrics-chart"
+      ],
+      "keywords": [
+        "axiom",
+        "metrics",
+        "chart",
+        "render",
+        "saved",
+        "json",
+        "line",
+        "charts",
+        "terminal",
+        "transcript"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "axiom-spl-to-apl",
+      "description": "Translates Splunk SPL queries to Axiom APL. Provides command mappings, function equivalents, and syntax transformations. Use when migrating from Splunk, converting SPL queries, or learning APL equivalents of SPL patterns.",
+      "path": "skills/axiom-spl-to-apl/SKILL.md",
+      "triggers": [
+        "/axiom spl to apl",
+        "/axiom-spl-to-apl",
+        "translates splunk",
+        "axiom spl to apl",
+        "axiom-spl-to-apl",
+        "/axiom spl to",
+        "/axiom-spl-to",
+        "axiom spl to",
+        "axiom-spl-to",
+        "/spl to apl",
+        "/spl-to-apl",
+        "/axiom spl"
+      ],
+      "keywords": [
+        "axiom",
+        "translates",
+        "splunk",
+        "queries",
+        "provides",
+        "command",
+        "mappings",
+        "function",
+        "equivalents",
+        "syntax"
       ],
       "aliases": []
     },
@@ -5327,26 +5888,26 @@
     },
     {
       "name": "bambu-labs",
-      "description": "Dry-run, upload, and cautiously initiate local Bambu Lab print jobs from validated plain `.gcode`, using Bambu LAN FTPS/MQTT handoffs.",
+      "description": "Send prints to Bambu Lab printers through Bambu Connect, Bambu Lab's official app for printing from other software, or Bambu Studio. Use when the user wants to print a sliced `.gcode.3mf`, a Bambu `.gcode` or an unsliced model on a Bambu Lab printer, over Bambu Cloud or LAN. The agent opens the file",
       "path": "skills/bambu-labs/SKILL.md",
       "triggers": [
-        "upload cautiously",
         "/bambu labs",
         "/bambu-labs",
+        "send prints",
         "bambu labs",
         "bambu-labs"
       ],
       "keywords": [
         "bambu",
         "labs",
-        "upload",
-        "cautiously",
-        "initiate",
-        "local",
-        "print",
-        "jobs",
-        "validated",
-        "plain"
+        "send",
+        "prints",
+        "printers",
+        "connect",
+        "official",
+        "printing",
+        "software",
+        "studio"
       ],
       "aliases": []
     },
@@ -5420,6 +5981,29 @@
         "reports",
         "editorial",
         "grids"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "basin",
+      "description": "Build and troubleshoot Cloudflare Basin analytics workflows with Basin Pipelines, Basin Catalog, and Basin SQL. Use for streaming data into R2 Iceberg tables, managing catalogs, or querying those tables; also use for requests using the former Data Platform, Pipelines, R2 Data Catalog, or R2 SQL name",
+      "path": "skills/basin/SKILL.md",
+      "triggers": [
+        "build troubleshoot",
+        "/basin",
+        "basin"
+      ],
+      "keywords": [
+        "basin",
+        "build",
+        "troubleshoot",
+        "cloudflare",
+        "analytics",
+        "workflows",
+        "pipelines",
+        "catalog",
+        "streaming",
+        "data"
       ],
       "aliases": []
     },
@@ -5596,7 +6180,7 @@
     },
     {
       "name": "benchmark",
-      "description": "Performance regression detection. (gstack)",
+      "description": "Web performance regression detection. (gstack)",
       "path": "skills/benchmark/SKILL.md",
       "triggers": [
         "performance regression",
@@ -5887,6 +6471,38 @@
       "aliases": []
     },
     {
+      "name": "bigquery-migration-sql-translator",
+      "description": "Translates SQL queries, DDL schemas, and stored procedures from legacy database dialects (Teradata, Oracle, Redshift, Snowflake, SparkSQL, HiveQL) to BigQuery GoogleSQL using the BigQuery Migration Service (BQMS) MCP server. Use when translating legacy SQL queries, migrating schemas or metadata zip ",
+      "path": "skills/bigquery-migration-sql-translator/SKILL.md",
+      "triggers": [
+        "/bigquery migration sql translator",
+        "/bigquery-migration-sql-translator",
+        "bigquery migration sql translator",
+        "bigquery-migration-sql-translator",
+        "/migration sql translator",
+        "/migration-sql-translator",
+        "migration sql translator",
+        "migration-sql-translator",
+        "/bigquery migration sql",
+        "/bigquery-migration-sql",
+        "bigquery migration sql",
+        "bigquery-migration-sql"
+      ],
+      "keywords": [
+        "bigquery",
+        "migration",
+        "translator",
+        "translates",
+        "queries",
+        "schemas",
+        "stored",
+        "procedures",
+        "legacy",
+        "database"
+      ],
+      "aliases": []
+    },
+    {
       "name": "bigquery-observability",
       "description": "Provides data-retrieval best practices, tool selection guidance, and performant SQL query syntax for BigQuery telemetry across INFORMATION_SCHEMA, Cloud Monitoring, and the REST API. Use when the telemetry to fetch is already known, selecting telemetry tools, writing performant INFORMATION_SCHEMA qu",
       "path": "skills/bigquery-observability/SKILL.md",
@@ -5990,6 +6606,31 @@
         "cause",
         "analysis",
         "procedures"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "bigquery-udfs",
+      "description": "Creates, deploys, and troubleshoots BigQuery User-Defined Functions (UDFs) and Remote Functions across SQL, JavaScript, Python, and Cloud Run endpoints. Use when writing custom scalar or aggregate functions in BigQuery, installing PyPI packages or Cloud Storage libraries in a Python or JavaScript UD",
+      "path": "skills/bigquery-udfs/SKILL.md",
+      "triggers": [
+        "creates deploys",
+        "/bigquery udfs",
+        "/bigquery-udfs",
+        "bigquery udfs",
+        "bigquery-udfs"
+      ],
+      "keywords": [
+        "bigquery",
+        "udfs",
+        "creates",
+        "deploys",
+        "troubleshoots",
+        "user",
+        "defined",
+        "functions",
+        "remote",
+        "across"
       ],
       "aliases": []
     },
@@ -6207,7 +6848,7 @@
     },
     {
       "name": "brainstorming",
-      "description": "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation.",
+      "description": "You MUST use this before any creative work - creating features, building components, adding functionality, modifying behavior, or planning anything new, in software or out of it (a talk, a business, a renovation).",
       "path": "skills/brainstorming/SKILL.md",
       "triggers": [
         "creative creating",
@@ -6296,6 +6937,31 @@
         "guidelines",
         "boards",
         "logo"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "break-ui",
+      "description": "Try to break a piece of UI by feeding it worst-case data \u2014 long names, unbreakable emails, one-letter names, missing fields, huge counts, zero items, long labels, non-Latin text, emoji, extreme numbers \u2014 then render it behind a \"Demo data / Worst case\" toggle and report everything that broke, with t",
+      "path": "skills/break-ui/SKILL.md",
+      "triggers": [
+        "break piece",
+        "/break ui",
+        "/break-ui",
+        "break ui",
+        "break-ui"
+      ],
+      "keywords": [
+        "break",
+        "piece",
+        "feeding",
+        "worst",
+        "case",
+        "data",
+        "long",
+        "names",
+        "unbreakable",
+        "emails"
       ],
       "aliases": []
     },
@@ -8242,22 +8908,22 @@
     },
     {
       "name": "cad",
-      "description": "Create/edit parametric CAD models, organize CAD projects, export STEP/STL/3MF/GLB files, resolve prompt references, and measure geometry with cadgen. Open and visually review existing STEP/STP, STL, 3MF and GLB files in CAD Viewer.",
+      "description": "Creates and edits parametric CAD parts and assemblies as Python build123d models that cadgen's engine builds and the CAD Viewer shows live; exports STEP, STL, 3MF, GLB and xbf files on request; resolves prompt references, measures geometry, and articulates or animates assemblies. Use for 3D CAD mode",
       "path": "skills/cad/SKILL.md",
       "triggers": [
-        "create edit"
+        "creates edits"
       ],
       "keywords": [
-        "create",
-        "edit",
+        "creates",
+        "edits",
         "parametric",
+        "parts",
+        "assemblies",
+        "python",
+        "build123d",
         "models",
-        "organize",
-        "projects",
-        "export",
-        "step",
-        "files",
-        "resolve"
+        "cadgen",
+        "engine"
       ],
       "aliases": []
     },
@@ -8351,6 +9017,29 @@
       "aliases": []
     },
     {
+      "name": "captain",
+      "description": "Run a crew of coding agents from one controller (also /crew): lanes send READY blocks and never merge; the controller merges through trains, keeps the digest, relays approvals, fixes flakes daily. (gstack)",
+      "path": "skills/captain/SKILL.md",
+      "triggers": [
+        "crew coding",
+        "/captain",
+        "captain"
+      ],
+      "keywords": [
+        "captain",
+        "crew",
+        "coding",
+        "controller",
+        "lanes",
+        "send",
+        "ready",
+        "blocks",
+        "never",
+        "merge"
+      ],
+      "aliases": []
+    },
+    {
       "name": "careful",
       "description": "Safety guardrails for destructive commands. (gstack)",
       "path": "skills/careful/SKILL.md",
@@ -8396,7 +9085,7 @@
     },
     {
       "name": "ce-babysit-pr",
-      "description": "Babysits an open GitHub PR until merge-ready. Use when asked to watch a PR over time \u2014 not for one-shot comment resolution or one CI failure. GitHub (incl. Enterprise) only.",
+      "description": "Babysits an open GitHub PR until merge-ready, first judging whether an old PR still belongs. Use when asked to watch a PR over time or update an old one \u2014 not for one-shot comment resolution or one CI failure. GitHub (incl. Enterprise) only.",
       "path": "skills/ce-babysit-pr/SKILL.md",
       "triggers": [
         "/ce babysit pr",
@@ -8420,9 +9109,9 @@
         "until",
         "merge",
         "ready",
-        "asked",
-        "watch",
-        "time"
+        "first",
+        "judging",
+        "whether"
       ],
       "aliases": []
     },
@@ -9003,7 +9692,7 @@
     },
     {
       "name": "ce-resolve-pr-feedback",
-      "description": "Resolve PR review feedback. Use when addressing feedback already left on a PR. Not for reviewing the code before feedback exists; that is ce-code-review.",
+      "description": "Judge PR feedback centrally, apply valid fixes, and complete review conversations with publication verified. Use when addressing feedback already left on a PR, preparing local fixes for a caller to publish, or completing a saved feedback batch. Use ce-code-review for reviewing code before feedback e",
       "path": "skills/ce-resolve-pr-feedback/SKILL.md",
       "triggers": [
         "/ce resolve pr feedback",
@@ -9016,19 +9705,20 @@
         "resolve-pr-feedback",
         "/ce resolve pr",
         "/ce-resolve-pr",
-        "resolve review",
+        "judge feedback",
         "ce resolve pr"
       ],
       "keywords": [
         "resolve",
         "feedback",
+        "judge",
+        "centrally",
+        "apply",
+        "valid",
+        "fixes",
+        "complete",
         "review",
-        "addressing",
-        "already",
-        "left",
-        "reviewing",
-        "code",
-        "exists"
+        "conversations"
       ],
       "aliases": []
     },
@@ -9116,33 +9806,33 @@
     },
     {
       "name": "ce-simplify-code",
-      "description": "Simplify settled, recently changed code for clarity, reuse, quality, and efficiency while preserving behavior. Use after implementation and before review; use ce-debug for bugs.",
+      "description": "Simplify code for clarity, reuse, quality, and efficiency while preserving behavior, and prune tests and comments that carry no value. Use after implementation and before review, or to audit tests or comments in any part of a repo; use ce-debug for bugs.",
       "path": "skills/ce-simplify-code/SKILL.md",
       "triggers": [
         "/ce simplify code",
         "/ce-simplify-code",
         "ce simplify code",
         "ce-simplify-code",
-        "simplify settled",
         "/simplify code",
         "/simplify-code",
         "simplify code",
         "simplify-code",
         "/ce simplify",
         "/ce-simplify",
-        "ce simplify"
+        "ce simplify",
+        "ce-simplify"
       ],
       "keywords": [
         "simplify",
         "code",
-        "settled",
-        "recently",
-        "changed",
         "clarity",
         "reuse",
         "quality",
         "efficiency",
-        "while"
+        "while",
+        "preserving",
+        "behavior",
+        "prune"
       ],
       "aliases": []
     },
@@ -9340,6 +10030,31 @@
       "aliases": []
     },
     {
+      "name": "cf-cli",
+      "description": "Cloudflare's official cf CLI (beta) for the public Cloudflare API and Workers projects. Use for finding and running Cloudflare commands from the terminal \u2014 sign-in and profiles, cf cli search, cf schema, cf deploy/dev/build, resource commands for DNS, zones, D1, KV, and R2 \u2014 and for choosing between",
+      "path": "skills/cf-cli/SKILL.md",
+      "triggers": [
+        "cloudflare official",
+        "/cf cli",
+        "/cf-cli",
+        "cf cli",
+        "cf-cli"
+      ],
+      "keywords": [
+        "cloudflare",
+        "official",
+        "beta",
+        "public",
+        "workers",
+        "projects",
+        "finding",
+        "running",
+        "commands",
+        "terminal"
+      ],
+      "aliases": []
+    },
+    {
       "name": "chat-sdk",
       "description": "Vercel Chat SDK expert guidance. Use when building multi-platform chat bots \u2014 Slack, Telegram, Microsoft Teams, Discord, Google Chat, GitHub, Linear \u2014 with a single codebase. Covers the Chat class, adapters, threads, messages, cards, modals, streaming, state management, and webhook setup.",
       "path": "skills/chat-sdk/SKILL.md",
@@ -9361,6 +10076,38 @@
         "bots",
         "slack",
         "telegram"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "chief-of-staff",
+      "description": "Pursue a long-running goal in a single session by co-ordinating subagents.",
+      "path": "skills/chief-of-staff/SKILL.md",
+      "triggers": [
+        "/chief of staff",
+        "/chief-of-staff",
+        "chief of staff",
+        "chief-of-staff",
+        "pursue long",
+        "/chief of",
+        "/chief-of",
+        "/of staff",
+        "/of-staff",
+        "chief of",
+        "chief-of",
+        "of staff"
+      ],
+      "keywords": [
+        "chief",
+        "staff",
+        "pursue",
+        "long",
+        "running",
+        "goal",
+        "single",
+        "session",
+        "ordinating",
+        "subagents"
       ],
       "aliases": []
     },
@@ -9660,10 +10407,10 @@
     },
     {
       "name": "clone-website",
-      "description": "Reverse-engineer and clone one or more websites in one shot \u2014 extracts assets, CSS, and content section-by-section and proactively dispatches parallel builder agents in worktrees as it goes. Use this whenever the user wants to clone, replicate, rebuild, reverse-engineer, or copy any website. Also tr",
+      "description": "Rebuild existing web pages as working local code, matching their real content, assets, responsive layout, and interactions. Use for website cloning, replication, or reverse engineering, including Framer sites and animated pages.",
       "path": "skills/clone-website/SKILL.md",
       "triggers": [
-        "reverse engineer",
+        "rebuild existing",
         "/clone website",
         "/clone-website",
         "clone website",
@@ -9672,14 +10419,14 @@
       "keywords": [
         "clone",
         "website",
-        "reverse",
-        "engineer",
-        "websites",
-        "shot",
-        "extracts",
-        "assets",
-        "content",
-        "section"
+        "rebuild",
+        "existing",
+        "pages",
+        "local",
+        "code",
+        "matching",
+        "real",
+        "content"
       ],
       "aliases": []
     },
@@ -9716,8 +10463,40 @@
       "aliases": []
     },
     {
+      "name": "cloud-armor-crs-rule-upgrader",
+      "description": "Upgrades Google Cloud Armor security policies from OWASP CRS 3.0 and 3.3 to OWASP CRS 4.22. Preserves signature opt-in and opt-out lists, translates evaluatePreconfiguredExpr to native evaluatePreconfiguredWaf dictionary parameters, remaps signature IDs to v042200, drops retired signature IDs, and u",
+      "path": "skills/cloud-armor-crs-rule-upgrader/SKILL.md",
+      "triggers": [
+        "/cloud armor crs rule upgrader",
+        "/cloud-armor-crs-rule-upgrader",
+        "cloud armor crs rule upgrader",
+        "cloud-armor-crs-rule-upgrader",
+        "/crs rule upgrader",
+        "/crs-rule-upgrader",
+        "crs rule upgrader",
+        "crs-rule-upgrader",
+        "/cloud armor crs",
+        "/cloud-armor-crs",
+        "/armor crs rule",
+        "/armor-crs-rule"
+      ],
+      "keywords": [
+        "cloud",
+        "armor",
+        "rule",
+        "upgrader",
+        "upgrades",
+        "google",
+        "security",
+        "policies",
+        "owasp",
+        "preserves"
+      ],
+      "aliases": []
+    },
+    {
       "name": "cloud-build-basics",
-      "description": "Teaches the fundamentals of Google Cloud Build (GCB). Covers core concepts, API enablement, console navigation to the Build History page, and the end-to-end workflow for creating and manually running a basic build trigger. Do not use for managing private pools or complex pipeline architectures.",
+      "description": "Teaches the fundamentals of Cloud Build on Google Cloud. Covers core concepts, API enablement, console navigation to the Build History page, and the end-to-end workflow for creating and manually running a basic build trigger. Do not use for managing private pools or complex pipeline architectures.",
       "path": "skills/cloud-build-basics/SKILL.md",
       "triggers": [
         "teaches fundamentals",
@@ -9781,7 +10560,7 @@
     },
     {
       "name": "cloud-logging-configuration-basics",
-      "description": "Configure single-project Google Cloud Logging: regional log buckets, log sinks, log views, restricting or hiding sensitive logs in the default view (_Default) filter, IAM permissions for views (Logs View Accessor, IAM conditions), logs-based metrics, log exclusions, and sampling. Don't use for cross",
+      "description": "Configure single-project Cloud Logging on Google Cloud: regional log buckets, log sinks, log views, restricting or hiding sensitive logs in the default view (_Default) filter, IAM permissions for views (Logs View Accessor, IAM conditions), logs-based metrics, log exclusions, and sampling. Don't use ",
       "path": "skills/cloud-logging-configuration-basics/SKILL.md",
       "triggers": [
         "/cloud logging configuration basics",
@@ -9844,8 +10623,40 @@
       "aliases": []
     },
     {
+      "name": "cloud-logging-finops",
+      "description": "Audits Cloud Logging costs for a Google Cloud project: the charges for log entries written to log buckets, the services, log streams and severities that drive them, and the log sinks that route them. Reconciles Cloud Billing export costs with Cloud Monitoring volume metrics, and generates a FinOps r",
+      "path": "skills/cloud-logging-finops/SKILL.md",
+      "triggers": [
+        "/cloud logging finops",
+        "/cloud-logging-finops",
+        "cloud logging finops",
+        "cloud-logging-finops",
+        "/logging finops",
+        "/logging-finops",
+        "/cloud logging",
+        "/cloud-logging",
+        "logging finops",
+        "logging-finops",
+        "cloud logging",
+        "cloud-logging"
+      ],
+      "keywords": [
+        "cloud",
+        "logging",
+        "finops",
+        "audits",
+        "costs",
+        "google",
+        "project",
+        "charges",
+        "entries",
+        "written"
+      ],
+      "aliases": []
+    },
+    {
       "name": "cloud-logging-query-generation",
-      "description": "Generates Logging Query Language (LQL) queries for Google Cloud Logging from natural language. Use this skill when you need to query log data or when you are debugging issues. You can filter log data by Google Cloud service. Don't use this skill to query other databases, such as SQL or Cloud Spanner",
+      "description": "Generates Logging Query Language (LQL) queries for Cloud Logging on Google Cloud from natural language. Use this skill when you need to query log data or when you are debugging issues. You can filter log data by Google Cloud service. Don't use this skill to query other databases, such as SQL or Clou",
       "path": "skills/cloud-logging-query-generation/SKILL.md",
       "triggers": [
         "/cloud logging query generation",
@@ -9877,7 +10688,7 @@
     },
     {
       "name": "cloud-monitoring-chart-generation",
-      "description": "Generates Google Cloud Monitoring Server-Driven UI (SDUI) Widget and XyChart Protocol Buffer textprotos from resolved PromQL or ListTimeSeries queries. Use when: - Generating valid google.monitoring.dashboard.v1.Widget textprotos, containing PrometheusQuery or TimeSeriesFilter datasets, for use with",
+      "description": "Generates Cloud Monitoring Server-Driven UI (SDUI) Widget and XyChart Protocol Buffer textprotos on Google Cloud from resolved PromQL or ListTimeSeries queries. Use when: - Generating valid google.monitoring.dashboard.v1.Widget textprotos, containing PrometheusQuery or TimeSeriesFilter datasets, for",
       "path": "skills/cloud-monitoring-chart-generation/SKILL.md",
       "triggers": [
         "/cloud monitoring chart generation",
@@ -9899,11 +10710,11 @@
         "chart",
         "generation",
         "generates",
-        "google",
         "server",
         "driven",
         "sdui",
-        "widget"
+        "widget",
+        "xychart"
       ],
       "aliases": []
     },
@@ -9941,7 +10752,7 @@
     },
     {
       "name": "cloud-monitoring-metric-selection",
-      "description": "Retrieve, query, and identify relevant Google Cloud Monitoring metric descriptors for a GCP service or resource (such as Compute Engine, Spanner, BigQuery, Cloud Run, Cloud SQL, Pub/Sub, Cloud Storage, etc.). Use when asked to find, list, search, or discover GCP metric types, names, kind/value schem",
+      "description": "Retrieve, query, and identify relevant Cloud Monitoring metric descriptors on Google Cloud for a service or resource (such as Compute Engine, Spanner, BigQuery, Cloud Run, Cloud SQL, Pub/Sub, Cloud Storage, etc.). Use when asked to find, list, search, or discover GCP metric types, names, kind/value ",
       "path": "skills/cloud-monitoring-metric-selection/SKILL.md",
       "triggers": [
         "/cloud monitoring metric selection",
@@ -9966,8 +10777,40 @@
         "query",
         "identify",
         "relevant",
+        "descriptors",
+        "google"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "cloud-monitoring-notification-channels-configuration",
+      "description": "Generates Terraform HCL configurations for Cloud Monitoring notification channels (`google_monitoring_notification_channel`) and adds notification channels to alerting policies (`google_monitoring_alert_policy`) in Google Cloud projects. Use when creating or configuring email, SMS, Slack, PagerDuty,",
+      "path": "skills/cloud-monitoring-notification-channels-configuration/SKILL.md",
+      "triggers": [
+        "/cloud monitoring notification channels configuration",
+        "/cloud-monitoring-notification-channels-configuration",
+        "cloud monitoring notification channels configuration",
+        "cloud-monitoring-notification-channels-configuration",
+        "/notification channels configuration",
+        "/notification-channels-configuration",
+        "notification channels configuration",
+        "notification-channels-configuration",
+        "/monitoring notification channels",
+        "/monitoring-notification-channels",
+        "monitoring notification channels",
+        "monitoring-notification-channels"
+      ],
+      "keywords": [
+        "cloud",
+        "monitoring",
+        "notification",
+        "channels",
+        "configuration",
+        "generates",
+        "terraform",
+        "configurations",
         "google",
-        "descriptors"
+        "channel"
       ],
       "aliases": []
     },
@@ -10004,8 +10847,40 @@
       "aliases": []
     },
     {
+      "name": "cloud-network-insights",
+      "description": "Guides and automates setup, onboarding, and synthetic monitoring operations for Cloud Network Insights in Google Cloud and Broadcom AppNeta. Use when enabling Cloud Network Insights, deploying or troubleshooting Monitoring Points across cloud and on-premises environments, configuring Network or Web ",
+      "path": "skills/cloud-network-insights/SKILL.md",
+      "triggers": [
+        "/cloud network insights",
+        "/cloud-network-insights",
+        "cloud network insights",
+        "cloud-network-insights",
+        "/network insights",
+        "/network-insights",
+        "guides automates",
+        "network insights",
+        "network-insights",
+        "/cloud network",
+        "/cloud-network",
+        "cloud network"
+      ],
+      "keywords": [
+        "cloud",
+        "network",
+        "insights",
+        "guides",
+        "automates",
+        "setup",
+        "onboarding",
+        "synthetic",
+        "monitoring",
+        "operations"
+      ],
+      "aliases": []
+    },
+    {
       "name": "cloud-run-alert-configuration",
-      "description": "Configures best-practice, high-signal alerting policies for Google Cloud Run resources (services, jobs, and worker pools) based on seasoned SRE practices. Use when analyzing, recommending, writing, or deploying Terraform PromQL alerting policies to monitor Cloud Run error rates (4xx/5xx), request la",
+      "description": "Configures best-practice, high-signal alerting policies for Cloud Run resources on Google Cloud (services, jobs, and worker pools) based on seasoned SRE practices. Use when analyzing, recommending, writing, or deploying Terraform PromQL alerting policies to monitor Cloud Run error rates (4xx/5xx), r",
       "path": "skills/cloud-run-alert-configuration/SKILL.md",
       "triggers": [
         "/cloud run alert configuration",
@@ -10096,6 +10971,38 @@
         "asks",
         "create",
         "instance"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "cloud-trace-querying",
+      "description": "Query Cloud Trace spans, filter by latency thresholds or error status, correlate distributed traces with Cloud Logging, and diagnose latency bottlenecks across Google Cloud services. Use when investigating slow requests, analyzing trace hierarchies, or resolving latency regressions. Do NOT use for q",
+      "path": "skills/cloud-trace-querying/SKILL.md",
+      "triggers": [
+        "/cloud trace querying",
+        "/cloud-trace-querying",
+        "cloud trace querying",
+        "cloud-trace-querying",
+        "/trace querying",
+        "/trace-querying",
+        "trace querying",
+        "trace-querying",
+        "/cloud trace",
+        "/cloud-trace",
+        "cloud trace",
+        "cloud-trace"
+      ],
+      "keywords": [
+        "cloud",
+        "trace",
+        "querying",
+        "query",
+        "spans",
+        "filter",
+        "latency",
+        "thresholds",
+        "error",
+        "status"
       ],
       "aliases": []
     },
@@ -10325,7 +11232,7 @@
     },
     {
       "name": "code-simplification",
-      "description": "Simplifies code for clarity. Use when refactoring code for clarity without changing behavior. Use when code works but is harder to read, maintain, or extend than it should be. Use when reviewing code that has accumulated unnecessary complexity.",
+      "description": "Simplifies code for clarity. Use when refactoring code for clarity without changing behavior. Use when code works but is harder to read, maintain, or extend than it should be. Use when reviewing code that has accumulated unnecessary complexity. Use when asked to simplify, clean up, or reduce the nes",
       "path": "skills/code-simplification/SKILL.md",
       "triggers": [
         "/code simplification",
@@ -10697,6 +11604,31 @@
         "battle",
         "cards",
         "canvas"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "component-canvas",
+      "description": "Build a full-screen, interactive canvas to explore existing UI components and their variants with pan and zoom.",
+      "path": "skills/component-canvas/SKILL.md",
+      "triggers": [
+        "/component canvas",
+        "/component-canvas",
+        "component canvas",
+        "component-canvas",
+        "build full"
+      ],
+      "keywords": [
+        "component",
+        "canvas",
+        "build",
+        "full",
+        "screen",
+        "interactive",
+        "explore",
+        "existing",
+        "components",
+        "variants"
       ],
       "aliases": []
     },
@@ -12492,7 +13424,7 @@
     },
     {
       "name": "create-a-backend",
-      "description": "Backend architecture guidance. Use when planning, building, or migrating an API or backend; choosing between Functions, Services, containers, Workflow, Queues, and Marketplace databases; or selecting a supported backend framework or runtime.",
+      "description": "Backend architecture guidance. Use when planning, building, or migrating an API or backend; choosing between Functions, Services, containers, Daemons, Workflow, Queues, and Marketplace databases; or selecting a supported backend framework or runtime.",
       "path": "skills/create-a-backend/SKILL.md",
       "triggers": [
         "backend architecture",
@@ -12516,6 +13448,29 @@
         "choosing",
         "functions",
         "services"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "create-canvas",
+      "description": "Build a freeform canvas to explore, compare, and iterate on anything.",
+      "path": "skills/create-canvas/SKILL.md",
+      "triggers": [
+        "/create canvas",
+        "/create-canvas",
+        "build freeform",
+        "create canvas",
+        "create-canvas"
+      ],
+      "keywords": [
+        "create",
+        "canvas",
+        "build",
+        "freeform",
+        "explore",
+        "compare",
+        "iterate",
+        "anything"
       ],
       "aliases": []
     },
@@ -12763,6 +13718,29 @@
       "aliases": []
     },
     {
+      "name": "daemons",
+      "description": "Vercel Daemons guidance \u2014 long-running background workers built from a Dockerfile and declared under the `daemons` key in vercel.json. Use when running queue consumers, Celery/Sidekiq/BullMQ workers, workflow workers, or job runners next to an app on Vercel; configuring daemon instances per region, ",
+      "path": "skills/daemons/SKILL.md",
+      "triggers": [
+        "vercel daemons",
+        "/daemons",
+        "daemons"
+      ],
+      "keywords": [
+        "daemons",
+        "vercel",
+        "guidance",
+        "long",
+        "running",
+        "background",
+        "workers",
+        "built",
+        "dockerfile",
+        "declared"
+      ],
+      "aliases": []
+    },
+    {
       "name": "daily-ui-inspiration-capture",
       "description": "Create a recurring daily UI inspiration capture. Use when the user asks to run, refresh, package, or validate dated UI inspiration bundles, especially for `articles/YYYY-MM-DD-ui-inspiration-capture/` outputs, Framer/Dribbble landing-page inspiration, motion-study screenshots/videos, AI-builder prom",
       "path": "skills/daily-ui-inspiration-capture/SKILL.md",
@@ -12956,7 +13934,7 @@
     },
     {
       "name": "datalineage-bigquery-asset-impact-analysis",
-      "description": "Analyzes the downstream impact (blast radius) when a BigQuery table or view is broken, stale, or modified. Identifies all downstream tables, dashboards, and processes that will be affected. Use when: - Performing a blast radius or impact analysis for a BigQuery table or view. - Assessing the consequ",
+      "description": "Analyzes the downstream impact (blast radius) using data lineage on Google Cloud when a BigQuery table or view is broken, stale, or modified. Identifies all downstream tables, dashboards, and processes that will be affected. Use when: - Performing a blast radius or impact analysis for a BigQuery tab",
       "path": "skills/datalineage-bigquery-asset-impact-analysis/SKILL.md",
       "triggers": [
         "/datalineage bigquery asset impact analysis",
@@ -12982,30 +13960,30 @@
         "downstream",
         "blast",
         "radius",
-        "table"
+        "data"
       ],
       "aliases": []
     },
     {
       "name": "datalineage-summary",
-      "description": "Summarizes Google Cloud Data Lineage graphs to help users debug data quality issues and understand data provenance for BQ/GCS. Use when summarizing upstream and downstream data flows, and presenting complex lineage data as an intuitive Markdown report. Don't use for generic BigQuery queries, editing",
+      "description": "Summarizes data lineage graphs on Google Cloud to help users debug data quality issues and understand data provenance for BigQuery and Cloud Storage. Use when summarizing upstream and downstream data flows, and presenting complex lineage data as an intuitive Markdown report. Don't use for generic Bi",
       "path": "skills/datalineage-summary/SKILL.md",
       "triggers": [
         "/datalineage summary",
         "/datalineage-summary",
         "datalineage summary",
         "datalineage-summary",
-        "summarizes google"
+        "summarizes data"
       ],
       "keywords": [
         "datalineage",
         "summary",
         "summarizes",
-        "google",
-        "cloud",
         "data",
         "lineage",
         "graphs",
+        "google",
+        "cloud",
         "users",
         "debug"
       ],
@@ -13918,6 +14896,27 @@
       "aliases": []
     },
     {
+      "name": "design-motion",
+      "description": "Design motion: animate an approved design into a seamless MP4 and GIF loop. (gstack)",
+      "path": "skills/design-motion/SKILL.md",
+      "triggers": [
+        "/design motion",
+        "/design-motion",
+        "design motion",
+        "design-motion"
+      ],
+      "keywords": [
+        "design",
+        "motion",
+        "animate",
+        "approved",
+        "seamless",
+        "loop",
+        "gstack"
+      ],
+      "aliases": []
+    },
+    {
       "name": "design-review",
       "description": "Designer's eye QA: finds visual inconsistency, spacing issues, hierarchy problems, AI slop patterns, and slow interactions \u2014 then fixes them. (gstack)",
       "path": "skills/design-review/SKILL.md",
@@ -13993,7 +14992,7 @@
     },
     {
       "name": "design-taste-frontend",
-      "description": "Anti-slop frontend skill for landing pages, portfolios, and redesigns. The agent reads the brief, infers the right design direction, and ships interfaces that do not look templated. Real design systems when applicable, audit-first on redesigns, strict pre-flight check.",
+      "description": "tasteskill v2, the anti-slop frontend skill. Art direction for websites, distilled from a study of 247 curated gallery sites (One Page Love, Awwwards Sites of the Day). Deals researched directions (idea, composition, type, palette, photographs, section blueprints) from a library, enforces a strict n",
       "path": "skills/taste-skill/SKILL.md",
       "triggers": [
         "/design taste frontend",
@@ -14002,12 +15001,12 @@
         "design-taste-frontend",
         "/taste frontend",
         "/taste-frontend",
+        "tasteskill anti",
         "taste frontend",
         "taste-frontend",
         "/design taste",
         "/design-taste",
         "design taste",
-        "design-taste",
         "taste-skill",
         "/taste-skill",
         "taste skill",
@@ -14017,13 +15016,13 @@
         "design",
         "taste",
         "frontend",
+        "tasteskill",
         "anti",
         "slop",
-        "landing",
-        "pages",
-        "portfolios",
-        "redesigns",
-        "reads"
+        "direction",
+        "websites",
+        "distilled",
+        "study"
       ],
       "aliases": [
         "taste-skill"
@@ -18036,22 +19035,22 @@
     },
     {
       "name": "dxf",
-      "description": "Generate, regenerate, and validate 2D DXF drawings from Python build123d sources. Use for DXF files, `.py` drawing scripts, @dxf models, 2D profiles, outlines, templates, gaskets, panels, flat patterns, laser/plasma/waterjet cut layouts, and 2D drawing exports of CAD geometry. Open and visually revi",
+      "description": "Generates, regenerates and validates 2D DXF drawings from Python build123d models, exported by cadgen. Use for DXF files, `.py` drawing scripts, 2D profiles, outlines, templates, gaskets, panels, flat patterns, laser/plasma/waterjet cut layouts, and 2D drawing exports of CAD geometry. Opens and visu",
       "path": "skills/dxf/SKILL.md",
       "triggers": [
-        "generate regenerate"
+        "generates regenerates"
       ],
       "keywords": [
-        "generate",
-        "regenerate",
-        "validate",
+        "generates",
+        "regenerates",
+        "validates",
         "drawings",
         "python",
         "build123d",
-        "sources",
-        "files",
-        "drawing",
-        "scripts"
+        "models",
+        "exported",
+        "cadgen",
+        "files"
       ],
       "aliases": []
     },
@@ -18194,51 +19193,76 @@
     },
     {
       "name": "efficient-fable",
-      "description": "Use when running Claude Fable on codebase-heavy or token-heavy work and the user wants Fable to orchestrate research, coding, and testing while cheaper subagents do bounded heavy lifting.",
+      "description": "Alias for /efficient-orchestrator. Run only when the user explicitly invokes /efficient-fable; never self-activate.",
       "path": "skills/efficient-fable/SKILL.md",
       "triggers": [
         "/efficient fable",
         "/efficient-fable",
+        "alias efficient",
         "efficient fable",
-        "efficient-fable",
-        "running claude"
+        "efficient-fable"
       ],
       "keywords": [
         "efficient",
         "fable",
-        "running",
-        "claude",
-        "codebase",
-        "heavy",
-        "token",
+        "alias",
+        "orchestrator",
         "user",
-        "orchestrate",
-        "research"
+        "explicitly",
+        "invokes",
+        "never",
+        "self",
+        "activate"
       ],
       "aliases": []
     },
     {
       "name": "efficient-frontier",
-      "description": "Apply the same orchestration as `/efficient-fable` to any high-cost frontier model: delegate research, coding, and testing to cheaper subagents while keeping planning, synthesis, and final review with the expensive model.",
+      "description": "Alias for /efficient-orchestrator. Run only when the user explicitly invokes /efficient-frontier; never self-activate.",
       "path": "skills/efficient-frontier/SKILL.md",
       "triggers": [
         "/efficient frontier",
         "/efficient-frontier",
         "efficient frontier",
         "efficient-frontier",
-        "apply same"
+        "alias efficient"
       ],
       "keywords": [
         "efficient",
         "frontier",
-        "apply",
-        "same",
-        "orchestration",
+        "alias",
+        "orchestrator",
+        "user",
+        "explicitly",
+        "invokes",
+        "never",
+        "self",
+        "activate"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "efficient-orchestrator",
+      "description": "Run only when the user explicitly invokes /efficient-orchestrator (or the /efficient-frontier and /efficient-fable aliases). Keeps an expensive model (Fable, Opus, Astra, Sol) on planning, judgment and review while cheaper subagents do bounded research, coding, QA and log work. Never self-activate.",
+      "path": "skills/efficient-orchestrator/SKILL.md",
+      "triggers": [
+        "/efficient orchestrator",
+        "/efficient-orchestrator",
+        "efficient orchestrator",
+        "efficient-orchestrator",
+        "user explicitly"
+      ],
+      "keywords": [
+        "efficient",
+        "orchestrator",
+        "user",
+        "explicitly",
+        "invokes",
+        "frontier",
         "fable",
-        "high",
-        "cost",
-        "model",
-        "delegate"
+        "aliases",
+        "keeps",
+        "expensive"
       ],
       "aliases": []
     },
@@ -18518,6 +19542,31 @@
         "runc",
         "cves",
         "exposed"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "eval-plan",
+      "description": "Preregister a paid eval (bars, arms, decoys, stop rules), dry-run it at zero cost, then run a three-item priced pilot whose spend table gates approval. (gstack)",
+      "path": "skills/eval-plan/SKILL.md",
+      "triggers": [
+        "preregister paid",
+        "/eval plan",
+        "/eval-plan",
+        "eval plan",
+        "eval-plan"
+      ],
+      "keywords": [
+        "eval",
+        "plan",
+        "preregister",
+        "paid",
+        "bars",
+        "arms",
+        "decoys",
+        "stop",
+        "rules",
+        "zero"
       ],
       "aliases": []
     },
@@ -20103,7 +21152,7 @@
     },
     {
       "name": "fable-domain",
-      "description": "Discuss a domain with the user, research it from real sources, then generate a trusted skill bundle for it - a step-by-step workflow with a flowchart, a domain adapter, a trap fixture, and a smoke eval. Use when the user says \"/fable-domain <sector>\", \"make a skill for <domain>\", \"add a domain to th",
+      "description": "Discuss a domain with the user, research it from real sources, then generate a trusted skill bundle for it - a step-by-step workflow with a flowchart, a domain adapter, a trap fixture, and a smoke eval. Use when the user says \"/fable-domain SECTOR\", \"make a skill for DOMAIN\", \"add a domain to the fa",
       "path": "skills/fable-domain/SKILL.md",
       "triggers": [
         "discuss domain",
@@ -20874,6 +21923,38 @@
       "aliases": []
     },
     {
+      "name": "fire-smoke-skill-vfx",
+      "description": "Build the effects of a fire skill as one visual language in Three.js. Flames that read as fire, not as orange fog or cones: ray-marched flame volumes whose turbulence rises with buoyancy (slow at the root, accelerating and stretching as it climbs) instead of scrolling, a temperature ramp from a whit",
+      "path": "skills/fire-smoke-skill-vfx/SKILL.md",
+      "triggers": [
+        "/fire smoke skill vfx",
+        "/fire-smoke-skill-vfx",
+        "fire smoke skill vfx",
+        "fire-smoke-skill-vfx",
+        "/fire smoke skill",
+        "/fire-smoke-skill",
+        "/smoke skill vfx",
+        "/smoke-skill-vfx",
+        "fire smoke skill",
+        "fire-smoke-skill",
+        "smoke skill vfx",
+        "smoke-skill-vfx"
+      ],
+      "keywords": [
+        "fire",
+        "smoke",
+        "build",
+        "effects",
+        "visual",
+        "language",
+        "three",
+        "flames",
+        "read",
+        "orange"
+      ],
+      "aliases": []
+    },
+    {
       "name": "firebase-basics",
       "description": "Provides foundational Firebase CLI setup, CLI installation, version checks (`firebase-tools@latest --version`), CLI login (including --no-localhost), project creation, project selection (`firebase use`), and app config file downloads (`google-services.json`, `GoogleService-Info.plist`). Use ONLY for",
       "path": "skills/firebase-basics/SKILL.md",
@@ -20982,10 +22063,10 @@
     },
     {
       "name": "flags-sdk",
-      "description": "Set up and use feature flags and A/B tests with the Flags SDK (`flags` npm package) and Vercel Flags. Use when installing or configuring the SDK, adding a new or existing flag, wiring `vercelAdapter` (OIDC or SDK keys), declaring flags with `flag()`, using the `vercel flags` CLI (create, inspect, li",
+      "description": "Implement feature flags in Next.js or SvelteKit code with the Flags SDK (`flags` npm package). Use when installing or configuring the SDK, declaring flags with `flag()`, wiring a provider adapter (`@flags-sdk/vercel`, Statsig, LaunchDarkly, PostHog, GrowthBook, Global Config, OpenFeature, and others",
       "path": "skills/flags-sdk/SKILL.md",
       "triggers": [
-        "feature flags",
+        "implement feature",
         "/flags sdk",
         "/flags-sdk",
         "flags sdk",
@@ -20993,15 +22074,15 @@
       ],
       "keywords": [
         "flags",
+        "implement",
         "feature",
-        "tests",
+        "next",
+        "sveltekit",
+        "code",
         "package",
-        "vercel",
         "installing",
         "configuring",
-        "adding",
-        "existing",
-        "flag"
+        "declaring"
       ],
       "aliases": []
     },
@@ -21404,6 +22485,70 @@
       "aliases": []
     },
     {
+      "name": "game-dev-combat-animation",
+      "description": "Build, fix and review character combat animations (melee strikes, bow shots, spell casts, skills, monster attacks, whole move sets) so they read like Diablo IV, Baldur's Gate 3 or Elden Ring and never stretch, lock, wring or break an arm, wrist or hand. A written standard with numbered rules, per-fr",
+      "path": "skills/game-dev-combat-animation/SKILL.md",
+      "triggers": [
+        "/game dev combat animation",
+        "/game-dev-combat-animation",
+        "game dev combat animation",
+        "game-dev-combat-animation",
+        "/dev combat animation",
+        "/dev-combat-animation",
+        "dev combat animation",
+        "dev-combat-animation",
+        "/combat animation",
+        "/combat-animation",
+        "/game dev combat",
+        "/game-dev-combat"
+      ],
+      "keywords": [
+        "game",
+        "combat",
+        "animation",
+        "build",
+        "review",
+        "character",
+        "animations",
+        "melee",
+        "strikes",
+        "shots"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "game-dev-combat-skill-polish",
+      "description": "Score a game's combat skills and spells out of 10 with blind judges, then raise the weakest to a bar, for timing and readability (does a skill read as itself, does the blow land when it lands) and for art (detail, light, trails, impact, art direction, judged against a reference such as Diablo IV). C",
+      "path": "skills/game-dev-combat-skill-polish/SKILL.md",
+      "triggers": [
+        "/game dev combat skill polish",
+        "/game-dev-combat-skill-polish",
+        "game dev combat skill polish",
+        "game-dev-combat-skill-polish",
+        "/combat skill polish",
+        "/combat-skill-polish",
+        "combat skill polish",
+        "combat-skill-polish",
+        "/dev combat skill",
+        "/dev-combat-skill",
+        "/game dev combat",
+        "/game-dev-combat"
+      ],
+      "keywords": [
+        "game",
+        "combat",
+        "polish",
+        "score",
+        "spells",
+        "blind",
+        "judges",
+        "raise",
+        "weakest",
+        "timing"
+      ],
+      "aliases": []
+    },
+    {
       "name": "gateway-cache-awareness",
       "description": "Protect prompt-cache hit rate when routing a coding agent (Claude Code, Codex, nur) through your own gateway/proxy. Use when configuring a custom base_url/gateway, debugging exploding token costs or slow first-token latency behind a proxy, or evaluating an \"OpenAI/Anthropic-compatible\" gateway. Watc",
       "path": "skills/gateway-cache-awareness/SKILL.md",
@@ -21436,6 +22581,31 @@
       "aliases": []
     },
     {
+      "name": "gateway-workers",
+      "description": "Build, debug, or review Cloudflare Workers invoked by the Forward action in Gateway HTTP policies, including the GatewayMiddleware entrypoint, Gateway types, context, and continuation.",
+      "path": "skills/gateway-workers/SKILL.md",
+      "triggers": [
+        "/gateway workers",
+        "/gateway-workers",
+        "gateway workers",
+        "gateway-workers",
+        "build debug"
+      ],
+      "keywords": [
+        "gateway",
+        "workers",
+        "build",
+        "debug",
+        "review",
+        "cloudflare",
+        "invoked",
+        "forward",
+        "action",
+        "http"
+      ],
+      "aliases": []
+    },
+    {
       "name": "gcloud",
       "description": "Provides safety-critical validation, guardrails, and data reduction for gcloud CLI operations across Google Cloud Platform (GCP) services and infrastructure. Use when planning, generating, constructing, proposing, describing, or executing any gcloud CLI commands - including when answering questions ",
       "path": "skills/gcloud/SKILL.md",
@@ -21460,24 +22630,24 @@
     },
     {
       "name": "gcode",
-      "description": "Generate, inspect, dry-run, and statically validate plain FDM `.gcode` from 3D mesh files by orchestrating real slicer CLIs. Use when Codex needs to slice `.stl`, `.obj`, unsliced `.3mf`, `.ply`, `.glb`, or `.gltf` into printer-profiled G-code, discover local slicer backends, inspect whether a mesh ",
+      "description": "Slice 3D models into printer-ready G-code with OrcaSlicer, the open-source slicer with built-in profiles for most FDM printers (Prusa, Bambu Lab, Creality, Voron and more). Use when the user wants an `.stl`, `.3mf` or `.obj` model sliced for their printer, as a sliced `.gcode.3mf` or plain `.gcode`,",
       "path": "skills/gcode/SKILL.md",
       "triggers": [
-        "generate inspect",
+        "slice models",
         "/gcode",
         "gcode"
       ],
       "keywords": [
         "gcode",
-        "generate",
-        "inspect",
-        "statically",
-        "validate",
-        "plain",
-        "mesh",
-        "files",
-        "orchestrating",
-        "real"
+        "slice",
+        "models",
+        "printer",
+        "ready",
+        "code",
+        "orcaslicer",
+        "open",
+        "source",
+        "slicer"
       ],
       "aliases": []
     },
@@ -21879,6 +23049,38 @@
       "aliases": []
     },
     {
+      "name": "gke-ai-troubleshooting-node-unresponsive-timeout",
+      "description": "Diagnose and mitigate GKE TPU or GPU nodes stuck in NotReady / NodeStatusUnknown (\"Kubelet stopped posting node status\") due to host kernel panics, hardware lockups, or disabled node auto-repair. Use when nodes stop heartbeating beyond the node auto-repair threshold and pods remain stuck in Terminat",
+      "path": "skills/gke-ai-troubleshooting-node-unresponsive-timeout/SKILL.md",
+      "triggers": [
+        "/gke ai troubleshooting node unresponsive timeout",
+        "/gke-ai-troubleshooting-node-unresponsive-timeout",
+        "gke ai troubleshooting node unresponsive timeout",
+        "gke-ai-troubleshooting-node-unresponsive-timeout",
+        "/troubleshooting node unresponsive",
+        "/troubleshooting-node-unresponsive",
+        "troubleshooting node unresponsive",
+        "troubleshooting-node-unresponsive",
+        "/node unresponsive timeout",
+        "/node-unresponsive-timeout",
+        "node unresponsive timeout",
+        "node-unresponsive-timeout"
+      ],
+      "keywords": [
+        "troubleshooting",
+        "node",
+        "unresponsive",
+        "timeout",
+        "diagnose",
+        "mitigate",
+        "nodes",
+        "stuck",
+        "notready",
+        "nodestatusunknown"
+      ],
+      "aliases": []
+    },
+    {
       "name": "gke-ai-troubleshooting-tpu-dynamic-slices-monitoring",
       "description": "Monitors, troubleshoots, and manages GKE TPU Dynamic Slices custom resources. Use when checking TPU slice lifecycle states, troubleshooting slice provisioning failures, validating single-slice or multi-slice (JobSet) workload manifests, or safely patching stuck finalizers and disabling the slice con",
       "path": "skills/gke-ai-troubleshooting-tpu-dynamic-slices-monitoring/SKILL.md",
@@ -21943,6 +23145,166 @@
       "aliases": []
     },
     {
+      "name": "gke-ai-troubleshooting-tpu-mxla-hang",
+      "description": "Diagnose GKE Cloud TPU multi-slice training hangs (Megascale `HANG_DETECTED` logs and hang monitored events) using the ML Diagnostics `Megascale XLA (MXLA) Hang Analyzer` (`gcloud alpha mldiagnostics monitored-events`) and 1-minute Cloud Monitoring multi-slice latency metrics (`kubernetes.io/contain",
+      "path": "skills/gke-ai-troubleshooting-tpu-mxla-hang/SKILL.md",
+      "triggers": [
+        "/gke ai troubleshooting tpu mxla hang",
+        "/gke-ai-troubleshooting-tpu-mxla-hang",
+        "gke ai troubleshooting tpu mxla hang",
+        "gke-ai-troubleshooting-tpu-mxla-hang",
+        "/troubleshooting tpu mxla",
+        "/troubleshooting-tpu-mxla",
+        "troubleshooting tpu mxla",
+        "troubleshooting-tpu-mxla",
+        "/ai troubleshooting tpu",
+        "/ai-troubleshooting-tpu",
+        "/gke ai troubleshooting",
+        "/gke-ai-troubleshooting"
+      ],
+      "keywords": [
+        "troubleshooting",
+        "mxla",
+        "hang",
+        "diagnose",
+        "cloud",
+        "multi",
+        "slice",
+        "training",
+        "hangs",
+        "megascale"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "gke-ai-troubleshooting-tpu-partition-overlap",
+      "description": "Diagnose and resolve GKE TPU slice creation failures (SliceCreationFailed) caused by partition overlap conflicts where requested TPU partitions or their nodes are already used by another slice or JobSet. Use when diagnosing GKE TPU slice creation failures with SliceCreationFailed partition or node c",
+      "path": "skills/gke-ai-troubleshooting-tpu-partition-overlap/SKILL.md",
+      "triggers": [
+        "/gke ai troubleshooting tpu partition overlap",
+        "/gke-ai-troubleshooting-tpu-partition-overlap",
+        "gke ai troubleshooting tpu partition overlap",
+        "gke-ai-troubleshooting-tpu-partition-overlap",
+        "/troubleshooting tpu partition",
+        "/troubleshooting-tpu-partition",
+        "troubleshooting tpu partition",
+        "troubleshooting-tpu-partition",
+        "/ai troubleshooting tpu",
+        "/ai-troubleshooting-tpu",
+        "/gke ai troubleshooting",
+        "/gke-ai-troubleshooting"
+      ],
+      "keywords": [
+        "troubleshooting",
+        "partition",
+        "overlap",
+        "diagnose",
+        "resolve",
+        "slice",
+        "creation",
+        "failures",
+        "slicecreationfailed",
+        "caused"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "gke-ai-troubleshooting-tpu-performance-degradation",
+      "description": "Diagnose GKE Cloud TPU training throughput drops and step-time regressions (15%+ TPU duty-cycle drop) using ML Diagnostics Workload Monitoring (`gcloud alpha mldiagnostics monitored-events` / `hypercomputecluster.googleapis.com/v1alpha`) and 1-minute Cloud Monitoring system metrics (`kubernetes.io/n",
+      "path": "skills/gke-ai-troubleshooting-tpu-performance-degradation/SKILL.md",
+      "triggers": [
+        "/gke ai troubleshooting tpu performance degradation",
+        "/gke-ai-troubleshooting-tpu-performance-degradation",
+        "gke ai troubleshooting tpu performance degradation",
+        "gke-ai-troubleshooting-tpu-performance-degradation",
+        "/troubleshooting tpu performance",
+        "/troubleshooting-tpu-performance",
+        "troubleshooting tpu performance",
+        "troubleshooting-tpu-performance",
+        "/tpu performance degradation",
+        "/tpu-performance-degradation",
+        "tpu performance degradation",
+        "tpu-performance-degradation"
+      ],
+      "keywords": [
+        "troubleshooting",
+        "performance",
+        "degradation",
+        "diagnose",
+        "cloud",
+        "training",
+        "throughput",
+        "drops",
+        "step",
+        "time"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "gke-ai-troubleshooting-tpu-reservation-stockout",
+      "description": "Diagnose and resolve cluster-wide GKE TPU node pool creation or scale-up failures caused by Compute Engine reservation stockouts (GCE_STOCKOUT, ZONE_RESOURCE_POOL_EXHAUSTED) when existing unhealthy or NotReady TPU node pools in the cluster have node auto-repair disabled and hold reserved TPU capacit",
+      "path": "skills/gke-ai-troubleshooting-tpu-reservation-stockout/SKILL.md",
+      "triggers": [
+        "/gke ai troubleshooting tpu reservation stockout",
+        "/gke-ai-troubleshooting-tpu-reservation-stockout",
+        "gke ai troubleshooting tpu reservation stockout",
+        "gke-ai-troubleshooting-tpu-reservation-stockout",
+        "/troubleshooting tpu reservation",
+        "/troubleshooting-tpu-reservation",
+        "troubleshooting tpu reservation",
+        "troubleshooting-tpu-reservation",
+        "/tpu reservation stockout",
+        "/tpu-reservation-stockout",
+        "tpu reservation stockout",
+        "tpu-reservation-stockout"
+      ],
+      "keywords": [
+        "troubleshooting",
+        "reservation",
+        "stockout",
+        "diagnose",
+        "resolve",
+        "cluster",
+        "wide",
+        "node",
+        "pool",
+        "creation"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "gke-ai-troubleshooting-tpu-slice-mig-stuck-updating",
+      "description": "Diagnose and resolve GKE TPU Dynamic Slice creation and JobSet scheduling failures blocked by underlying Compute Engine managed instance groups (MIGs) stuck in an updating or unstable state (isStable=False). Use when TPU slice creation fails with a SliceCreationFailed status reason, when JobSets rem",
+      "path": "skills/gke-ai-troubleshooting-tpu-slice-mig-stuck-updating/SKILL.md",
+      "triggers": [
+        "/gke ai troubleshooting tpu slice mig stuck updating",
+        "/gke-ai-troubleshooting-tpu-slice-mig-stuck-updating",
+        "gke ai troubleshooting tpu slice mig stuck updating",
+        "gke-ai-troubleshooting-tpu-slice-mig-stuck-updating",
+        "/troubleshooting tpu slice",
+        "/troubleshooting-tpu-slice",
+        "troubleshooting tpu slice",
+        "troubleshooting-tpu-slice",
+        "/ai troubleshooting tpu",
+        "/ai-troubleshooting-tpu",
+        "/gke ai troubleshooting",
+        "/gke-ai-troubleshooting"
+      ],
+      "keywords": [
+        "troubleshooting",
+        "slice",
+        "stuck",
+        "updating",
+        "diagnose",
+        "resolve",
+        "dynamic",
+        "creation",
+        "jobset",
+        "scheduling"
+      ],
+      "aliases": []
+    },
+    {
       "name": "gke-ai-troubleshooting-tpu-vbar-oom",
       "description": "Diagnoses and prevents vbar_control_agent segfaults, out-of-memory (OOM) errors, and TPU device initialization failures on TPU v6e nodes in GKE caused by race conditions during TPU device resets or high-frequency metrics polling. Use when troubleshooting vbar_control_agent crashes, memory cgroup OOM",
       "path": "skills/gke-ai-troubleshooting-tpu-vbar-oom/SKILL.md",
@@ -21971,6 +23333,38 @@
         "errors",
         "device",
         "initialization"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "gke-ai-troubleshooting-tpu-vm-repair-stuck",
+      "description": "Diagnose GKE TPU VM instances stuck in Compute Engine repair (REPAIRING state) after host errors, maintenance events, or faulty host reports in single-host, multi-host, dynamic slicing, and TPU All Capacity mode node pools. Use when TPU instances in a slice node pool remain in REPAIRING, host error ",
+      "path": "skills/gke-ai-troubleshooting-tpu-vm-repair-stuck/SKILL.md",
+      "triggers": [
+        "/gke ai troubleshooting tpu vm repair stuck",
+        "/gke-ai-troubleshooting-tpu-vm-repair-stuck",
+        "gke ai troubleshooting tpu vm repair stuck",
+        "gke-ai-troubleshooting-tpu-vm-repair-stuck",
+        "/ai troubleshooting tpu",
+        "/ai-troubleshooting-tpu",
+        "/gke ai troubleshooting",
+        "/gke-ai-troubleshooting",
+        "/troubleshooting tpu vm",
+        "/troubleshooting-tpu-vm",
+        "ai troubleshooting tpu",
+        "ai-troubleshooting-tpu"
+      ],
+      "keywords": [
+        "troubleshooting",
+        "repair",
+        "stuck",
+        "diagnose",
+        "instances",
+        "compute",
+        "engine",
+        "repairing",
+        "state",
+        "host"
       ],
       "aliases": []
     },
@@ -23259,7 +24653,7 @@
     },
     {
       "name": "google-cloud-filestore-auditing",
-      "description": "Audits Google Cloud Filestore instances across projects for disaster recovery readiness (missing or stale backups), security access governance (overly permissive NFS export rules, 0.0.0.0/0 exposure, missing ROOT_SQUASH), and reliability compliance (Physical Zone Isolation PZI and Physical Zone Sepa",
+      "description": "Audits Filestore instances on Google Cloud across projects for disaster recovery readiness (missing or stale backups), security access governance (overly permissive NFS export rules, 0.0.0.0/0 exposure, missing ROOT_SQUASH), and reliability compliance (Physical Zone Isolation PZI and Physical Zone S",
       "path": "skills/google-cloud-filestore-auditing/SKILL.md",
       "triggers": [
         "/google cloud filestore auditing",
@@ -23291,7 +24685,7 @@
     },
     {
       "name": "google-cloud-filestore-autoscale",
-      "description": "Inspects Google Cloud Filestore capacity and utilization, evaluates storage scaling rules, and performs capacity autoscaling (scale UP for low free space or scale DOWN for cost optimization). Use when monitoring Filestore instance headroom, resizing instance shares, configuring automated growth/shri",
+      "description": "Inspects Filestore capacity and utilization on Google Cloud, evaluates storage scaling rules, and performs capacity autoscaling (scale UP for low free space or scale DOWN for cost optimization). Use when monitoring Filestore instance headroom, resizing instance shares, configuring automated growth/s",
       "path": "skills/google-cloud-filestore-autoscale/SKILL.md",
       "triggers": [
         "/google cloud filestore autoscale",
@@ -23323,7 +24717,7 @@
     },
     {
       "name": "google-cloud-filestore-log-troubleshooting",
-      "description": "Diagnoses and resolves Google Cloud Filestore client mount failures, permission errors (EACCES), and network timeouts (ETIMEDOUT). Use when an NFS mount hangs or fails from a Compute Engine VM, GKE pod, Cloud Run service, or Vertex AI workload, when `mount.nfs` reports \"Connection timed out\" or \"acc",
+      "description": "Diagnoses and resolves Filestore client mount failures on Google Cloud, permission errors (EACCES), and network timeouts (ETIMEDOUT). Use when an NFS mount hangs or fails from a Compute Engine VM, GKE pod, Cloud Run service, or Vertex AI workload, when `mount.nfs` reports \"Connection timed out\" or \"",
       "path": "skills/google-cloud-filestore-log-troubleshooting/SKILL.md",
       "triggers": [
         "/google cloud filestore log troubleshooting",
@@ -23355,7 +24749,7 @@
     },
     {
       "name": "google-cloud-filestore-nfs-browser",
-      "description": "Inspects, searches, and reads files and POSIX metadata on Google Cloud Filestore (NFS) instances without local NFS client packages or root privileges. Use when browsing Filestore shares, searching files, reading remote logs, or inspecting file attributes; don't use for Cloud Storage buckets, Cloud N",
+      "description": "Inspects, searches, and reads files and POSIX metadata on Filestore (NFS) instances on Google Cloud without local NFS client packages or root privileges. Use when browsing Filestore shares, searching files, reading remote logs, or inspecting file attributes; don't use for Cloud Storage buckets, Clou",
       "path": "skills/google-cloud-filestore-nfs-browser/SKILL.md",
       "triggers": [
         "/google cloud filestore nfs browser",
@@ -23451,7 +24845,7 @@
     },
     {
       "name": "google-cloud-recipe-auth",
-      "description": "Provides expert guidance on authenticating and authorizing to Google Cloud services and APIs, covering human users, service identities, Application Default Credentials (ADC), and best practices for secure access.",
+      "description": "Provides expert guidance on Identity and Access Management (IAM) and authenticating and authorizing to Google Cloud services and APIs, covering human users, service identities, Application Default Credentials (ADC), and best practices for secure access.",
       "path": "skills/google-cloud-recipe-auth/SKILL.md",
       "triggers": [
         "/google cloud recipe auth",
@@ -23475,9 +24869,9 @@
         "provides",
         "expert",
         "guidance",
-        "authenticating",
-        "authorizing",
-        "services"
+        "identity",
+        "access",
+        "management"
       ],
       "aliases": []
     },
@@ -23547,7 +24941,7 @@
     },
     {
       "name": "google-cloud-scc-query",
-      "description": "Queries and retrieves active security findings, external exposures, toxic combinations, vulnerabilities, threats, and sensitive data risks from Google Cloud Security Command Center. Use when retrieving details for a security finding by its name, validating finding scope (e.g., verifying findingClass",
+      "description": "Queries and retrieves active security findings, external exposures, toxic combinations, vulnerabilities, threats, and sensitive data risks from Security Command Center on Google Cloud. Use when retrieving details for a security finding by its name, validating finding scope (e.g., verifying findingCl",
       "path": "skills/google-cloud-scc-query/SKILL.md",
       "triggers": [
         "/google cloud scc query",
@@ -23578,8 +24972,40 @@
       "aliases": []
     },
     {
+      "name": "google-cloud-scc-remediation",
+      "description": "Remediates Google Cloud Security Command Center findings, including IAM permission fixes, cloud resource misconfigurations, vulnerabilities, and Toxic Combinations. Use when asked to fix, remediate, or mitigate a Security Command Center finding or address attack paths. Don't use for general IAM poli",
+      "path": "skills/google-cloud-scc-remediation/SKILL.md",
+      "triggers": [
+        "/google cloud scc remediation",
+        "/google-cloud-scc-remediation",
+        "google cloud scc remediation",
+        "google-cloud-scc-remediation",
+        "/cloud scc remediation",
+        "/cloud-scc-remediation",
+        "cloud scc remediation",
+        "cloud-scc-remediation",
+        "/google cloud scc",
+        "/google-cloud-scc",
+        "remediates google",
+        "/scc remediation"
+      ],
+      "keywords": [
+        "google",
+        "cloud",
+        "remediation",
+        "remediates",
+        "security",
+        "command",
+        "center",
+        "findings",
+        "including",
+        "permission"
+      ],
+      "aliases": []
+    },
+    {
       "name": "google-cloud-slo-alert-configuration",
-      "description": "Configures PromQL-based Service Level Objective (SLO) alerting policies for Google Cloud resources registered in App Hub or individually specified. Generates Terraform output. Use when the user asks to configure an SLO or Service Level Objective. Don't use for standard alerting policies.",
+      "description": "Configures Cloud Monitoring PromQL-based Service Level Objective (SLO) alerting policies on Google Cloud for resources registered in App Hub or individually specified. Generates Terraform output. Use when the user asks to configure an SLO or Service Level Objective. Don't use for standard alerting p",
       "path": "skills/google-cloud-slo-alert-configuration/SKILL.md",
       "triggers": [
         "/google cloud slo alert configuration",
@@ -23601,11 +25027,11 @@
         "alert",
         "configuration",
         "configures",
+        "monitoring",
         "promql",
         "based",
         "service",
-        "level",
-        "objective"
+        "level"
       ],
       "aliases": []
     },
@@ -23963,7 +25389,7 @@
     },
     {
       "name": "google-cloud-storage-basics",
-      "description": "Stores, retrieves, and manages data as objects in Cloud Storage (Google Cloud Storage, or GCS) buckets. Use when you need to interact with Cloud Storage \u2014 set up a Storage MCP server (remote or local Toolbox), create or configure buckets, upload, download, stream, or transfer data, organize objects ",
+      "description": "Stores, retrieves, and manages data as objects in Cloud Storage on Google Cloud (also known colloquially as GCS) buckets. Use when you need to interact with Cloud Storage \u2014 set up a Storage MCP server (remote or local Toolbox), create or configure buckets, upload, download, stream, or transfer data,",
       "path": "skills/google-cloud-storage-basics/SKILL.md",
       "triggers": [
         "/google cloud storage basics",
@@ -23989,13 +25415,13 @@
         "manages",
         "data",
         "objects",
-        "buckets"
+        "known"
       ],
       "aliases": []
     },
     {
       "name": "google-cloud-storage-bucket-architect",
-      "description": "Creates Cloud Storage (Google Cloud Storage, or GCS) buckets. Analyzes the workload (sensitive data, media hosting, ingestion, web hosting, archiving, backup, logging, analytics, AI/ML, or general-purpose), validates project-level security settings, and designs a secure-by-default, cost-effective co",
+      "description": "Creates Cloud Storage on Google Cloud (also known colloquially as GCS) buckets. Analyzes the workload (sensitive data, media hosting, ingestion, web hosting, archiving, backup, logging, analytics, AI/ML, or general-purpose), validates project-level security settings, and designs a secure-by-default,",
       "path": "skills/google-cloud-storage-bucket-architect/SKILL.md",
       "triggers": [
         "/google cloud storage bucket architect",
@@ -24018,16 +25444,16 @@
         "bucket",
         "architect",
         "creates",
+        "known",
+        "colloquially",
         "buckets",
-        "analyzes",
-        "workload",
-        "sensitive"
+        "analyzes"
       ],
       "aliases": []
     },
     {
       "name": "google-cloud-storage-fuse",
-      "description": "Mounts Cloud Storage buckets as a POSIX file system with Cloud Storage FUSE (gcsfuse). Use when interacting with gcsfuse: decide whether FUSE, native gs:// reads, or Filestore/Managed Lustre fits a workload, deploy tuned mounts on GKE, Compute Engine, or Cloud Run, enable and size file, stat, and li",
+      "description": "Mounts Cloud Storage buckets on Google Cloud as a POSIX file system with Cloud Storage FUSE (gcsfuse). Use when interacting with gcsfuse or Cloud Storage FUSE mounts: decide whether FUSE, native gs:// reads, or Filestore/Managed Lustre fits a workload, deploy tuned mounts on GKE, Compute Engine, or ",
       "path": "skills/google-cloud-storage-fuse/SKILL.md",
       "triggers": [
         "/google cloud storage fuse",
@@ -24059,7 +25485,7 @@
     },
     {
       "name": "google-cloud-waf-cost-optimization",
-      "description": "Generates cost optimization guidance for Google Cloud workloads based on the Google Cloud Well-Architected Framework (WAF). Use this skill to evaluate a workload, identify cost requirements and constraints, and provide actionable recommendations for build, deploy, and manage the workload cost-effici",
+      "description": "Evaluates Google Cloud workloads for cost efficiency and FinOps alignment using the Google Cloud Well-Architected Framework Cost Optimization pillar. Use when the user asks to analyze Google Cloud spend, reduce cloud bills, rightsize resources (for example, Compute, GKE, Storage, Databases), evaluat",
       "path": "skills/google-cloud-waf-cost-optimization/SKILL.md",
       "triggers": [
         "/google cloud waf cost optimization",
@@ -24080,18 +25506,18 @@
         "cloud",
         "cost",
         "optimization",
-        "generates",
-        "guidance",
+        "evaluates",
         "workloads",
-        "based",
-        "well",
-        "architected"
+        "efficiency",
+        "finops",
+        "alignment",
+        "well"
       ],
       "aliases": []
     },
     {
       "name": "google-cloud-waf-operational-excellence",
-      "description": "Generates operations-focused guidance for Google Cloud workloads based on the design principles and recommendations in the Operational Excellence pillar of the Google Cloud Well-Architected Framework (WAF). Use this skill to evaluate a workload, identify operational requirements, and provide actiona",
+      "description": "Generates operational guidance for CI/CD deployment pipelines, observability, monitoring, logging, and incident management on Google Cloud based on the design principles and recommendations in the Operational Excellence pillar of the Google Cloud Well-Architected Framework (WAF). Use when the user a",
       "path": "skills/google-cloud-waf-operational-excellence/SKILL.md",
       "triggers": [
         "/google cloud waf operational excellence",
@@ -24113,11 +25539,11 @@
         "operational",
         "excellence",
         "generates",
-        "operations",
-        "focused",
         "guidance",
-        "workloads",
-        "based"
+        "deployment",
+        "pipelines",
+        "observability",
+        "monitoring"
       ],
       "aliases": []
     },
@@ -24155,7 +25581,7 @@
     },
     {
       "name": "google-cloud-waf-reliability",
-      "description": "Generates guidance for reliability, resilience, availability, redundancy, fault-tolerance, and disaster recovery (DR) for Google Cloud workloads based on the design principles and recommendations in the Google Cloud Well-Architected Framework. Use when the user asks to evaluate, design, or improve t",
+      "description": "Evaluates, designs, and improves the reliability, resilience, availability, fault tolerance, and disaster recovery (DR) of Google Cloud workloads based on the design principles and recommendations in the Reliability pillar of the Google Cloud Well-Architected Framework. Use when the user asks about ",
       "path": "skills/google-cloud-waf-reliability/SKILL.md",
       "triggers": [
         "/google cloud waf reliability",
@@ -24166,20 +25592,20 @@
         "/cloud-waf-reliability",
         "cloud waf reliability",
         "cloud-waf-reliability",
-        "generates guidance",
         "/google cloud waf",
         "/google-cloud-waf",
+        "evaluates designs",
         "/waf reliability"
       ],
       "keywords": [
         "google",
         "cloud",
         "reliability",
-        "generates",
-        "guidance",
+        "evaluates",
+        "designs",
+        "improves",
         "resilience",
         "availability",
-        "redundancy",
         "fault",
         "tolerance"
       ],
@@ -24647,17 +26073,24 @@
     },
     {
       "name": "gstack",
-      "description": "Router for the gstack skill suite. (gstack)",
-      "path": "skills/gstack/SKILL.md",
+      "description": "Install and use gstack in Capy and Claude Code. Load at session start to check this machine, and for gstack planning, code review, debugging, QA, design, security, documentation, and shipping workflows.",
+      "path": "skills/gstack/capy/skill/gstack/SKILL.md",
       "triggers": [
-        "router gstack",
+        "install gstack",
         "/gstack",
         "gstack"
       ],
       "keywords": [
         "gstack",
-        "router",
-        "suite"
+        "install",
+        "capy",
+        "claude",
+        "code",
+        "load",
+        "session",
+        "start",
+        "check",
+        "machine"
       ],
       "aliases": []
     },
@@ -25278,6 +26711,55 @@
         "graph",
         "visualize",
         "something"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "html-demo",
+      "description": "Show an app working on a web page by drawing it live in HTML instead of recording it. A Mac-style window plays the app step by step, and every frame is a pure function of one clock, View(t), drawn on a fixed 1200 \u00d7 750 stage that one CSS scale fits to any width. The pointer is scripted, labels and p",
+      "path": "skills/html-demo/SKILL.md",
+      "triggers": [
+        "/html demo",
+        "/html-demo",
+        "html demo",
+        "html-demo"
+      ],
+      "keywords": [
+        "html",
+        "demo",
+        "show",
+        "page",
+        "drawing",
+        "live",
+        "instead",
+        "recording",
+        "style",
+        "window"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "html-reel",
+      "description": "Turn a tweet, a video, a YouTube video or a landing page into a 9:16 reel (Instagram Reels, TikTok, Shorts) that says what the source says and looks like it, with every cut on a word. Read the source (its words, its media, its measured fonts and colours), pick a structure (a promo, a showcase, \"foun",
+      "path": "skills/html-reel/SKILL.md",
+      "triggers": [
+        "/html reel",
+        "/html-reel",
+        "turn tweet",
+        "html reel",
+        "html-reel"
+      ],
+      "keywords": [
+        "html",
+        "reel",
+        "turn",
+        "tweet",
+        "video",
+        "youtube",
+        "landing",
+        "page",
+        "instagram",
+        "reels"
       ],
       "aliases": []
     },
@@ -26546,7 +28028,7 @@
     },
     {
       "name": "iam-helper-for-policy-simulator",
-      "description": "Safely simulates and applies Google Cloud IAM v1 (Allow) policy changes. Uses the Policy Simulator to replay historical access logs against proposed policies to prevent breaking active workloads before applying the changes. Use when simulating or applying IAM v1 allow policies across Projects, Folde",
+      "description": "Safely simulates and applies Identity and Access Management (IAM) v1 (Allow) policy changes on Google Cloud. Uses the Policy Simulator to replay historical access logs against proposed policies to prevent breaking active workloads before applying the changes. Use when simulating or applying IAM v1 a",
       "path": "skills/iam-helper-for-policy-simulator/SKILL.md",
       "triggers": [
         "/iam helper for policy simulator",
@@ -26569,10 +28051,10 @@
         "safely",
         "simulates",
         "applies",
-        "google",
-        "cloud",
-        "allow",
-        "changes"
+        "identity",
+        "access",
+        "management",
+        "allow"
       ],
       "aliases": []
     },
@@ -26610,7 +28092,7 @@
     },
     {
       "name": "iam-helper-for-troubleshooting",
-      "description": "Diagnoses, remediates, and manages Google Cloud Identity and Access Management (IAM) access issues. Supports two distinct operational modes: (1) Requester Flow for developers encountering access denials (capturing error context, self-service PAM JIT activations, elevated developer self-remediation, ",
+      "description": "Diagnoses, remediates, and manages Identity and Access Management (IAM) access issues on Google Cloud. Supports two distinct operational modes: (1) Requester Flow for developers encountering access denials (capturing error context, self-service PAM JIT activations, elevated developer self-remediatio",
       "path": "skills/iam-helper-for-troubleshooting/SKILL.md",
       "triggers": [
         "/iam helper for troubleshooting",
@@ -26632,11 +28114,43 @@
         "diagnoses",
         "remediates",
         "manages",
-        "google",
-        "cloud",
         "identity",
         "access",
-        "management"
+        "management",
+        "issues",
+        "google"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "ice-frost-skill-vfx",
+      "description": "Build the effects of an ice and frost skill as one visual language in Three.js. Frost that grows like real frost, not a painted fern: a dendritic tree grown on the CPU from a seed point, stems racing outward with barbs and sub-barbs that compete for space in one time-ordered queue, side branches lea",
+      "path": "skills/ice-frost-skill-vfx/SKILL.md",
+      "triggers": [
+        "/ice frost skill vfx",
+        "/ice-frost-skill-vfx",
+        "ice frost skill vfx",
+        "ice-frost-skill-vfx",
+        "/frost skill vfx",
+        "/frost-skill-vfx",
+        "/ice frost skill",
+        "/ice-frost-skill",
+        "frost skill vfx",
+        "frost-skill-vfx",
+        "ice frost skill",
+        "ice-frost-skill"
+      ],
+      "keywords": [
+        "frost",
+        "build",
+        "effects",
+        "visual",
+        "language",
+        "three",
+        "grows",
+        "real",
+        "painted",
+        "fern"
       ],
       "aliases": []
     },
@@ -26694,6 +28208,447 @@
         "identified",
         "lawful",
         "outcomes"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-bold-pop",
+      "description": "Draws hand-authored SVG spot illustrations in a bold pop-geometric style for design and coding scenes. Identifying traits: a thick navy outline on every shape, solid navy extrusions that always step down-right, saturated flat fills (hot pink, lemon, aqua, violet, mint, lime) textured with navy hatch",
+      "path": "skills/illustration-bold-pop/SKILL.md",
+      "triggers": [
+        "/illustration bold pop",
+        "/illustration-bold-pop",
+        "illustration bold pop",
+        "illustration-bold-pop",
+        "/illustration bold",
+        "/illustration-bold",
+        "illustration bold",
+        "illustration-bold",
+        "draws hand",
+        "/bold pop",
+        "/bold-pop",
+        "bold pop"
+      ],
+      "keywords": [
+        "illustration",
+        "bold",
+        "draws",
+        "hand",
+        "authored",
+        "spot",
+        "illustrations",
+        "geometric",
+        "style",
+        "design"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-flat",
+      "description": "Draws flat vector illustrations as SVG cards (480x360): slim, long-limbed people acting out one design or coding moment with one hero prop. Identified by no outlines on big shapes, thin white fold strokes as the only shading, navy only for hair, sneakers and a few hairlines, small heads (about 1:7) ",
+      "path": "skills/illustration-flat/SKILL.md",
+      "triggers": [
+        "/illustration flat",
+        "/illustration-flat",
+        "illustration flat",
+        "illustration-flat",
+        "draws flat"
+      ],
+      "keywords": [
+        "illustration",
+        "flat",
+        "draws",
+        "vector",
+        "illustrations",
+        "cards",
+        "480x360",
+        "slim",
+        "long",
+        "limbed"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-flat-with-black",
+      "description": "Draws flat vector spot illustrations of tall, long-legged people doing design and coding things, with solid black as a main colour. Traits: no outlines on coloured fills; black as big solid shapes (hair, trousers, shoes, devices) and as thin detail lines; denim blue, leaf green, sun yellow and tomat",
+      "path": "skills/illustration-flat-with-black/SKILL.md",
+      "triggers": [
+        "/illustration flat with black",
+        "/illustration-flat-with-black",
+        "illustration flat with black",
+        "illustration-flat-with-black",
+        "/illustration flat with",
+        "/illustration-flat-with",
+        "illustration flat with",
+        "illustration-flat-with",
+        "/illustration flat",
+        "/illustration-flat",
+        "illustration flat",
+        "illustration-flat"
+      ],
+      "keywords": [
+        "illustration",
+        "flat",
+        "black",
+        "draws",
+        "vector",
+        "spot",
+        "illustrations",
+        "tall",
+        "long",
+        "legged"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-framed-panel",
+      "description": "Draws original design-and-coding scenes as SVG cards (480x360) in a framed-panel cartoon style. Identifying traits are a soft pastel card with a periwinkle-violet panel framed in thin navy, outline-only clouds and a pale lavender floor band with dashes inside it; L-shaped corner brackets outside two",
+      "path": "skills/illustration-framed-panel/SKILL.md",
+      "triggers": [
+        "/illustration framed panel",
+        "/illustration-framed-panel",
+        "illustration framed panel",
+        "illustration-framed-panel",
+        "/illustration framed",
+        "/illustration-framed",
+        "illustration framed",
+        "illustration-framed",
+        "draws original",
+        "/framed panel",
+        "/framed-panel",
+        "framed panel"
+      ],
+      "keywords": [
+        "illustration",
+        "framed",
+        "panel",
+        "draws",
+        "original",
+        "design",
+        "coding",
+        "scenes",
+        "cards",
+        "480x360"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-grainy-gouache",
+      "description": "Draws original cosy animal scenes as hand-authored SVG cards (480x360) in a grainy gouache, risograph-like style. Identifying traits are flat shapes with no outlines on a hot-pink card; soft 3-4 stop gradient shading on every rounded form, darker toward edges and base; a fine dark multiply grain tha",
+      "path": "skills/illustration-grainy-gouache/SKILL.md",
+      "triggers": [
+        "/illustration grainy gouache",
+        "/illustration-grainy-gouache",
+        "illustration grainy gouache",
+        "illustration-grainy-gouache",
+        "/illustration grainy",
+        "/illustration-grainy",
+        "illustration grainy",
+        "illustration-grainy",
+        "/grainy gouache",
+        "/grainy-gouache",
+        "draws original",
+        "grainy gouache"
+      ],
+      "keywords": [
+        "illustration",
+        "grainy",
+        "gouache",
+        "draws",
+        "original",
+        "cosy",
+        "animal",
+        "scenes",
+        "hand",
+        "authored"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-halftone-line",
+      "description": "Draws hand-authored SVG spot illustrations in a halftone line style for design and coding scenes. Identifying traits are a confident black line with a slight hand wobble and contours left open, grey tones made only of fine halftone dots clipped to shapes, a few solid black masses (hair, leaves, a ba",
+      "path": "skills/illustration-halftone-line/SKILL.md",
+      "triggers": [
+        "/illustration halftone line",
+        "/illustration-halftone-line",
+        "illustration halftone line",
+        "illustration-halftone-line",
+        "/illustration halftone",
+        "/illustration-halftone",
+        "illustration halftone",
+        "illustration-halftone",
+        "/halftone line",
+        "/halftone-line",
+        "halftone line",
+        "halftone-line"
+      ],
+      "keywords": [
+        "illustration",
+        "halftone",
+        "line",
+        "draws",
+        "hand",
+        "authored",
+        "spot",
+        "illustrations",
+        "style",
+        "design"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-ink-sketch",
+      "description": "Draws hand-inked cartoon critters and living objects as SVG cards (480x360), each acting out a coding or design idea. Identified by thick black brush-pen outlines that swell and taper and break into separate strokes, loose marker-and-watercolour fills that slip past the line, diagonal hatching inste",
+      "path": "skills/illustration-ink-sketch/SKILL.md",
+      "triggers": [
+        "/illustration ink sketch",
+        "/illustration-ink-sketch",
+        "illustration ink sketch",
+        "illustration-ink-sketch",
+        "/illustration ink",
+        "/illustration-ink",
+        "illustration ink",
+        "illustration-ink",
+        "/ink sketch",
+        "/ink-sketch",
+        "draws hand",
+        "ink sketch"
+      ],
+      "keywords": [
+        "illustration",
+        "sketch",
+        "draws",
+        "hand",
+        "inked",
+        "cartoon",
+        "critters",
+        "living",
+        "objects",
+        "cards"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-isometric-mono",
+      "description": "Draws true-isometric diorama illustrations of developer and design workspaces in one green ramp, generated as SVG with a bundled scene kit. Traits: one rounded off-white slab with a faceted bevelled edge; every face filled by the way it faces (top lightest, right darkest) from five greens; 0.9 deep-",
+      "path": "skills/illustration-isometric-mono/SKILL.md",
+      "triggers": [
+        "/illustration isometric mono",
+        "/illustration-isometric-mono",
+        "illustration isometric mono",
+        "illustration-isometric-mono",
+        "/illustration isometric",
+        "/illustration-isometric",
+        "illustration isometric",
+        "illustration-isometric",
+        "/isometric mono",
+        "/isometric-mono",
+        "isometric mono",
+        "isometric-mono"
+      ],
+      "keywords": [
+        "illustration",
+        "isometric",
+        "mono",
+        "draws",
+        "true",
+        "diorama",
+        "illustrations",
+        "developer",
+        "design",
+        "workspaces"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-line-interior",
+      "description": "Draws original hand-written SVG spot scenes in the Line interior style, wide airy rooms or terraces where slim, realistic people do design and coding work. A thin uniform indigo outline (1.4 px at 480 wide) runs around mostly white fills. Sparse flat accents (teal, sage, coral, mustard, lavender, pe",
+      "path": "skills/illustration-line-interior/SKILL.md",
+      "triggers": [
+        "/illustration line interior",
+        "/illustration-line-interior",
+        "illustration line interior",
+        "illustration-line-interior",
+        "/illustration line",
+        "/illustration-line",
+        "illustration line",
+        "illustration-line",
+        "/line interior",
+        "/line-interior",
+        "draws original",
+        "line interior"
+      ],
+      "keywords": [
+        "illustration",
+        "line",
+        "interior",
+        "draws",
+        "original",
+        "hand",
+        "written",
+        "spot",
+        "scenes",
+        "style"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-one-line",
+      "description": "Draws original hand-written SVG spot illustrations in the One-line style, joyful action figures doing design and coding work. One continuous uniform black line (2.3 px at 480 wide) loops and doubles back to draw the whole figure. Flat coral, periwinkle and white patches sit behind the line, wobbly a",
+      "path": "skills/illustration-one-line/SKILL.md",
+      "triggers": [
+        "/illustration one line",
+        "/illustration-one-line",
+        "illustration one line",
+        "illustration-one-line",
+        "/illustration one",
+        "/illustration-one",
+        "illustration one",
+        "illustration-one",
+        "draws original",
+        "/one line",
+        "/one-line",
+        "one line"
+      ],
+      "keywords": [
+        "illustration",
+        "line",
+        "draws",
+        "original",
+        "hand",
+        "written",
+        "spot",
+        "illustrations",
+        "style",
+        "joyful"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-outlined-cartoon",
+      "description": "Draws original hand-authored SVG spot illustrations in an outlined cartoon style for design and coding subjects. Identifying traits: a warm near-black ink outline on every flat fill in three weights (2.5 / 2 / 1.5 px), tapered ink slivers for folds, brows and finger splits, big-headed characters wit",
+      "path": "skills/illustration-outlined-cartoon/SKILL.md",
+      "triggers": [
+        "/illustration outlined cartoon",
+        "/illustration-outlined-cartoon",
+        "illustration outlined cartoon",
+        "illustration-outlined-cartoon",
+        "/illustration outlined",
+        "/illustration-outlined",
+        "illustration outlined",
+        "illustration-outlined",
+        "/outlined cartoon",
+        "/outlined-cartoon",
+        "outlined cartoon",
+        "outlined-cartoon"
+      ],
+      "keywords": [
+        "illustration",
+        "outlined",
+        "cartoon",
+        "draws",
+        "original",
+        "hand",
+        "authored",
+        "spot",
+        "illustrations",
+        "style"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-teal-spot",
+      "description": "Draws original spot illustrations of one hero object as SVG cards (480x360) in a teal-on-white style. Identifying traits are a single object in a fixed oblique 3/4 view showing top, front and right faces; white main faces with teal only on side faces and accents; thin dark-teal outlines on every edg",
+      "path": "skills/illustration-teal-spot/SKILL.md",
+      "triggers": [
+        "/illustration teal spot",
+        "/illustration-teal-spot",
+        "illustration teal spot",
+        "illustration-teal-spot",
+        "/illustration teal",
+        "/illustration-teal",
+        "illustration teal",
+        "illustration-teal",
+        "draws original",
+        "/teal spot",
+        "/teal-spot",
+        "teal spot"
+      ],
+      "keywords": [
+        "illustration",
+        "teal",
+        "spot",
+        "draws",
+        "original",
+        "illustrations",
+        "hero",
+        "object",
+        "cards",
+        "480x360"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-two-colour-brush",
+      "description": "Draws original design and coding scenes as hand-authored SVG cards (480x360) in a two-colour brush-marker style. Identifying traits: thick wobbly black marker lines with blobby ends, built as filled ribbons; one second ink, mint green, in flat blocks that slip 2-10 px off the line like a misregister",
+      "path": "skills/illustration-two-colour-brush/SKILL.md",
+      "triggers": [
+        "/illustration two colour brush",
+        "/illustration-two-colour-brush",
+        "illustration two colour brush",
+        "illustration-two-colour-brush",
+        "/illustration two colour",
+        "/illustration-two-colour",
+        "illustration two colour",
+        "illustration-two-colour",
+        "/illustration two",
+        "/illustration-two",
+        "/two colour brush",
+        "/two-colour-brush"
+      ],
+      "keywords": [
+        "illustration",
+        "colour",
+        "brush",
+        "draws",
+        "original",
+        "design",
+        "coding",
+        "scenes",
+        "hand",
+        "authored"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "illustration-vintage-emblem",
+      "description": "Draws original hand-authored SVG badge illustrations in a vintage emblem style for design and coding subjects. Identifying traits: a seven-colour screen-print palette (green-black ink, cream, terracotta, sand, tan, pale, a touch of teal) with no gradients; one chunky hero object in thick 3.6 px ink ",
+      "path": "skills/illustration-vintage-emblem/SKILL.md",
+      "triggers": [
+        "/illustration vintage emblem",
+        "/illustration-vintage-emblem",
+        "illustration vintage emblem",
+        "illustration-vintage-emblem",
+        "/illustration vintage",
+        "/illustration-vintage",
+        "illustration vintage",
+        "illustration-vintage",
+        "/vintage emblem",
+        "/vintage-emblem",
+        "draws original",
+        "vintage emblem"
+      ],
+      "keywords": [
+        "illustration",
+        "vintage",
+        "emblem",
+        "draws",
+        "original",
+        "hand",
+        "authored",
+        "badge",
+        "illustrations",
+        "style"
       ],
       "aliases": []
     },
@@ -26920,7 +28875,7 @@
     },
     {
       "name": "impeccable",
-      "description": "Use when the user wants to design, redesign, shape, critique, audit, polish, clarify, distill, harden, optimize, adapt, animate, colorize, extract, or otherwise improve a frontend interface. Covers websites, landing pages, dashboards, product UI, app shells, components, forms, settings, onboarding, ",
+      "description": "Use when the user wants to design, redesign, shape, critique, audit, polish, simplify, harden, animate, or otherwise improve a frontend interface: websites, landing pages, dashboards, product UI, components, forms, settings, onboarding, empty states, and native iOS or Android screens. Handles UX rev",
       "path": "skills/impeccable/SKILL.md",
       "triggers": [
         "/impeccable",
@@ -26936,8 +28891,8 @@
         "critique",
         "audit",
         "polish",
-        "clarify",
-        "distill"
+        "simplify",
+        "harden"
       ],
       "aliases": []
     },
@@ -32828,6 +34783,31 @@
       "aliases": []
     },
     {
+      "name": "is-agentic",
+      "description": "Score how ready a website, domain, or public MCP endpoint is for AI agents using Is Agentic, and read or act on the resulting report. Use when asked to check a site's agent readiness, get its Is Agentic score, fetch a scored report as JSON, or fix the issues that lower a site's score.",
+      "path": "skills/is-agentic/SKILL.md",
+      "triggers": [
+        "/is agentic",
+        "/is-agentic",
+        "score ready",
+        "is agentic",
+        "is-agentic"
+      ],
+      "keywords": [
+        "agentic",
+        "score",
+        "ready",
+        "website",
+        "domain",
+        "public",
+        "endpoint",
+        "read",
+        "resulting",
+        "report"
+      ],
+      "aliases": []
+    },
+    {
       "name": "iterate-until-verified",
       "description": "Apply a prompt-agnostic execution and verification loop to any substantial task while preserving the original request. Use when the user asks to fan out work, use subagents or independent reviewers, loop until done, benchmark against references, apply a harsh critic, compare candidates blind, improv",
       "path": "skills/iterate-until-verified/SKILL.md",
@@ -32856,6 +34836,27 @@
         "verification",
         "loop",
         "substantial"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "k2",
+      "description": "Build and troubleshoot Cloudflare K2 or K2 Streams durable logs. Use for stream setup, producing from Workers or HTTP, configuring retention and inputs, and consuming through subscriptions.",
+      "path": "skills/k2/SKILL.md",
+      "triggers": [
+        "build troubleshoot"
+      ],
+      "keywords": [
+        "build",
+        "troubleshoot",
+        "cloudflare",
+        "streams",
+        "durable",
+        "logs",
+        "stream",
+        "setup",
+        "producing",
+        "workers"
       ],
       "aliases": []
     },
@@ -33085,6 +35086,38 @@
       "aliases": []
     },
     {
+      "name": "lightning-energy-skill-vfx",
+      "description": "Build the effects of a close-combat energy skill as one visual language in Three.js. Lightning that reads as lightning, dynamic but never in your face: trees of strips (trunk, forks of forks, hair-fine branchlets) with a fine white core in a violet-blue glow, each channel reaching out as a stepped l",
+      "path": "skills/lightning-energy-skill-vfx/SKILL.md",
+      "triggers": [
+        "/lightning energy skill vfx",
+        "/lightning-energy-skill-vfx",
+        "lightning energy skill vfx",
+        "lightning-energy-skill-vfx",
+        "/lightning energy skill",
+        "/lightning-energy-skill",
+        "lightning energy skill",
+        "lightning-energy-skill",
+        "/energy skill vfx",
+        "/energy-skill-vfx",
+        "/lightning energy",
+        "/lightning-energy"
+      ],
+      "keywords": [
+        "lightning",
+        "energy",
+        "build",
+        "effects",
+        "close",
+        "combat",
+        "visual",
+        "language",
+        "three",
+        "reads"
+      ],
+      "aliases": []
+    },
+    {
       "name": "lingo",
       "description": "Playful, minimal design with bright colors, rounded shapes, tactile 3D borders, and friendly illustrations for approachable interfaces.",
       "path": "skills/lingo/SKILL.md",
@@ -33274,6 +35307,38 @@
         "dags",
         "service",
         "msaa"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "managed-airflow-recommendations",
+      "description": "Provides recommendations and best practices for creating, configuring, tuning and optimizing Managed Service for Apache Airflow (MSAA; formerly Cloud Composer) environments. Use when the user asks for guidance, recommendations, or best practices on configuring Managed Airflow environments, scaling A",
+      "path": "skills/managed-airflow-recommendations/SKILL.md",
+      "triggers": [
+        "/managed airflow recommendations",
+        "/managed-airflow-recommendations",
+        "managed airflow recommendations",
+        "managed-airflow-recommendations",
+        "/airflow recommendations",
+        "/airflow-recommendations",
+        "provides recommendations",
+        "airflow recommendations",
+        "airflow-recommendations",
+        "/managed airflow",
+        "/managed-airflow",
+        "managed airflow"
+      ],
+      "keywords": [
+        "managed",
+        "airflow",
+        "recommendations",
+        "provides",
+        "best",
+        "practices",
+        "creating",
+        "configuring",
+        "tuning",
+        "optimizing"
       ],
       "aliases": []
     },
@@ -33705,6 +35770,38 @@
       "aliases": []
     },
     {
+      "name": "migrate-to-rust",
+      "description": "Clones, analyzes, plans, and migrates legacy codebases (C++, Fortran, Java, Python, C, Shell) from a GitHub URL or local directory to a modern, high-performance, deterministic, 100% Safe Rust architecture, tracking live telemetry across every task bucket, test failure/fix cycle, and Profile-Guided O",
+      "path": "skills/migrate-to-rust/SKILL.md",
+      "triggers": [
+        "/migrate to rust",
+        "/migrate-to-rust",
+        "clones analyzes",
+        "migrate to rust",
+        "migrate-to-rust",
+        "/migrate to",
+        "/migrate-to",
+        "migrate to",
+        "migrate-to",
+        "/to rust",
+        "/to-rust",
+        "to rust"
+      ],
+      "keywords": [
+        "migrate",
+        "rust",
+        "clones",
+        "analyzes",
+        "plans",
+        "migrates",
+        "legacy",
+        "codebases",
+        "fortran",
+        "java"
+      ],
+      "aliases": []
+    },
+    {
       "name": "migrate-to-shoehorn",
       "description": "Migrate test files from `as` type assertions to @total-typescript/shoehorn. Use when user mentions shoehorn, wants to replace `as` in tests, or needs partial test data.",
       "path": "skills/migrate-to-shoehorn/SKILL.md",
@@ -33924,6 +36021,29 @@
         "palettes",
         "clean",
         "layouts"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "modernize",
+      "description": "Bring an aging pull request onto its current base and decide whether it should still exist: MODERNIZE, REWORK or CLOSE, with range-diff proof before any push. (gstack)",
+      "path": "skills/gstack/modernize/SKILL.md",
+      "triggers": [
+        "bring aging",
+        "/modernize",
+        "modernize"
+      ],
+      "keywords": [
+        "modernize",
+        "bring",
+        "aging",
+        "pull",
+        "request",
+        "onto",
+        "current",
+        "base",
+        "decide",
+        "whether"
       ],
       "aliases": []
     },
@@ -34754,6 +36874,38 @@
         "hours",
         "modes",
         "gstack"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "offload-to-sandbox",
+      "description": "Offload heavy builds, full test suites and parallel experiments from the local machine to Vercel Sandboxes with the `vercel sandbox` CLI. Use when a local machine is overloaded or shared by several agents, when a test suite should be sharded, or when many tasks should run side by side without consum",
+      "path": "skills/offload-to-sandbox/SKILL.md",
+      "triggers": [
+        "/offload to sandbox",
+        "/offload-to-sandbox",
+        "offload to sandbox",
+        "offload-to-sandbox",
+        "offload heavy",
+        "/offload to",
+        "/offload-to",
+        "/to sandbox",
+        "/to-sandbox",
+        "offload to",
+        "offload-to",
+        "to sandbox"
+      ],
+      "keywords": [
+        "offload",
+        "sandbox",
+        "heavy",
+        "builds",
+        "full",
+        "test",
+        "suites",
+        "parallel",
+        "experiments",
+        "local"
       ],
       "aliases": []
     },
@@ -41732,7 +43884,7 @@
     },
     {
       "name": "react-best-practices",
-      "description": "React best-practices reviewer for TSX files. Triggers after editing multiple TSX components to run a condensed quality checklist covering component structure, hooks usage, accessibility, performance, and TypeScript patterns.",
+      "description": "Vercel's React and Next.js performance rules (70 rules in 8 categories ordered by impact - eliminating waterfalls, bundle size, server-side performance, client-side data fetching, re-renders, rendering performance, JavaScript performance, and advanced patterns). Use when writing, reviewing, or refac",
       "path": "skills/react-best-practices/SKILL.md",
       "triggers": [
         "/react best practices",
@@ -41743,22 +43895,22 @@
         "/best-practices",
         "best practices",
         "best-practices",
+        "vercel react",
         "/react best",
         "/react-best",
-        "react best",
-        "react-best"
+        "react best"
       ],
       "keywords": [
         "react",
         "best",
         "practices",
-        "reviewer",
-        "files",
-        "triggers",
-        "editing",
-        "multiple",
-        "components",
-        "condensed"
+        "vercel",
+        "next",
+        "performance",
+        "rules",
+        "categories",
+        "ordered",
+        "impact"
       ],
       "aliases": []
     },
@@ -42168,6 +44320,31 @@
         "brief",
         "invoke",
         "user"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "remove-animations",
+      "description": "Find the animations an interface doesn't need and remove them \u2014 motion on keyboard actions, high-frequency surfaces, functional data, and decoration with no purpose \u2014 then clean up what they leave behind. Edits code, but only to subtract; it never adds or retunes motion. Use when the user says the a",
+      "path": "skills/remove-animations/SKILL.md",
+      "triggers": [
+        "/remove animations",
+        "/remove-animations",
+        "remove animations",
+        "remove-animations",
+        "find animations"
+      ],
+      "keywords": [
+        "remove",
+        "animations",
+        "find",
+        "interface",
+        "doesn",
+        "motion",
+        "keyboard",
+        "actions",
+        "high",
+        "frequency"
       ],
       "aliases": []
     },
@@ -45108,6 +47285,38 @@
       "aliases": []
     },
     {
+      "name": "sign-in-with-google-web",
+      "description": "Implement, configure, and secure Sign In With Google (SiwG) using Google Identity Services (GIS / `https://accounts.google.com/gsi/client`) across web architectures. Use when creating Google sign-in buttons, implementing Google One Tap with FedCM, integrating GIS in React/Next.js/Angular/HTML, verif",
+      "path": "skills/sign-in-with-google-web/SKILL.md",
+      "triggers": [
+        "/sign in with google web",
+        "/sign-in-with-google-web",
+        "sign in with google web",
+        "sign-in-with-google-web",
+        "implement configure",
+        "/with google web",
+        "/with-google-web",
+        "/in with google",
+        "/in-with-google",
+        "with google web",
+        "with-google-web",
+        "in with google"
+      ],
+      "keywords": [
+        "sign",
+        "google",
+        "implement",
+        "configure",
+        "secure",
+        "siwg",
+        "identity",
+        "services",
+        "https",
+        "accounts"
+      ],
+      "aliases": []
+    },
+    {
       "name": "site-cli",
       "description": "Derive a fast, reusable API client or CLI for any website by recording its network requests to a HAR file instead of driving the browser every time. Use whenever the user mentions building a \"site CLI\", making a CLI for a website/service, watching or recording network requests, HAR files, reverse-en",
       "path": "skills/site-cli/SKILL.md",
@@ -45453,7 +47662,7 @@
     },
     {
       "name": "spanner-basics",
-      "description": "Assists in provisioning instances and databases, designing performant schemas, and querying data in Spanner. Use when designing primary keys, writing SQL queries or client library code, or diagnosing performance issues.",
+      "description": "Assists in provisioning instances and databases, designing performant schemas, and querying data in Cloud Spanner on Google Cloud. Use when designing primary keys, writing SQL queries or client library code, or diagnosing performance issues.",
       "path": "skills/spanner-basics/SKILL.md",
       "triggers": [
         "assists provisioning",
@@ -45886,7 +48095,7 @@
     },
     {
       "name": "step-parts",
-      "description": "Find, evaluate, and download common purchasable CAD parts from step.parts, including named off-the-shelf actuators, servos, motors, electronics boards, connectors, screws, bolts, nuts, washers, bearings, standoffs, and other catalog components. Use when Codex needs to search the hosted step.parts ca",
+      "description": "Find, evaluate, and download common purchasable CAD parts from step.parts, including named off-the-shelf actuators, servos, motors, electronics boards, connectors, screws, bolts, nuts, washers, bearings, standoffs, and other catalog components. Use when a CAD model needs a real purchasable part: sea",
       "path": "skills/step-parts/SKILL.md",
       "triggers": [
         "find evaluate",
@@ -47826,14 +50035,14 @@
     },
     {
       "name": "turn-into-app",
-      "description": "Turn visible project context, a proven thread, skill, or workflow into a runnable Agent-Native app with simple buttons, visible agent steps, preview, and deployment handoff. Use when a user invokes `/turn-into-app` or asks to make a workflow into an app, including from Claude or ChatGPT on the web, ",
+      "description": "Turns a thread, skill, spreadsheet, or Claude/ChatGPT project into a polished, visual Agent-Native app: populated domain screens with the in-app agent working behind contextual controls. Use when a user invokes `/turn-into-app`, or asks to turn a workflow, skill, spreadsheet, or project into an app,",
       "path": "skills/turn-into-app/SKILL.md",
       "triggers": [
         "/turn into app",
         "/turn-into-app",
         "turn into app",
         "turn-into-app",
-        "turn visible",
+        "turns thread",
         "/turn into",
         "/turn-into",
         "/into app",
@@ -47844,15 +50053,15 @@
       ],
       "keywords": [
         "turn",
-        "visible",
-        "project",
-        "context",
-        "proven",
+        "turns",
         "thread",
-        "workflow",
-        "runnable",
-        "native",
-        "simple"
+        "spreadsheet",
+        "claude",
+        "chatgpt",
+        "project",
+        "polished",
+        "visual",
+        "native"
       ],
       "aliases": []
     },
@@ -47950,6 +50159,29 @@
         "scale",
         "tracking",
         "leading"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "ubicloud",
+      "description": "Run a heavy suite, build or eval on an ephemeral 16-vCPU Ubicloud VM: TTL-named VMs, a reaper, quota preflight and a hang watchdog. (gstack)",
+      "path": "skills/gstack/ubicloud/SKILL.md",
+      "triggers": [
+        "heavy suite",
+        "/ubicloud",
+        "ubicloud"
+      ],
+      "keywords": [
+        "ubicloud",
+        "heavy",
+        "suite",
+        "build",
+        "eval",
+        "ephemeral",
+        "vcpu",
+        "named",
+        "reaper",
+        "quota"
       ],
       "aliases": []
     },
@@ -48529,7 +50761,7 @@
     },
     {
       "name": "vercel-cli",
-      "description": "Vercel CLI expert guidance. Use when deploying, managing environment variables, linking projects, viewing logs, querying metrics, managing domains, managing feature flags with vercel flags, or interacting with the Vercel platform from the command line.",
+      "description": "Vercel CLI expert guidance. Use when deploying, managing environment variables, linking projects, viewing logs, querying metrics, debugging a deployed app on Vercel (errors, 5xx responses, timeouts, slow routes, or a single failing request), managing domains, managing feature flags with vercel flags",
       "path": "skills/vercel-cli/SKILL.md",
       "triggers": [
         "vercel expert",
@@ -48614,7 +50846,7 @@
     },
     {
       "name": "vercel-connect",
-      "description": "Vercel Connect expert guidance for securely obtaining scoped credentials for third-party services on behalf of apps or users. Use when wiring up provider API access, OAuth, API-key services, MCP servers, triggers, framework adapters, or eve agent connections.",
+      "description": "Vercel Connect expert guidance for securely obtaining scoped credentials for third-party services on behalf of apps or users. Use when wiring up provider API access, OAuth, API-key services, MCP servers, triggers, framework adapters, eve agent connections, or provider tokens for Passport-authenticat",
       "path": "skills/vercel-connect/SKILL.md",
       "triggers": [
         "/vercel connect",
@@ -48657,6 +50889,31 @@
         "custom",
         "rules",
         "blocking"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "vercel-flags",
+      "description": "Feature flags, A/B tests, and gradual rollouts with Vercel Flags, in any app or framework. Use whenever the user is planning, adding, or changing a feature flag, toggle, kill switch, experiment, percentage rollout, or targeting rule, or wants to gate or hide a feature for some users, even before a l",
+      "path": "skills/vercel-flags/SKILL.md",
+      "triggers": [
+        "/vercel flags",
+        "/vercel-flags",
+        "feature flags",
+        "vercel flags",
+        "vercel-flags"
+      ],
+      "keywords": [
+        "vercel",
+        "flags",
+        "feature",
+        "tests",
+        "gradual",
+        "rollouts",
+        "framework",
+        "whenever",
+        "user",
+        "planning"
       ],
       "aliases": []
     },
@@ -48908,6 +51165,31 @@
         "formerly",
         "edge",
         "marketplace"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "vercel-tracing",
+      "description": "Set up OpenTelemetry instrumentation for Vercel Tracing and query the resulting spans. Use when adding or fixing `@vercel/otel`, wiring a framework's server startup hook (Next.js, SvelteKit, and others), adding custom spans, turning on spans from libraries such as the AI SDK, Flags SDK, or database ",
+      "path": "skills/vercel-tracing/SKILL.md",
+      "triggers": [
+        "opentelemetry instrumentation",
+        "/vercel tracing",
+        "/vercel-tracing",
+        "vercel tracing",
+        "vercel-tracing"
+      ],
+      "keywords": [
+        "vercel",
+        "tracing",
+        "opentelemetry",
+        "instrumentation",
+        "query",
+        "resulting",
+        "spans",
+        "adding",
+        "fixing",
+        "otel"
       ],
       "aliases": []
     },
@@ -49189,6 +51471,38 @@
         "message",
         "land",
         "pitch"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "water-crystal-skill-vfx",
+      "description": "Build the effects of a water and crystal skill as one visual language in Three.js. Water that reads as clear water, never a teal fill or a textured ball. A ray-marched water orb whose surface swells, rings and deforms in place: it refracts the frame behind it with an inverted horizon, has a silver r",
+      "path": "skills/water-crystal-skill-vfx/SKILL.md",
+      "triggers": [
+        "/water crystal skill vfx",
+        "/water-crystal-skill-vfx",
+        "water crystal skill vfx",
+        "water-crystal-skill-vfx",
+        "/water crystal skill",
+        "/water-crystal-skill",
+        "water crystal skill",
+        "water-crystal-skill",
+        "/crystal skill vfx",
+        "/crystal-skill-vfx",
+        "crystal skill vfx",
+        "crystal-skill-vfx"
+      ],
+      "keywords": [
+        "water",
+        "crystal",
+        "build",
+        "effects",
+        "visual",
+        "language",
+        "three",
+        "reads",
+        "clear",
+        "never"
       ],
       "aliases": []
     },
@@ -49558,6 +51872,31 @@
       "aliases": []
     },
     {
+      "name": "workers-profiling",
+      "description": "Profile or debug CPU usage and memory allocation in deployed Cloudflare Workers and Durable Objects. Then use this information to optimize your code.",
+      "path": "skills/workers-profiling/SKILL.md",
+      "triggers": [
+        "/workers profiling",
+        "/workers-profiling",
+        "workers profiling",
+        "workers-profiling",
+        "profile debug"
+      ],
+      "keywords": [
+        "workers",
+        "profiling",
+        "profile",
+        "debug",
+        "usage",
+        "memory",
+        "allocation",
+        "deployed",
+        "cloudflare",
+        "durable"
+      ],
+      "aliases": []
+    },
+    {
       "name": "workflow",
       "description": "Creates durable, resumable workflows using Vercel's Workflow SDK. Use when building workflows that need to survive restarts, pause for external events, retry on failure, or coordinate multi-step operations over time. Triggers on mentions of \"workflow\", \"durable functions\", \"resumable\", \"workflow sdk",
       "path": "skills/upstream/SKILL.md",
@@ -49746,7 +52085,7 @@
     },
     {
       "name": "wrangler",
-      "description": "Run or troubleshoot Wrangler CLI commands and configure Worker projects for local development, Previews, deployment, and Cloudflare resource management.",
+      "description": "Run or troubleshoot Wrangler CLI commands in projects that have a wrangler.jsonc, wrangler.json, or wrangler.toml file, including local development, Previews, deployment, and resource management. For new projects and projects without a Wrangler configuration file, use the cf CLI instead.",
       "path": "skills/wrangler/SKILL.md",
       "triggers": [
         "troubleshoot wrangler",
@@ -49757,13 +52096,13 @@
         "wrangler",
         "troubleshoot",
         "commands",
-        "configure",
-        "worker",
         "projects",
-        "local",
-        "development",
-        "previews",
-        "deployment"
+        "jsonc",
+        "json",
+        "toml",
+        "file",
+        "including",
+        "local"
       ],
       "aliases": []
     },
@@ -49796,6 +52135,31 @@
         "posts",
         "current",
         "voice"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "write-skill",
+      "description": "Write a new agent skill or improve one without bloat: the edit ladder, levels, drift and size checks, full diets. (gstack)",
+      "path": "skills/gstack/write-skill/SKILL.md",
+      "triggers": [
+        "write improve",
+        "/write skill",
+        "/write-skill",
+        "write skill",
+        "write-skill"
+      ],
+      "keywords": [
+        "write",
+        "improve",
+        "bloat",
+        "edit",
+        "ladder",
+        "levels",
+        "drift",
+        "size",
+        "checks",
+        "full"
       ],
       "aliases": []
     },

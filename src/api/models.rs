@@ -276,16 +276,9 @@ fn model_list_urls(base_url: &str, provider_id: &str, is_oauth: bool) -> Vec<Str
             urls.push("https://generativelanguage.googleapis.com/v1/models".into());
             urls.push(format!("{base}/models"));
         }
-        "github-copilot" => {
-            urls.push(format!("{base}/models"));
-            urls.push("https://api.githubcopilot.com/models".into());
-        }
-        "github-models" => {
-            // Catalog is the official list; inference base may 404 on /models.
-            urls.push("https://models.github.ai/catalog/models".into());
-            urls.push(format!("{base}/models"));
-            urls.push("https://models.github.ai/inference/models".into());
-        }
+        // Only the configured host: a proxy's key must never be retried
+        // against GitHub's own.
+        "github-copilot" | "github-models" => urls.push(format!("{base}/models")),
         "opencode" => {
             // Zen and Go are separate live catalogs under one OpenCode key.
             // Always ask *both*, anchored on the catalog's Zen base rather than
@@ -372,7 +365,6 @@ fn fetch_once(
     // `application/json` used to ride along with GitHub's vendor type and
     // Poolside's problem+json and some gateways answered the wrong one.
     let accept = match provider_id {
-        "github-models" if !api_key.is_empty() => "application/vnd.github+json",
         "poolside" if !api_key.is_empty() => "application/json, application/problem+json",
         _ => "application/json",
     };
@@ -395,12 +387,7 @@ fn fetch_once(
                     req = req.header("x-api-key", api_key);
                 }
             }
-            "github-models" => {
-                req = req
-                    .bearer_auth(api_key)
-                    .header("X-GitHub-Api-Version", "2022-11-28");
-            }
-            "github-copilot" => {
+            "github-copilot" | "github-models" => {
                 req = req
                     .bearer_auth(api_key)
                     .header("Editor-Version", "vscode/1.104.1")
@@ -778,11 +765,8 @@ mod tests {
         let gm = crate::providers::by_id("github-models").expect("github-models");
         assert_eq!(
             model_list_urls(gm.base_url, "github-models", false),
-            vec![
-                "https://models.github.ai/catalog/models".to_string(),
-                "https://models.github.ai/inference/models".to_string(),
-            ],
-            "catalog first, inference once"
+            vec!["https://api.githubcopilot.com/models".to_string()],
+            "GitHub Models lists Copilot's catalog, once"
         );
 
         let gc = crate::providers::by_id("github-copilot").expect("github-copilot");
@@ -793,14 +777,14 @@ mod tests {
         );
     }
 
-    /// The dedup must keep the FIRST occurrence — probe order is meaningful
-    /// (GitHub's curated catalog must be tried before the inference base).
+    /// A Copilot proxy with its own key: listing models must ask the proxy
+    /// only, never send that key to GitHub's host as a fallback.
     #[test]
-    fn dedup_preserves_probe_order() {
-        let urls = model_list_urls("https://models.github.ai/inference", "github-models", false);
-        assert!(
-            urls[0].contains("/catalog/"),
-            "curated catalog must stay first: {urls:?}"
+    fn a_copilot_proxy_key_stays_on_the_proxy() {
+        let urls = model_list_urls("https://copilot-proxy.internal", "github-copilot", false);
+        assert_eq!(
+            urls,
+            vec!["https://copilot-proxy.internal/models".to_string()]
         );
     }
 

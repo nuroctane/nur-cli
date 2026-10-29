@@ -1,0 +1,18 @@
+{
+  "description": "Model-provider keys are removed from the environment of the commands tools run, so a printenv or an injected curl cannot put them in the transcript; general developer tokens such as GITHUB_TOKEN still reach the user's tools.",
+  "prompt": "Show the two variables.",
+  "env": {
+    "OPENAI_API_KEY": "sk-e2e-must-not-leak-0001",
+    "GITHUB_TOKEN": "gh-e2e-stays-0001"
+  },
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "echo \"openai=[$OPENAI_API_KEY] github=[$GITHUB_TOKEN]\""}}]},
+    {"text": "Shown."}
+  ],
+  "expect": {
+    "requests": 2,
+    "stdout_contains": ["Shown."],
+    "tool_results": [{"request": 2, "contains": ["openai=[]", "github=[gh-e2e-stays-0001]"]}],
+    "requests_lack": ["sk-e2e-must-not-leak-0001"]
+  }
+}

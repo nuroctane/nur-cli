@@ -128,6 +128,15 @@ pub enum NurError {
         env_key: String,
     },
 
+    /// A browser sign-in is saved for this provider, but its access token
+    /// expired and the refresh was refused (typically a refresh token that
+    /// another client rotated). Saying "no saved sign-in" here sent people
+    /// looking for a credential that `doctor` and `/auth` both show.
+    #[error(
+        "the saved sign-in for '{provider}' expired and could not be renewed ({reason}). Sign in again with `nur auth login --provider {provider}` or /login"
+    )]
+    SignInExpired { provider: String, reason: String },
+
     #[error("API error ({}): {}", api_status_label(*status), api_message(*status, message))]
     Api { status: u16, message: String },
 
@@ -190,7 +199,9 @@ impl NurError {
     /// The exit code this failure maps to (see [`exit`]).
     pub fn exit_code(&self) -> i32 {
         match self {
-            NurError::NotAuthenticated | NurError::NoSignInFor { .. } => exit::AUTH,
+            NurError::NotAuthenticated
+            | NurError::NoSignInFor { .. }
+            | NurError::SignInExpired { .. } => exit::AUTH,
             NurError::Api {
                 status: 401 | 403, ..
             } => exit::AUTH,

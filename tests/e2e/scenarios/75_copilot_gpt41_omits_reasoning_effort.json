@@ -1,0 +1,29 @@
+{
+  "description": "Copilot's gpt-4.1 stays on Chat Completions and 400s any reasoning_effort ('model gpt-4.1-2025-04-14 does not support reasoning effort', seen live 2026-10-29), so nur sends none.",
+  "provider": "github-copilot",
+  "model": "gpt-4.1",
+  "env": {
+    "COPILOT_GITHUB_TOKEN": "e2e-copilot-token-0001"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"github-copilot\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"gpt-4.1\"\nreasoning_effort = \"high\"\n"
+  },
+  "prompt": "Say hello.",
+  "script": [
+    {
+      "text": "Hello over Chat."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 1,
+    "stdout_contains": [
+      "Hello over Chat."
+    ],
+    "protocol": "chat/completions",
+    "absent_request_fields": [
+      "reasoning_effort",
+      "reasoning"
+    ]
+  }
+}

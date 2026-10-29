@@ -7319,10 +7319,13 @@ impl App {
             || self.cfg.base_url.contains("api.anthropic.com")
         {
             crate::api::anthropic::normalize_model_id(&id)
-        } else if !self.cfg.provider.is_empty() {
+        } else if !self.cfg.provider.is_empty()
+            && crate::providers::uses_catalog_host(&self.cfg.provider, &self.cfg.base_url)
+        {
             // Same story elsewhere: xAI dropped the Grok 4 line, Google dropped
             // `gemini-3-pro`, DeepSeek drops `deepseek-chat`. Providers without
-            // a confirmed retirement pass through untouched.
+            // a confirmed retirement, and proxies that may still serve an id
+            // the provider withdrew, pass through untouched.
             crate::providers::normalize_model_for(&self.cfg.provider, &id)
         } else {
             id

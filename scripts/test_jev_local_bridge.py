@@ -155,5 +155,29 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(ok)
 
 
+
+class WebRequestTests(unittest.TestCase):
+    """A web page can post to a loopback port (CSRF) or reach it through a
+    rebound DNS name; the bridge must answer neither, and nur's own requests
+    (loopback Host, no Origin) must still pass."""
+
+    def judge(self, headers):
+        from email.message import Message
+        handler = bridge.Handler.__new__(bridge.Handler)
+        handler.headers = Message()
+        for name, value in headers.items():
+            handler.headers[name] = value
+        return handler._from_browser_or_rebound()
+
+    def test_loopback_without_origin_passes(self):
+        for host in ("127.0.0.1:8765", "localhost:8765", "[::1]:8765", "127.0.0.1"):
+            self.assertFalse(self.judge({"Host": host}), host)
+
+    def test_browser_and_rebound_requests_are_refused(self):
+        self.assertTrue(self.judge({"Host": "127.0.0.1:8765", "Origin": "https://evil.example"}))
+        self.assertTrue(self.judge({"Host": "evil.example:8765"}))
+        self.assertTrue(self.judge({}))
+
+
 if __name__ == '__main__':
     unittest.main()

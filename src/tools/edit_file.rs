@@ -78,9 +78,11 @@ impl Tool for EditFile {
         let file_content = fs::read_to_string(&full)
             .map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
 
-        // First try exact match (fast path)
+        // First try exact match (fast path). A file with CRLF endings goes
+        // through the splice below even on an exact hit: a plain replace
+        // would drop an LF-only `new_string` into a CRLF file, mixing endings.
         let count = file_content.matches(&old).count();
-        if count > 0 {
+        if count > 0 && !file_content.contains("\r\n") {
             if count > 1 && !replace_all {
                 return Err(NurError::Tool(format!(
                     "old_string matched {count} times; set replace_all=true or make old_string unique"
@@ -308,7 +310,7 @@ fn denormalized_offset(original: &str, norm_off: usize) -> usize {
 /// a CRLF file, but the surrounding bytes must be preserved verbatim: rebuilding
 /// the file from the normalized copy and re-adding `\r` everywhere rewrites
 /// every line ending the file happened not to share.
-fn splice_normalized(
+pub(super) fn splice_normalized(
     original: &str,
     content_n: &str,
     old_n: &str,

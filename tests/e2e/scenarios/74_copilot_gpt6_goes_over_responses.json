@@ -1,0 +1,25 @@
+{
+  "description": "GitHub Copilot serves its GPT-5 and later models on /responses only; over Chat Completions they answer 'The requested model is not supported' (seen live 2026-10-29).",
+  "provider": "github-copilot",
+  "model": "gpt-6-luna",
+  "env": {
+    "COPILOT_GITHUB_TOKEN": "e2e-copilot-token-0001"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"github-copilot\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"gpt-6-luna\"\n"
+  },
+  "prompt": "Say hello.",
+  "script": [
+    {
+      "text": "Hello over Responses."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 1,
+    "stdout_contains": [
+      "Hello over Responses."
+    ],
+    "protocol": "responses"
+  }
+}

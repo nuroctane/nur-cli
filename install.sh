@@ -95,8 +95,11 @@ ensure_prereq() { # ensure_prereq <cmd> <pkg-name> <note> [fallback-cmd…]
     warn "${cmd} could not be auto-installed — needed for: ${note}"
   fi
 }
-bun_official() { curl -fsSL https://bun.sh/install | bash; export PATH="${HOME}/.bun/bin:${PATH}"; }
-uv_official()  { curl -LsSf https://astral.sh/uv/install.sh | sh; export PATH="${HOME}/.local/bin:${PATH}"; }
+# Fallback installers are pinned to a known release, not whatever "latest" is.
+BUN_VERSION="1.3.14"
+UV_VERSION="0.12.9"
+bun_official() { curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"; export PATH="${HOME}/.bun/bin:${PATH}"; }
+uv_official()  { curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh; export PATH="${HOME}/.local/bin:${PATH}"; }
 node_pkg="node"; [[ "${PKG}" == "apt" || "${PKG}" == "dnf" ]] && node_pkg="nodejs"
 ensure_prereq node   "${node_pkg}" "plur · ruflo · executor · browser"
 ensure_prereq bun    "oven-sh/bun/bun" "omp coding-agent backend" bun_official
@@ -105,7 +108,9 @@ ensure_prereq rg     "ripgrep"     "fast grep / glob"
 ensure_prereq ffmpeg "ffmpeg"      "extract_frames / design-from-video"
 # sgrep: local semantic code search, the model's first search tool. Not in
 # any package index yet, so it is a plain cargo build (ensure retries later).
-sgrep_cargo() { cargo install --git https://github.com/context-dot-dev/sgrep --locked; }
+# The commit matches src/ecosystem/lock.json, which `nur ecosystem ensure` uses.
+SGREP_REV="dde0c13c8d6081f9c6d6d1d33580eebf1034aecf"
+sgrep_cargo() { cargo install --git https://github.com/context-dot-dev/sgrep --rev "${SGREP_REV}" --locked; }
 ensure_prereq sgrep  ""            "sgrep semantic search" sgrep_cargo
 export PATH="${HOME}/.bun/bin:${HOME}/.local/bin:${PATH}"
 

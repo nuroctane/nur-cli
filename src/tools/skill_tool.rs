@@ -110,15 +110,7 @@ fn read_skill_body(skill: &crate::agent::skills::Skill) -> Result<String> {
     }
     // Re-read the file so large packs aren't truncated.
     let body = std::fs::read_to_string(&skill.path)
-        .map(|t| {
-            // Strip YAML frontmatter if present.
-            if let Some(content) = t.strip_prefix("---") {
-                if let Some(end) = content.find("---") {
-                    return content[end + 3..].trim().to_string();
-                }
-            }
-            t
-        })
+        .map(|t| crate::agent::skills::strip_frontmatter(&t).unwrap_or(t))
         .unwrap_or_else(|_| skill.body.clone());
     let body: String = body.chars().take(80_000).collect();
     Ok(format!(

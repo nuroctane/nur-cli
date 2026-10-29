@@ -188,6 +188,9 @@ pub enum Commands {
         /// The one chat the bot answers (else $TELEGRAM_CHAT_ID). Unset: pairing only, nothing runs
         #[arg(long)]
         chat: Option<i64>,
+        /// The one sender it obeys in a group chat (else $TELEGRAM_USER_ID). A group needs it
+        #[arg(long)]
+        user: Option<i64>,
     },
     /// Managed local models — bundle llama.cpp + run a GGUF locally (no API key)
     Local {

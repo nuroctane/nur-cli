@@ -266,6 +266,7 @@ pub fn spawn_command(label: &str, program: &str, args: &[String]) -> u64 {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        crate::tools::scrub_provider_keys(&mut cmd);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

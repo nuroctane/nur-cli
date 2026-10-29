@@ -328,6 +328,7 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         let mut tried_active_oauth = false;
         let mut legacy_auth = None;
         let mut mismatched = false;
+        let mut refresh_error = None;
         if let Some(auth) = load_auth()? {
             if provider_mismatch(&auth, exp) {
                 mismatched = true;
@@ -338,7 +339,13 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
                     // error here: the env / per-provider key below may still
                     // hold a working credential. The refresh error only wins
                     // when nothing else resolves.
-                    matching_oauth = resolve_oauth_access_token(exp).ok().flatten();
+                    matching_oauth = match resolve_oauth_access_token(exp) {
+                        Ok(token) => token,
+                        Err(e) => {
+                            refresh_error = refresh_failure_reason(&e).or(refresh_error);
+                            None
+                        }
+                    };
                 } else {
                     let k = auth.api_key.trim().to_string();
                     if !k.is_empty() && auth.provider.is_empty() {
@@ -368,7 +375,8 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
         // resolve_oauth_access_token would select the same active OAuth session
         // again. A failed refresh must not pay a second network timeout before
         // reaching the remaining credential sources.
-        let failover_oauth = load_provider_oauth_token_after(exp, tried_active_oauth);
+        let failover_oauth =
+            load_provider_oauth_token_after(exp, tried_active_oauth, &mut refresh_error);
         let failover_key = load_provider_key(exp);
         let nur_global = std::env::var("NUR_API_KEY")
             .ok()
@@ -485,6 +493,12 @@ pub fn resolve_api_key_for(expected_provider: Option<&str>) -> Result<String> {
                     }
                 }
             }
+        }
+        if let Some(reason) = refresh_error {
+            return Err(NurError::SignInExpired {
+                provider: exp.to_string(),
+                reason,
+            });
         }
         if mismatched {
             if let Ok(Some(auth)) = load_auth() {
@@ -655,9 +669,9 @@ pub fn refresh_oauth_in_place(auth: &mut Auth) -> Result<bool> {
     }
     let Some(refresh) = auth.refresh_token.clone().filter(|s| !s.trim().is_empty()) else {
         if exp <= now {
-            return Err(NurError::Other(
-                "OAuth token expired with no refresh token. Run /login again.".into(),
-            ));
+            return Err(NurError::Other(format!(
+                "OAuth token expired with no refresh token. {SIGN_IN_AGAIN}"
+            )));
         }
         return Ok(false);
     };
@@ -665,7 +679,7 @@ pub fn refresh_oauth_in_place(auth: &mut Auth) -> Result<bool> {
         Ok(refreshed) => Ok(refreshed),
         Err(_) if exp > now => Ok(false),
         Err(error) => Err(NurError::Other(format!(
-            "OAuth token expired and refresh failed ({error}). Run /login again."
+            "OAuth token expired and refresh failed ({error}). {SIGN_IN_AGAIN}"
         ))),
     }
 }
@@ -1640,17 +1654,43 @@ fn save_provider_session(auth: &Auth) -> Result<()> {
 /// Load a usable bearer for a failover provider from the per-provider OAuth
 /// store (refreshing if needed). `None` if no session or refresh failed hard.
 pub fn load_provider_oauth_token(provider_id: &str) -> Option<String> {
-    load_provider_oauth_token_after(provider_id, false)
+    load_provider_oauth_token_after(provider_id, false, &mut None)
 }
 
-fn load_provider_oauth_token_after(provider_id: &str, already_tried: bool) -> Option<String> {
+/// Ends every error meaning "this saved session is dead": expired with no
+/// refresh token, or a refresh the provider refused.
+const SIGN_IN_AGAIN: &str = "Run /login again.";
+
+/// The reason for [`NurError::SignInExpired`], when `error` really is a dead
+/// session. A contended store lock or a failed store write is not, and must
+/// not send the user to sign in again over a token that still works.
+fn refresh_failure_reason(error: &NurError) -> Option<String> {
+    let text = error.to_string();
+    let reason = text.trim().strip_suffix(SIGN_IN_AGAIN)?;
+    Some(reason.trim().trim_end_matches('.').to_string())
+}
+
+/// `refresh_error` receives why the provider's own session could not be used,
+/// so a caller that finds no other credential can say so instead of claiming
+/// nothing is saved.
+fn load_provider_oauth_token_after(
+    provider_id: &str,
+    already_tried: bool,
+    refresh_error: &mut Option<String>,
+) -> Option<String> {
     // Google-family aliases also resolve the same matching active credential.
     // After that refresh failed, probing each alias would only retry it.
     if already_tried {
         return None;
     }
-    if let Some(t) = resolve_oauth_access_token(provider_id).ok().flatten() {
-        return Some(t);
+    match resolve_oauth_access_token(provider_id) {
+        Ok(Some(t)) => return Some(t),
+        Ok(None) => {}
+        Err(e) => {
+            if let Some(reason) = refresh_failure_reason(&e) {
+                *refresh_error = Some(reason);
+            }
+        }
     }
     // google family alias fallback
     const GOOGLE_FAMILY: &[&str] = &["google", "antigravity", "google-oauth"];
@@ -1993,6 +2033,39 @@ pub fn key_fingerprint(key: &str) -> String {
     format!("{head}…{tail}")
 }
 
+/// The `/auth` manager's per-provider view for `nur auth status`: every catalog
+/// provider holding a credential, with where it lives. Hints ("import --from"),
+/// the local no-auth marker and the active marker are dropped, since the lines
+/// above already describe the active route.
+fn print_signed_in_providers() {
+    let rows: Vec<(String, String)> = provider_credential_summaries()
+        .into_iter()
+        .filter(|(id, _)| crate::providers::by_id(id).is_some())
+        .filter_map(|(id, summary)| {
+            let held: Vec<&str> = summary
+                .split(" · ")
+                .filter(|part| {
+                    part.contains("OAuth")
+                        || *part == "saved key"
+                        || part.starts_with("env ")
+                        || part.ends_with(" rotating")
+                        || *part == "CLI available"
+                })
+                .collect();
+            (!held.is_empty()).then(|| (id, held.join(" · ")))
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    let width = rows.iter().map(|(id, _)| id.len()).max().unwrap_or(0);
+    println!();
+    println!("signed in ({}):", rows.len());
+    for (id, held) in rows {
+        println!("  {id:<width$}  {held}");
+    }
+}
+
 pub fn auth_status() -> Result<()> {
     // Status should report mismatch without hard-failing the command.
     let cfg_provider = crate::config::load_config()
@@ -2036,6 +2109,7 @@ pub fn auth_status() -> Result<()> {
         println!("expires: no expiry");
         println!("key: {}", key_fingerprint(&key));
         println!("note: env keys override ~/.nur/auth.json");
+        print_signed_in_providers();
         return Ok(());
     }
 
@@ -2066,9 +2140,11 @@ pub fn auth_status() -> Result<()> {
             println!("expires: {}", format_expires_relative(auth.expires_at));
             println!("key: {}", key_fingerprint(&auth.api_key));
             println!("note: {}", credential_store_note(&auth_path()));
+            print_signed_in_providers();
             Ok(())
         }
         _ => {
+            print_signed_in_providers();
             println!("authenticated: no");
             println!("run: nur auth login");
             println!("or set NUR_API_KEY (or a vendor key env for your provider)");
