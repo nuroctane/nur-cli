@@ -412,10 +412,7 @@ pub(crate) fn program(command: &str) -> Option<String> {
 fn strip_wrappers(command: &str) -> String {
     let mut words: Vec<&str> = command.split_whitespace().collect();
     let mut from_stdin = false;
-    loop {
-        let Some(first) = words.first().copied() else {
-            break;
-        };
+    while let Some(first) = words.first().copied() {
         let name = first.rsplit(['/', '\\']).next().unwrap_or(first);
         let name = name
             .strip_suffix(".exe")

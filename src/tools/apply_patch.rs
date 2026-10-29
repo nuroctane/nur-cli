@@ -277,9 +277,8 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
     for (n, line) in lines.iter().enumerate() {
         out.push_str(line);
         let ending = endings.get(n).copied().unwrap_or("");
-        if n < last {
-            out.push_str(if ending.is_empty() { eol } else { ending });
-        } else if want_trailing_nl {
+        // Every line but the last ends; the last one only if the file did.
+        if n < last || want_trailing_nl {
             out.push_str(if ending.is_empty() { eol } else { ending });
         }
     }
