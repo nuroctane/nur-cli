@@ -108,7 +108,8 @@ class Terminal:
                         return text
             self.read = read_utf8
             self.write = lambda s: os.write(master, s.encode())
-        threading.Thread(target=self._read, daemon=True).start()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
 
     def _read(self):
         try:
@@ -182,7 +183,7 @@ class Terminal:
         self.closed = True
         if os.name == 'nt':
             self.proc.terminate(force=True)
-            self.proc.close(force=True)
+            self.proc.close(force=True, reader=self.reader)
         else:
             self.proc.terminate()
             self.proc.wait(timeout=5)

@@ -34,17 +34,18 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false # never use caching in release builds
 
-      # Release events: force the tag version. Manual runs: trust npm/package.json
+      # Release events: verify the tag version. Manual runs: trust npm/package.json
       # as committed (the shim version can lead the binary version).
-      - name: Sync package version on release tags
+      - name: Verify package version on release tags
         if: github.event_name == 'release'
         run: |
           cd npm
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = process.argv[1];
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            if (pkg.version !== process.argv[1]) {
+              throw new Error('Release tag does not match npm/package.json: ' + process.argv[1] + ' vs ' + pkg.version);
+            }
           " "${GITHUB_REF_NAME#v}"
 
       - name: Publish from npm/

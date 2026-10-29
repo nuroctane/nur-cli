@@ -121,7 +121,7 @@ def external_skill_refresh(binary):
     (parent / 'seed').mkdir()
     (parent / 'seed/SKILL.md').write_text('---\nname: refresh-seed\ndescription: Fixture\n---\nSeed.', encoding='utf-8')
     refreshed = subprocess.run([str(binary), 'ecosystem', 'refresh-skills'], cwd=workspace,
-                               env=env, capture_output=True, text=True, timeout=60)
+                               env=env, capture_output=True, text=True, encoding='utf-8', timeout=60)
     assert refreshed.returncode == 0, refreshed.stdout + refreshed.stderr
     snapshot = json.loads((home / '.nur/cache/skills-index.json').read_text(encoding='utf-8'))
     assert any(skill['name'] == 'refresh-seed' for skill in snapshot['skills'])

@@ -54,6 +54,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Verify release tag matches package versions
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, tomllib
+          tag = os.environ['GITHUB_REF_NAME']
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version']
+          npm_version = json.loads(pathlib.Path('npm/package.json').read_text())['version']
+          if tag != f'v{version}' or npm_version != version:
+              raise SystemExit(f'Release mismatch: tag={tag}, Rust={version}, npm={npm_version}')
+          PY
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
@@ -69,6 +81,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $env:NUR_NO_UPDATE = '1'
+          $version = & "target/${{ matrix.target }}/release/nur.exe" --version
+          if ($LASTEXITCODE -ne 0 -or $version -ne "nur $($env:GITHUB_REF_NAME.TrimStart('v'))") {
+            throw "Built binary does not match release tag: $version"
+          }
           Copy-Item "target/${{ matrix.target }}/release/nur.exe" "${{ matrix.asset }}"
           $hash = (Get-FileHash "${{ matrix.asset }}" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  ${{ matrix.asset }}" | Set-Content "${{ matrix.asset }}.sha256" -Encoding ascii

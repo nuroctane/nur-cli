@@ -8,6 +8,7 @@ import codecs
 import ctypes as c
 from ctypes import wintypes as w
 import subprocess
+import time
 
 
 class Coord(c.Structure):
@@ -55,6 +56,8 @@ read_file = api('ReadFile', w.BOOL, w.HANDLE, c.c_void_p, w.DWORD, c.POINTER(w.D
 write_file = api('WriteFile', w.BOOL, w.HANDLE, c.c_void_p, w.DWORD, c.POINTER(w.DWORD), c.c_void_p)
 wait_process = api('WaitForSingleObject', w.DWORD, w.HANDLE, w.DWORD)
 terminate_process = api('TerminateProcess', w.BOOL, w.HANDLE, w.UINT)
+open_thread = api('OpenThread', w.HANDLE, w.DWORD, w.BOOL, w.DWORD)
+cancel_sync_io = api('CancelSynchronousIo', w.BOOL, w.HANDLE)
 
 
 def checked(ok):
@@ -65,6 +68,7 @@ def checked(ok):
 class ConPtyProcess:
     def __init__(self, binary, cwd, env, columns=120, rows=32, args=()):
         self.input = self.output = self.console = self.process = None
+        self.closing = False
         self.decoder = codecs.getincrementaldecoder('utf-8')()
         input_read, input_write, output_read, output_write = (w.HANDLE() for _ in range(4))
         attributes = None
@@ -115,7 +119,7 @@ class ConPtyProcess:
     def read(self):
         buffer = c.create_string_buffer(65536)
         count = w.DWORD()
-        while True:
+        while not self.closing:
             if not read_file(self.output, buffer, len(buffer), c.byref(count), None):
                 error = c.get_last_error()
                 if error in (6, 109, 232):
@@ -126,6 +130,7 @@ class ConPtyProcess:
             text = self.decoder.decode(buffer.raw[:count.value])
             if text:
                 return text
+        return ''
 
     def write(self, text):
         data = text.encode('utf-8')
@@ -144,10 +149,34 @@ class ConPtyProcess:
             checked(terminate_process(self.process, 1))
             wait_process(self.process, 5000)
 
-    def close(self, force=True):
+    def close(self, force=True, reader=None):
         if self.console:
             close_console(self.console)
             self.console = None
+        # Keep draining through ClosePseudoConsole, then stop the reader before
+        # CloseHandle: closing a pipe with a synchronous ReadFile outstanding
+        # can block forever. Cancellation can race the next read, so retry until
+        # the reader has exited rather than assuming one cancellation is enough.
+        self.closing = True
+        if reader is not None and reader.is_alive():
+            thread = open_thread(0x00100001, False, reader.native_id)  # SYNCHRONIZE | THREAD_TERMINATE
+            if not thread:
+                # The reader may have exited between is_alive and OpenThread.
+                reader.join(.05)
+                if not reader.is_alive():
+                    thread = None
+                else:
+                    checked(thread)
+            try:
+                deadline = time.monotonic() + 5
+                while reader.is_alive() and time.monotonic() < deadline:
+                    cancel_sync_io(thread)
+                    reader.join(.05)
+                if reader.is_alive():
+                    raise TimeoutError('ConPTY output reader did not stop')
+            finally:
+                if thread:
+                    close_handle(thread)
         for name in ('input', 'output', 'process'):
             handle = getattr(self, name)
             if handle:

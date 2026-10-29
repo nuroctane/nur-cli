@@ -33,6 +33,10 @@ Artifacts are under `target/startup-e2e/`. Optional scenario names:
 `failed-auth-fallback`, `effort-persists`, `commands-during-indexing`,
 `controls-during-models`, `compact-during-indexing`, `banner-animates`.
 
+On Windows, cleanup drains ConPTY through console shutdown, then cancels and
+joins the output reader before closing its pipe. Subprocess output is decoded
+as UTF-8 explicitly so the host code page cannot hide failures.
+
 ## Scenarios
 
 One JSON file per scenario in `scenarios/`:

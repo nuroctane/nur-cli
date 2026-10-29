@@ -8,9 +8,6 @@ use std::path::{Path, PathBuf};
 
 /// Preview budget (chars) for a spilled body, split ~70% head / ~30% tail.
 const PREVIEW_CHARS: usize = 2_000;
-/// Room kept for the truncation marker (count, wording, spill path) so a
-/// preview under a small `max_chars` still lands under it.
-const MARKER_RESERVE: usize = 200;
 
 /// Tools whose results arrive already bounded (head/tail within the budget
 /// the model asked for, full text spilled). Bounding them again would hand
@@ -34,6 +31,12 @@ pub fn shared_blob_dir() -> PathBuf {
 /// path stays below `tool-results`, so it remains readable by the normal
 /// read-file sandbox exception.
 pub fn write_content_addressed_blob(body: &str) -> Result<PathBuf, String> {
+    let path = content_addressed_blob_path(body);
+    write_blob(&path, body)?;
+    Ok(path)
+}
+
+fn content_addressed_blob_path(body: &str) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(body.as_bytes());
     let digest = hasher
@@ -41,12 +44,14 @@ pub fn write_content_addressed_blob(body: &str) -> Result<PathBuf, String> {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
-    let path = shared_blob_dir().join(format!("sha256-{digest}.txt"));
+    shared_blob_dir().join(format!("sha256-{digest}.txt"))
+}
+
+fn write_blob(path: &Path, body: &str) -> Result<(), String> {
     if path.is_file() {
-        return Ok(path);
+        return Ok(());
     }
-    atomic_write(&path, body.as_bytes()).map_err(|e| format!("write blob: {e}"))?;
-    Ok(path)
+    atomic_write(path, body.as_bytes()).map_err(|e| format!("write blob: {e}"))
 }
 
 /// True when `path` resolves under the nur tool-results spill directory.
@@ -107,17 +112,24 @@ pub fn maybe_spill(_session_id: &str, _tool: &str, body: String, max_chars: usiz
     if total_chars <= max_chars {
         return body;
     }
-    let budget = PREVIEW_CHARS
-        .min(max_chars.saturating_sub(MARKER_RESERVE))
-        .max(1);
     // Never spill obvious auth payloads into a world-readable spill dir.
     if body_looks_sensitive(&body) {
-        return truncate_only(&body, budget);
+        return truncate_only(&body, max_chars);
     }
-    let path = match write_content_addressed_blob(&body) {
-        Ok(path) => path,
-        Err(_) => return truncate_only(&body, budget),
-    };
+    let path = content_addressed_blob_path(&body);
+    // The path can be much longer than a fixed reserve. Count the complete
+    // marker first, using the full byte count as an upper bound for its digits.
+    let reserve = format!(
+        "...{} bytes truncated; complete output in {}...",
+        body.len(),
+        path.display()
+    )
+    .chars()
+    .count();
+    if reserve >= max_chars || write_blob(&path, &body).is_err() {
+        return truncate_only(&body, max_chars);
+    }
+    let budget = PREVIEW_CHARS.min(max_chars - reserve);
     let (head_end, tail_start) = head_tail_bounds(&body, total_chars, budget);
     format!(
         "{}...{} bytes truncated; complete output in {}...{}",
@@ -156,8 +168,15 @@ fn head_tail_bounds(body: &str, total_chars: usize, budget: usize) -> (usize, us
 }
 
 /// Head-only cut for bodies that must not reach disk (or when the spill
-/// failed): nothing beyond `keep` chars survives, so say so.
-fn truncate_only(body: &str, keep: usize) -> String {
+/// failed). The marker shares the budget with the retained text.
+fn truncate_only(body: &str, max_chars: usize) -> String {
+    let reserve = format!("...{} bytes truncated; not spilled...", body.len())
+        .chars()
+        .count();
+    if reserve >= max_chars {
+        return body.chars().take(max_chars).collect();
+    }
+    let keep = PREVIEW_CHARS.min(max_chars - reserve);
     let head_end = body
         .char_indices()
         .nth(keep)
@@ -245,6 +264,27 @@ mod tests {
             .and_then(|n| n.parse().ok())
             .unwrap();
         assert_eq!(kept + cut, body.len(), "{out}");
+    }
+
+    // Even the truncation marker may not fit. Tiny caps must remain bounded
+    // and UTF-8 safe, and cannot create an unreadable spill without a path.
+    #[test]
+    fn tiny_limits_and_sensitive_output_stay_bounded() {
+        for body in [
+            "é".repeat(3000),
+            format!("Authorization: Bearer {}", "ü".repeat(3000)),
+        ] {
+            for limit in [1, 2, 10, 40, 100] {
+                let out = maybe_spill("s", "read_file", body.clone(), limit);
+                assert!(out.chars().count() <= limit, "limit {limit}: {out}");
+                assert!(!out.contains("complete output in"));
+                if out.contains("bytes truncated") {
+                    let (kept, marker) = out.split_once("...").unwrap();
+                    let cut: usize = marker.split(" bytes").next().unwrap().parse().unwrap();
+                    assert_eq!(kept.len() + cut, body.len());
+                }
+            }
+        }
     }
 
     #[test]

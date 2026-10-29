@@ -1,0 +1,20 @@
+{
+  "description": "A read result stays within a tiny inline budget even when its spill path cannot fit; Unicode truncation remains readable.",
+  "prompt": "Read sample.txt and summarize it.",
+  "setup_files": {
+    "sample.txt": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+  },
+  "setup_home_files": {
+    "config.toml": "provider='vllm'\nbase_url='http://127.0.0.1:{port}/v1'\nmodel='e2e-model'\ntool_result_max_chars=64\ncontext_register_min_chars=0\n[headroom]\nenabled=false\n"
+  },
+  "script": [
+    {"tool_calls": [{"name": "read_file", "arguments": {"path": "sample.txt"}}]},
+    {"text": "Preview bounded."}
+  ],
+  "expect": {
+    "requests": 2,
+    "max_tool_result_chars": 64,
+    "stdout_contains": ["Preview bounded."],
+    "tool_results": [{"request": 2, "contains": ["bytes truncated; not spilled"], "lacks": ["complete output in"]}]
+  }
+}

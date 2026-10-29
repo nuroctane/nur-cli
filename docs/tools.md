@@ -2,6 +2,10 @@
 
 All native tools available to the NurCLI agent.
 
+Large tool results are stored on disk with a bounded preview. The preview's
+size budget includes the complete spill path; long paths and tiny limits stay
+within that budget. If the path cannot fit, the result is truncated without a spill.
+
 ## Tool families
 
 | Family | Tools | Colour |
