@@ -11,8 +11,9 @@
 name: publish-npm
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: [release]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -20,13 +21,18 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    uses: ./.github/workflows/validate.yml
   publish:
-    needs: validate
+    # The release workflow already validated this exact source on all platforms.
+    # Never execute a fork's source with this job's publishing permissions.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -34,19 +40,35 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false # never use caching in release builds
 
-      # Release events: verify the tag version. Manual runs: trust npm/package.json
-      # as committed (the shim version can lead the binary version).
-      - name: Verify package version on release tags
-        if: github.event_name == 'release'
+      - name: Verify public signed assets before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          cd npm
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            if (pkg.version !== process.argv[1]) {
-              throw new Error('Release tag does not match npm/package.json: ' + process.argv[1] + ' vs ' + pkg.version);
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('npm/package.json', 'utf8'));
+          const tag = `v${pkg.version}`;
+          const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          if (event.workflow_run && event.workflow_run.head_branch !== tag) {
+            throw new Error(`Release tag does not match npm package: ${event.workflow_run.head_branch} vs ${tag}`);
+          }
+          const response = await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/releases/tags/${tag}`, {
+            headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json' }
+          });
+          if (!response.ok) throw new Error(`Release ${tag} is unavailable: HTTP ${response.status}`);
+          const release = await response.json();
+          if (release.tag_name !== tag || release.draft || release.prerelease) {
+            throw new Error(`${tag} is not a public stable release`);
+          }
+          const assets = new Map(release.assets.map(asset => [asset.name, asset.size]));
+          const names = ['nur-windows-x86_64.exe', 'nur-macos-aarch64', 'nur-macos-x86_64', 'nur-linux-x86_64', 'nur-skills.zip'];
+          for (const name of names) {
+            for (const suffix of ['', '.sha256', '.minisig']) {
+              if (!(assets.get(name + suffix) > 0)) throw new Error(`Missing signed release asset: ${name + suffix}`);
             }
-          " "${GITHUB_REF_NAME#v}"
+          }
+          console.log(`${tag}: all signed release assets are available`);
+          JS
 
       - name: Publish from npm/
         run: npm publish

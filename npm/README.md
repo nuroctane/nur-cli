@@ -39,19 +39,19 @@ npm publish
 ```
 
 Bump `version` in `npm/package.json` to match the release tag before publishing.
-`FALLBACK_VERSION` inside `bin.js` should match too (it is only used when the
-`latest/download` redirect is unreachable).
+The GitHub workflow publishes after the validated release build completes and
+checks that every binary, the skill pack, checksums and signatures are public.
+`bin.js` reads the package version and downloads that exact release.
 
 ## Notes
 
 - `postinstall` runs `node bin.js --ensure`, so a plain `npm i -g nur-cli`
   performs the full install without a second command. It skips re-downloading
   when the binary is already present.
-- Re-running `npx nur-cli` always fetches the latest release binary, then
-  refreshes the stack via `nur install`.
+- `npx nur-cli` installs its own package's release binary, then refreshes the
+  stack via `nur install`.
 - `nur update` continues to self-update the native binary directly from GitHub
   Releases; the npm package never needs to be involved again after install.
-
 ---
 
 ## License
