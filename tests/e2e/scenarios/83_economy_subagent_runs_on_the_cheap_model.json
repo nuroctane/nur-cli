@@ -1,0 +1,29 @@
+{
+  "description": "An agent call with cost_mode economy runs its child natively on the configured economy_model with low reasoning effort (no external CLI), while the parent stays on its own model.",
+  "prompt": "Have a cheap subagent list the files.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\neconomy_model = \"e2e-cheap-model\"\n"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "agent",
+          "arguments": { "description": "List files", "prompt": "List the workspace files.", "subagent_type": "explore", "cost_mode": "economy" }
+        }
+      ]
+    },
+    { "text": "Child report: nothing here." },
+    { "text": "The cheap subagent found nothing." }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "stdout_contains": ["The cheap subagent found nothing."],
+    "request_contains": [
+      { "request": 1, "contains": ["\"model\": \"e2e-model\""] },
+      { "request": 2, "contains": ["\"model\": \"e2e-cheap-model\"", "List the workspace files."] },
+      { "request": 3, "contains": ["\"model\": \"e2e-model\"", "Child report: nothing here."] }
+    ]
+  }
+}

@@ -486,7 +486,7 @@ nur ecosystem ensure
 | `/cua` | Computer-use desktop driver: `on` (always-on, elevated) \| `off` (on demand, default) \| `status` |
 | `/failover` | Cross-provider failover in the provider picker (space toggles a provider into the chain) |
 | `/factory-overnight` | Fractal-first overnight factory driven from `HANDOFF.md` (Unix preferred) |
-| `/prewalk` | OMP-style staging: a strong model plans, then a cheap model takes over at the first edit (`on` \| `off` \| `status` \| `into <model>` \| `reset`) |
+| `/prewalk` | Staging: a strong model plans, then a cheap model takes over at the first edit (`on` \| `off` \| `status` \| `into <model>` \| `reset`) |
 | `/skeuo` | Activate the skeuomorphic-UI skill (`/skeuomorphic-ui`) |
 | `/fable-loop` · `/fable-judge` | Skills: orchestrated Fable multi-step loop · adversarial verification of finished work |
 | `/tech-spec` · `/test-driven-development` · `/systematic-debugging` | Skills: typed call-stack handoff · TDD red-green-refactor · root-cause-first debugging |

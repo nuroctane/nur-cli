@@ -228,9 +228,7 @@ pub fn run_full_install() -> Result<()> {
     }
 
     // ── 4. Ecosystem (blocking — this is the whole point) ────────────────
-    step(
-        "Provisioning ecosystem (graphify · plur · ruflo · omp · browser · CAD · mobile · skills)…",
-    );
+    step("Provisioning ecosystem (graphify · plur · ruflo · browser · CAD · mobile · skills)…");
     theme::print_info("this can take a few minutes the first time — hang tight");
     let st = ecosystem::ensure_ecosystem(true);
     print!("{}", st.report());
@@ -1532,7 +1530,7 @@ fn ensure_prereqs_best_effort() {
             if which("bun") || which("bun.exe") {
                 theme::print_ok("bun installed");
             } else {
-                theme::print_info("bun not on PATH yet - needed for omp");
+                theme::print_info("bun not on PATH yet - used by akm");
             }
         } else {
             theme::print_ok("bun already installed");
@@ -1567,7 +1565,7 @@ fn ensure_prereqs_best_effort() {
     {
         for (cmd, note) in [
             ("node", "plur · ruflo · executor · browser"),
-            ("bun", "omp"),
+            ("bun", "akm"),
             ("uv", "graphify"),
             ("rg", "fast grep"),
             ("ffmpeg", "extract_frames"),

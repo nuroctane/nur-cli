@@ -61,7 +61,7 @@ command -v cargo >/dev/null || { echo "cargo not found after rustup; open a new 
 ok "cargo $(cargo --version)"
 
 # ── prerequisites (auto-install latest when missing; best-effort) ──────────
-# node 20+ (plur · ruflo · executor · browser) · bun (omp backend) ·
+# node 20+ (plur · ruflo · executor · browser) · bun (akm runtime) ·
 # uv (graphify) · ripgrep (fast search) · ffmpeg (extract_frames).
 step "Checking prerequisites (node · bun · uv · rg · ffmpeg)…"
 PKG=""
@@ -102,7 +102,7 @@ bun_official() { curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION
 uv_official()  { curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh; export PATH="${HOME}/.local/bin:${PATH}"; }
 node_pkg="node"; [[ "${PKG}" == "apt" || "${PKG}" == "dnf" ]] && node_pkg="nodejs"
 ensure_prereq node   "${node_pkg}" "plur · ruflo · executor · browser"
-ensure_prereq bun    "oven-sh/bun/bun" "omp coding-agent backend" bun_official
+ensure_prereq bun    "oven-sh/bun/bun" "akm runtime" bun_official
 ensure_prereq uv     "uv"          "graphify" uv_official
 ensure_prereq rg     "ripgrep"     "fast grep / glob"
 ensure_prereq ffmpeg "ffmpeg"      "extract_frames / design-from-video"
@@ -153,8 +153,8 @@ done
 
 ok "Installed ${DEST_DIR}/nur ($("${DEST_DIR}/nur" --version))"
 
-# ── Ecosystem: Graphify · PLUR · Ruflo · omp · browser (blocking) ─────────
-step "Provisioning agent ecosystem (graphify · plur · ruflo · omp · browser)…"
+# ── Ecosystem: Graphify · PLUR · Ruflo · browser (blocking) ───────────────
+step "Provisioning agent ecosystem (graphify · plur · ruflo · browser)…"
 "${DEST_DIR}/nur" ecosystem ensure --force || warn "Ecosystem ensure incomplete — re-run: nur install"
 ok "Ecosystem provisioned"
 

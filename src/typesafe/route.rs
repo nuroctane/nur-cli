@@ -603,6 +603,7 @@ mod tests {
             note: String::new(),
             provider_id: String::new(),
             model_id: String::new(),
+            tool_call: None,
         }
     }
 

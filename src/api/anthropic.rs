@@ -250,6 +250,7 @@ fn apply_prompt_caching(body: &mut Value) {
 fn push_item(item: &Value, messages: &mut Vec<Value>, system: &mut Option<String>) {
     if item.get("type").and_then(|t| t.as_str()) == Some("function_call_output") {
         let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+        let call_id = super::wire_ids::fit(call_id, super::wire_ids::IdRule::Anthropic);
         let output = item.get("output").and_then(|v| v.as_str()).unwrap_or("");
         messages.push(json!({
             "role": "user",
@@ -263,12 +264,16 @@ fn push_item(item: &Value, messages: &mut Vec<Value>, system: &mut Option<String
     }
     if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
         let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+        let call_id = super::wire_ids::fit(call_id, super::wire_ids::IdRule::Anthropic);
         let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let args_str = item
-            .get("arguments")
-            .and_then(|v| v.as_str())
-            .unwrap_or("{}");
-        let input: Value = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
+        let args = super::types::call_arguments(item);
+        // `input` must be an object; freeform text is kept under `input`.
+        let input = match serde_json::from_str::<Value>(&args) {
+            Ok(object @ Value::Object(_)) => object,
+            Ok(other) => json!({ "input": other }),
+            Err(_) if args.trim().is_empty() => json!({}),
+            Err(_) => json!({ "input": args }),
+        };
         messages.push(json!({
             "role": "assistant",
             "content": [{

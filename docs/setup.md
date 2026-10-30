@@ -62,7 +62,7 @@ Does **everything**: Rust if needed, prereqs, build, PATH, ecosystem packs, brow
 | Binary | Copies itself → `%USERPROFILE%\.local\bin\nur.exe` |
 | PATH | Adds `~\.local\bin` to User PATH |
 | Prereqs | Best-effort: node · bun · uv · rg · ffmpeg |
-| Ecosystem | `ecosystem ensure --force` (graphify · plur · ruflo · omp · browser · skills) |
+| Ecosystem | `ecosystem ensure --force` (graphify · plur · ruflo · browser · skills; omp only with `ecosystem_omp = true`) |
 | Browser | Stages Chromium extension for your default browser |
 | Hook | Orca hook if present |
 | Auth | Saves `NUR_API_KEY` if set in the environment (vendor keys such as `META_API_KEY` are read by their own provider, not saved) |
@@ -176,7 +176,7 @@ Everything is **on your machine only**. Secrets never go into the git checkout. 
 | **Rust / cargo** (rustup) | `~/.cargo/` | Compiling NurCLI (**one-liner / cargo only** — not npx / release EXE) |
 | **Git** | system | Clone / update source (**one-liner / clone only**) |
 | **Node.js 20+** | system / winget / brew / apt | PLUR, Ruflo, Executor, skills, browser CLI, AKM |
-| **Bun** | `~/.bun/` | **omp** (Oh My Pi) |
+| **Bun** | `~/.bun/` | AKM; **omp** (Oh My Pi) when `ecosystem_omp = true` |
 | **uv** | `~/.local/bin` | **Graphify** |
 | **ripgrep** | system | Fast `grep` / `glob` |
 | **ffmpeg** | system | `extract_frames` / design-from-video |

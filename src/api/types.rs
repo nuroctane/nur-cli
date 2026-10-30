@@ -173,6 +173,14 @@ pub enum OutputItem {
         summary: Vec<Value>,
         #[serde(default)]
         encrypted_content: Option<String>,
+        /// Route that produced it (`responses_wire::ORIGIN_KEY`); set by the
+        /// client, never by a server.
+        #[serde(
+            default,
+            rename = "nur_origin",
+            skip_serializing_if = "Option::is_none"
+        )]
+        origin: Option<String>,
     },
     #[serde(rename = "function_call")]
     FunctionCall {
@@ -497,6 +505,17 @@ pub fn function_call_output_item(call_id: &str, output: &str) -> Value {
     })
 }
 
+/// A history call's arguments as the JSON string every protocol is built from.
+/// Gateways and imported sessions can leave an object (or a custom tool's
+/// `input`) where a string is expected; reading only strings sent `{}`.
+pub fn call_arguments(item: &Value) -> String {
+    match item.get("arguments").or_else(|| item.get("input")) {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Null) | None => "{}".to_string(),
+        Some(other) => other.to_string(),
+    }
+}
+
 /// Replay reasoning + messages + function_calls from a response into next input.
 pub fn replay_output_items(output: &[OutputItem]) -> Vec<Value> {
     let mut items = Vec::new();
@@ -506,6 +525,7 @@ pub fn replay_output_items(output: &[OutputItem]) -> Vec<Value> {
                 id,
                 summary,
                 encrypted_content,
+                origin,
             } => {
                 if let Some(enc) = encrypted_content {
                     let mut v = serde_json::json!({
@@ -515,6 +535,9 @@ pub fn replay_output_items(output: &[OutputItem]) -> Vec<Value> {
                     });
                     if let Some(id) = id {
                         v["id"] = Value::String(id.clone());
+                    }
+                    if let Some(origin) = origin {
+                        v[super::responses_wire::ORIGIN_KEY] = Value::String(origin.clone());
                     }
                     items.push(v);
                 }

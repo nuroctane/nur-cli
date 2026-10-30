@@ -60,8 +60,8 @@ pub mod spill;
 mod submit_plan;
 pub mod tldraw;
 mod todo_write;
-pub mod treg;
 pub mod tool_search;
+pub mod treg;
 pub mod undo;
 mod web_fetch;
 mod web_search;
@@ -559,6 +559,10 @@ impl Tool for AgentStub {
          concurrently** (up to 4 at a time), so independent investigations cost \
          roughly one investigation's wall time. Split work that does not share \
          state: one subagent per subsystem, per hypothesis, or per file cluster. \
+         Hand over large context by name instead of pasting it: list existing \
+         `context` variables (a spilled tool result, a registered doc) in \
+         `context_vars` and the child can read exactly those, read-only, on any \
+         provider. Nothing else in your store is shared. \
          \n\nCROSS-PROVIDER DEPLOYMENT: set `provider` to run this subagent on a \
          DIFFERENT model provider than yours - this is how you 'deploy a subagent \
          on gemini', 'use grok', 'spawn a claude subagent', etc. When the user's \
@@ -574,9 +578,7 @@ impl Tool for AgentStub {
          \"openrouter\", \"ollama\" (local). `model` is optional - omit it and the \
          subagent uses that provider's default model (recommended unless you know \
          a valid model id for that provider). The subagent uses that \
-         provider's stored credentials, importing a logged-in vendor CLI session \
-         (Claude Code, Codex, agy, gemini, …) automatically when there is no key \
-         on disk. If you are NOT signed in to the requested provider, the spawn is \
+         provider's stored nur credentials. If you are NOT signed in to the requested provider, the spawn is \
          BLOCKED - it does NOT fall back to your provider - and the TUI pops /login \
          pre-selected to that provider. In that case tell the user to finish /login \
          (or run /login <provider>); nur then hands you the exact re-deploy call. \
@@ -620,6 +622,18 @@ impl Tool for AgentStub {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Optional handoff input filter (OpenAI Agents SDK): workspace files to load into the child's prompt so it gets exactly the context it needs. Paths are workspace-relative."
+                },
+                "context_vars": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 16,
+                    "description": "Optional: names of your existing `context` store variables the child may read (read-only). Only these are shared; an unknown name fails the call."
+                },
+                "cost_mode": {
+                    "type": "string",
+                    "enum": ["default", "economy"],
+                    "default": "default",
+                    "description": "economy: run on a cheap model (the configured economy_model, else the cheapest tool-capable model your account has on that provider) with low reasoning effort. Good for mechanical or bulk work. Ignored when `model` is set."
                 },
                 "async": {
                     "type": "boolean",

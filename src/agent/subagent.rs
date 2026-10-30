@@ -25,6 +25,8 @@ pub async fn run_subagent(
     prompt: &str,
     subagent_type: &str,
     parent_depth: u32,
+    parent_session: &str,
+    context_vars: &[String],
     cancel: &CancellationToken,
     parent_tx: &mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<(String, TokenUsage)> {
@@ -68,6 +70,11 @@ pub async fn run_subagent(
     });
 
     let session = Session::new_for_provider(&cfg.model, &cfg.provider, &cwd.display().to_string());
+    // The parent hands over the context variables it named (a spilled tool
+    // result, a registered document); the child reads them in place instead of
+    // the parent pasting them into the prompt; the task prompt lists them.
+    // Nothing else of the parent's store is visible. Held for the run.
+    let _context_link = super::context_store::link_child(&session.id, parent_session, context_vars);
     // Scoped: don't clobber the global status.json / Orca display.
     let mut usage = UsageTracker::scoped(session.id.clone(), cfg.model.clone(), cwd);
     usage.set_provider(cfg.provider.clone());
@@ -75,8 +82,12 @@ pub async fn run_subagent(
     let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
     let cancel = cancel.clone();
     let task = prompt.to_string();
+    let handed_over = match super::context_store::handover_inventory(&session.id) {
+        inventory if inventory.is_empty() => inventory,
+        inventory => format!("\n\n{inventory}"),
+    };
     let prompt = format!(
-        "[SUBAGENT:{subagent_type}] {prompt}\n\n\
+        "[SUBAGENT:{subagent_type}] {prompt}{handed_over}\n\n\
          When finished, respond with a concise report: findings, files touched/read, next steps. \
          Do not ask the user questions."
     );

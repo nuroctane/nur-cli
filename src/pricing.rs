@@ -39,6 +39,10 @@ pub struct ModelRates {
     pub note: String,
     pub provider_id: String,
     pub model_id: String,
+    /// models.dev `tool_call`: `Some(false)` marks a model that cannot call
+    /// tools (useless for an agent), `None` when the catalog does not say.
+    #[serde(default)]
+    pub tool_call: Option<bool>,
 }
 
 impl ModelRates {
@@ -72,6 +76,9 @@ struct CacheFile {
     data: serde_json::Value,
 }
 
+/// Bumped when [`ModelRates`] gains a field the compact cache must carry.
+const COMPACT_VERSION: u32 = 2;
+
 #[derive(Serialize, Deserialize)]
 struct CompactCatalog {
     version: u32,
@@ -95,7 +102,7 @@ fn source_stamp(path: &std::path::Path) -> Option<(u64, u64)> {
 
 fn read_compact(path: &std::path::Path, source: (u64, u64)) -> Option<CompactCatalog> {
     let cached: CompactCatalog = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
-    (cached.version == 1 && cached.source_stamp == source).then_some(cached)
+    (cached.version == COMPACT_VERSION && cached.source_stamp == source).then_some(cached)
 }
 
 struct CatalogState {
@@ -155,6 +162,7 @@ pub fn builtin_meta_rates(model: &str) -> ModelRates {
             .into(),
         provider_id: "meta".into(),
         model_id: model.to_string(),
+        tool_call: None,
     }
 }
 
@@ -169,6 +177,7 @@ fn local_free_rates(provider: &str, model: &str) -> ModelRates {
         note: "Local inference — no cloud list price (hardware cost not estimated)".into(),
         provider_id: provider.into(),
         model_id: model.into(),
+        tool_call: None,
     }
 }
 
@@ -259,6 +268,7 @@ fn rates_from_model_json(
         ),
         provider_id: provider_id.into(),
         model_id: model_id.into(),
+        tool_call: model.get("tool_call").and_then(|v| v.as_bool()),
     })
 }
 
@@ -327,7 +337,7 @@ pub fn load_cached_catalog() {
         // A concurrent source replacement simply forces a later rebuild.
         if source.is_some() && source == source_stamp(&cache_path()) {
             let compact = state().lock().ok().map(|g| CompactCatalog {
-                version: 1,
+                version: COMPACT_VERSION,
                 source_stamp: source.unwrap(),
                 fetched_at_unix: g.fetched_at_unix,
                 rates_by_key: g.rates_by_key.clone(),
@@ -507,6 +517,57 @@ pub fn rates_for(provider: &str, model: &str) -> ModelRates {
     r
 }
 
+/// The cheapest of `candidates` (model ids the account can call on
+/// `provider`) that the models.dev catalog prices and does not mark as unable
+/// to call tools: nur's own economy pick for a subagent. `None` when the
+/// catalog knows none of them.
+pub fn cheapest_tool_model(provider: &str, candidates: &[String]) -> Option<String> {
+    if pricing_disabled() {
+        return None;
+    }
+    if !state().lock().map(|g| g.ready).unwrap_or(false) {
+        load_cached_catalog();
+    }
+    cheapest_of(candidates, |model| lookup_in_index(provider, model))
+}
+
+/// Pure core of [`cheapest_tool_model`]: total list price per million tokens
+/// (input + output), ties to the shorter id, chat models only.
+fn cheapest_of(
+    candidates: &[String],
+    rates: impl Fn(&str) -> Option<ModelRates>,
+) -> Option<String> {
+    const NON_CHAT: &[&str] = &[
+        "embed",
+        "moderation",
+        "realtime",
+        "transcribe",
+        "whisper",
+        "tts",
+        "image",
+        "audio",
+        "video",
+        "search",
+    ];
+    candidates
+        .iter()
+        .filter(|id| {
+            let lower = id.to_ascii_lowercase();
+            !NON_CHAT.iter().any(|needle| lower.contains(needle))
+        })
+        .filter_map(|id| {
+            let r = rates(id)?;
+            (r.tool_call != Some(false))
+                .then_some((r.input_per_mtok_usd + r.output_per_mtok_usd, id))
+        })
+        .min_by(|(a, left), (b, right)| {
+            a.partial_cmp(b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(left.len().cmp(&right.len()))
+        })
+        .map(|(_, id)| id.clone())
+}
+
 /// Suggest a context window from the catalog (None when unknown).
 pub fn context_window_for(provider: &str, model: &str) -> Option<u64> {
     let rates = rates_for(provider, model);
@@ -623,6 +684,45 @@ mod tests {
         assert_eq!(cfg.context_window, 196608);
     }
 
+    // Failure modes: an embedding/audio model chosen as an agent; a model that
+    // cannot call tools chosen; an unpriced id treated as free; the cheapest
+    // priced chat model not chosen.
+    #[test]
+    fn economy_pick_is_the_cheapest_priced_tool_capable_chat_model() {
+        let rate = |input: f64, output: f64, tool_call: Option<bool>| ModelRates {
+            input_per_mtok_usd: input,
+            output_per_mtok_usd: output,
+            cache_read_per_mtok_usd: input,
+            cache_write_per_mtok_usd: None,
+            context_window: None,
+            source: "models.dev".into(),
+            note: String::new(),
+            provider_id: "openai".into(),
+            model_id: String::new(),
+            tool_call,
+        };
+        let table = |model: &str| match model {
+            "big" => Some(rate(5.0, 20.0, Some(true))),
+            "mini" => Some(rate(0.4, 1.6, Some(true))),
+            "no-tools-nano" => Some(rate(0.05, 0.2, Some(false))),
+            "text-embedding-small" => Some(rate(0.02, 0.0, None)),
+            "mini-tts" => Some(rate(0.1, 0.1, None)),
+            _ => None,
+        };
+        let ids: Vec<String> = [
+            "big",
+            "mini",
+            "no-tools-nano",
+            "text-embedding-small",
+            "mini-tts",
+            "unpriced",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(cheapest_of(&ids, table).as_deref(), Some("mini"));
+        assert_eq!(cheapest_of(&["unpriced".to_string()], table), None);
+    }
+
     #[test]
     fn cost_splits_cached_input() {
         let rates = ModelRates {
@@ -635,6 +735,7 @@ mod tests {
             note: "t".into(),
             provider_id: "openai".into(),
             model_id: "gpt".into(),
+            tool_call: None,
         };
         let u = TokenUsage {
             input_tokens: 1_000_000,

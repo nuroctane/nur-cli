@@ -251,7 +251,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/enclave",
         "Enclave security agents over MCP: status | tools [name] | login",
     ),
-    ("/prewalk", "OMP-style: strong model plans, then smol at first edit - on|off|status|into <model>|reset"),
+    ("/prewalk", "strong model plans, then a cheap model at first edit - on|off|status|into <model>|reset"),
     ("/egaki", "image/video gen via egaki (login --provider chatgpt supported)"),
     ("/image", "/image <path> - stage a vision attachment (F4 preview)"),
     ("/tb", "terminal-browser: open|ls|action|setup (Windows host fallback ok)"),

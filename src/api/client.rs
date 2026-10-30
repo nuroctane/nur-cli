@@ -236,6 +236,27 @@ fn rejects_output_limit_parameter(message: &str) -> bool {
         .any(|needle| message.contains(needle))
 }
 
+/// A Responses server refusing replayed encrypted reasoning: made on another
+/// account or org ("could not be verified"), or referenced by an id it never
+/// stored. Origin tags keep most of these off the wire; this catches the rest
+/// (history from before tagging, a rotated key on another org).
+fn rejects_replayed_reasoning(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("encrypted_content")
+        || message.contains("encrypted content")
+        || (message.contains("item with id 'rs_") && message.contains("not found"))
+}
+
+/// Drop every `reasoning` item from a Responses `input`; whether any was there.
+fn strip_reasoning_items(input: &mut serde_json::Value) -> bool {
+    let Some(items) = input.as_array_mut() else {
+        return false;
+    };
+    let before = items.len();
+    items.retain(|item| item.get("type").and_then(|t| t.as_str()) != Some("reasoning"));
+    items.len() != before
+}
+
 fn body_has_output_limit(body: &serde_json::Value) -> bool {
     body.get("max_output_tokens").is_some()
         || body.get("max_completion_tokens").is_some()
@@ -871,8 +892,16 @@ impl ApiClient {
             wire.max_output_tokens = None;
         }
         sanitize_media_for_provider(&mut wire.input, &self.provider_id);
+        // One shaper per Responses dialect: each rebuilds every history item,
+        // so a field another protocol keeps can never reach this wire.
         if self.is_perplexity_route() {
             super::perplexity::shape_request(&mut wire);
+        } else {
+            let origin = self.reasoning_origin();
+            super::responses_wire::shape_input(
+                &mut wire.input,
+                &super::responses_wire::Route::new(&origin, &self.provider_id, &self.base_url),
+            );
         }
         wire
     }
@@ -1376,10 +1405,39 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
         }
     }
 
+    /// The account a response's encrypted reasoning belongs to: it decrypts
+    /// only on the same provider, host and account (the signed-in ChatGPT
+    /// workspace, or the API key). Stored in session files, so it is a digest:
+    /// neither the key nor a base URL that may embed credentials is written.
+    fn reasoning_origin(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let account = match &self.oauth {
+            Some(oauth) => format!("oauth:{}", oauth.account_id.as_deref().unwrap_or("")),
+            None => format!("key:{}", self.api_key),
+        };
+        let digest = Sha256::digest(format!(
+            "{}\0{}\0{account}",
+            self.provider_id, self.base_url
+        ));
+        digest.iter().take(12).map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Tag reasoning items with [`Self::reasoning_origin`] so a later request
+    /// to another route leaves them out. A routed redispatch tags first.
+    fn tag_reasoning(&self, mut resp: ApiResponse) -> ApiResponse {
+        for item in &mut resp.output {
+            if let super::types::OutputItem::Reasoning { origin, .. } = item {
+                origin.get_or_insert_with(|| self.reasoning_origin());
+            }
+        }
+        resp
+    }
+
     pub async fn create_response(&self, req: &ResponseRequest) -> Result<ApiResponse> {
         let model = req.model.clone();
         self.create_response_inner(req)
             .await
+            .map(|resp| self.tag_reasoning(resp))
             .map_err(|e| self.explain_route_error(&model, e))
     }
 
@@ -1513,6 +1571,20 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                     req_owned.max_output_tokens = None;
                     continue;
                 }
+                if rejects_replayed_reasoning(&message)
+                    && strip_reasoning_items(&mut req_owned.input)
+                {
+                    self.record_attempt(
+                        &req_owned,
+                        &attempt_id,
+                        attempt,
+                        "rejected",
+                        Some(status.as_u16()),
+                        Some(&message),
+                        None,
+                    );
+                    continue;
+                }
                 let retryable =
                     is_retryable_error(status.as_u16(), &message, self.is_opencode_route())
                         && !self.defer_to_key_rotation(status.as_u16());
@@ -1575,6 +1647,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
         let model = req.model.clone();
         self.create_response_stream_inner(req, on_event, cancel)
             .await
+            .map(|resp| self.tag_reasoning(resp))
             .map_err(|e| self.explain_route_error(&model, e))
     }
 
@@ -1716,6 +1789,19 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                         &stream_req.model,
                     );
                     stream_req.max_output_tokens = None;
+                    continue;
+                }
+                if rejects_replayed_reasoning(&msg) && strip_reasoning_items(&mut stream_req.input)
+                {
+                    self.record_attempt(
+                        &stream_req,
+                        &attempt_id,
+                        attempt,
+                        "rejected",
+                        Some(status.as_u16()),
+                        Some(&msg),
+                        None,
+                    );
                     continue;
                 }
                 let retryable = is_retryable_error(status.as_u16(), &msg, self.is_opencode_route())
@@ -2002,7 +2088,8 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
         let has_media = super::chat::request_has_media(req);
         let mut drop_media =
             has_media && endpoint_is_text_only(&self.provider_id, &self.base_url, &req.model);
-        let mut body = super::chat::build_body_opts(req, false, &self.provider_id, drop_media);
+        let mut body =
+            super::chat::build_body_opts(req, false, &self.provider_id, &self.base_url, drop_media);
         let mut attempt = 0u32;
         let mut oauth_refreshed = false;
         let mut effort_retried = false;
@@ -2094,7 +2181,13 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                 if has_media && !drop_media && super::chat::is_media_unsupported_error(&message) {
                     mark_text_only(&self.provider_id, &self.base_url, &req.model);
                     drop_media = true;
-                    body = super::chat::build_body_opts(req, false, &self.provider_id, true);
+                    body = super::chat::build_body_opts(
+                        req,
+                        false,
+                        &self.provider_id,
+                        &self.base_url,
+                        true,
+                    );
                     continue;
                 }
                 // Model behind this route rejected the effort value (aggregators
@@ -2180,7 +2273,13 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
         let (res, content_type, status) = loop {
             attempt += 1;
             self.record_attempt(req, &attempt_id, attempt, "started", None, None, None);
-            let mut body = super::chat::build_body_opts(req, true, &self.provider_id, drop_media);
+            let mut body = super::chat::build_body_opts(
+                req,
+                true,
+                &self.provider_id,
+                &self.base_url,
+                drop_media,
+            );
             if drop_output_limit {
                 remove_optional_output_limit(&mut body);
             }
@@ -3946,6 +4045,174 @@ mod tests {
             None
         );
         assert!(client.supports_output_limit("different-model"));
+    }
+
+    /// One session history carrying every vendor-only field nur keeps (from a
+    /// DeepSeek turn, a Gemini call, an OpenAI reasoning item made on another
+    /// account) must reach each catalog provider's wire with none of the
+    /// fields that protocol does not declare. The reported failure was OpenAI
+    /// rejecting `input[8].reasoning_content` after a DeepSeek turn.
+    #[test]
+    fn every_catalog_provider_gets_history_without_foreign_fields() {
+        let request = ResponseRequest {
+            model: "test-model".into(),
+            input: serde_json::json!([
+                {"role": "user", "content": [{"type": "input_text", "text": "go",
+                                              "cache_control": {"type": "ephemeral"}}]},
+                {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "blob",
+                 "nur_origin": "openai|https://chatgpt.com/backend-api/codex|oauth"},
+                {"role": "assistant", "phase": "commentary", "reasoning_content": "Need a file.",
+                 "content": [{"type": "output_text", "text": "Checking."}]},
+                // Kimi-style id, arguments left as an object by a gateway.
+                {"type": "function_call", "id": "toolu_01", "call_id": "functions.read_file:0",
+                 "name": "read_file", "arguments": {"path": "a.rs"},
+                 "thought_signature": "sig", "status": "completed"},
+                {"type": "function_call_output", "call_id": "functions.read_file:0",
+                 "output": "fn main() {}", "thought_signature": "sig", "status": "completed"},
+                {"role": "assistant", "reasoning_content": "Done thinking.",
+                 "content": [{"type": "output_text", "text": "Done."}]},
+                {"role": "user", "content": "next"},
+            ]),
+            instructions: Some("system".into()),
+            tools: None,
+            tool_choice: None,
+            store: Some(false),
+            include: None,
+            reasoning: None,
+            stream: None,
+            parallel_tool_calls: None,
+            prompt_cache_key: None,
+            max_output_tokens: None,
+        };
+        // Keys the Responses input schema declares, per item type.
+        let declared = |item: &serde_json::Value| -> &'static [&'static str] {
+            match item.get("type").and_then(|t| t.as_str()) {
+                None | Some("message") => &["type", "role", "content", "phase"],
+                Some("function_call") => &["type", "call_id", "name", "arguments"],
+                Some("function_call_output") => &["type", "call_id", "output"],
+                Some("reasoning") => &["type", "id", "summary", "encrypted_content"],
+                Some(other) => panic!("unexpected item type {other}"),
+            }
+        };
+        use super::super::wire_ids::{fit, IdRule};
+        let key_kind = |item: &serde_json::Value| -> &'static str {
+            match item.get("type").and_then(|t| t.as_str()) {
+                Some("function_call") => "function_call",
+                Some("function_call_output") => "function_call_output",
+                _ => "other",
+            }
+        };
+        for provider in crate::providers::PROVIDERS {
+            let mut client = ApiClient::new(provider.base_url, "test-key").unwrap();
+            client.provider_id = provider.id.into();
+            client.style = provider.style;
+            let route_request = client.request_for_route(&request);
+            let req = route_request.as_ref();
+            let body = match provider.style {
+                ApiStyle::Responses => {
+                    serde_json::to_value(client.response_request_for_wire(req)).unwrap()
+                }
+                ApiStyle::ChatCompletions => {
+                    super::super::chat::build_body_for_provider(req, false, provider.id)
+                }
+                ApiStyle::AnthropicMessages => {
+                    super::super::anthropic::build_body_with_oauth(req, false, false)
+                }
+                ApiStyle::GeminiCloudCode => {
+                    super::super::gemini::build_body(req, "project", &req.model)
+                }
+            };
+            let text = body.to_string();
+            // nur adds its own prompt-cache breakpoints on Anthropic only, and
+            // Perplexity's Agent API pairs a thinking model's call and output
+            // through `thought_signature` (perplexity.rs keeps it on purpose).
+            let mut never = vec!["nur_origin"];
+            if provider.style != ApiStyle::AnthropicMessages {
+                never.push("cache_control");
+            }
+            if provider.id != "perplexity" {
+                never.push("thought_signature");
+            }
+            for field in never {
+                assert!(
+                    !text.contains(field),
+                    "{} sent `{field}`: {text}",
+                    provider.id
+                );
+            }
+            assert!(
+                text.contains("a.rs"),
+                "{} lost the call's arguments: {text}",
+                provider.id
+            );
+            // The call and its output carry the same id, one the vendor accepts.
+            let kimi_id = "functions.read_file:0";
+            let expected_id = match provider.style {
+                ApiStyle::AnthropicMessages => Some(fit(kimi_id, IdRule::Anthropic)),
+                ApiStyle::ChatCompletions => Some(fit(
+                    kimi_id,
+                    IdRule::for_chat(provider.id, provider.base_url),
+                )),
+                ApiStyle::Responses if provider.id == "perplexity" => {
+                    Some(fit(kimi_id, IdRule::Anthropic))
+                }
+                ApiStyle::Responses => Some(fit(kimi_id, IdRule::Openai)),
+                ApiStyle::GeminiCloudCode => None,
+            };
+            if let Some(id) = expected_id {
+                assert_eq!(
+                    text.matches(&format!("\"{id}\"")).count(),
+                    2,
+                    "{} did not pair call and output on `{id}`: {text}",
+                    provider.id
+                );
+            }
+            if provider.style != ApiStyle::ChatCompletions {
+                // Chat Completions is the one protocol where DeepSeek/Kimi
+                // thinking mode needs it replayed (chat.rs decides per route).
+                assert!(
+                    !text.contains("reasoning_content"),
+                    "{} sent reasoning_content: {text}",
+                    provider.id
+                );
+            }
+            if provider.style != ApiStyle::Responses {
+                assert!(
+                    !text.contains("encrypted_content"),
+                    "{}: {text}",
+                    provider.id
+                );
+                continue;
+            }
+            for item in body["input"].as_array().unwrap() {
+                let allowed = declared(item);
+                // Perplexity's Agent API declares these two on call items.
+                let perplexity_extra = provider.id == "perplexity"
+                    && matches!(key_kind(item), "function_call" | "function_call_output");
+                for key in item.as_object().unwrap().keys() {
+                    let extra =
+                        perplexity_extra && matches!(key.as_str(), "thought_signature" | "name");
+                    assert!(
+                        extra || allowed.contains(&key.as_str()),
+                        "{} sent undeclared `{key}` on {item}",
+                        provider.id
+                    );
+                }
+                assert!(
+                    item.get("phase").is_none() || provider.base_url.contains("api.openai.com"),
+                    "{} sent `phase`, which only OpenAI declares",
+                    provider.id
+                );
+                assert_ne!(
+                    item["type"], "reasoning",
+                    "{} replayed reasoning made on another account",
+                    provider.id
+                );
+                if item["type"] == "function_call" {
+                    assert!(item["arguments"].is_string(), "{}: {item}", provider.id);
+                }
+            }
+        }
     }
 
     #[test]

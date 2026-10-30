@@ -1,0 +1,44 @@
+{
+  "description": "A parent hands a subagent context by name: of two registered context-store variables it names one in context_vars; the child is told only that one exists, reads it, cannot read the other, and its report reaches the parent.",
+  "prompt": "Store the build log and my notes, then have a subagent summarize the log.",
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "context",
+          "arguments": { "action": "register", "name": "build_log", "content": "step 1 ok\nstep 2 HANDOVER-PAYLOAD-42 failed\n" }
+        },
+        {
+          "name": "context",
+          "arguments": { "action": "register", "name": "private_notes", "content": "PARENT-ONLY-77\n" }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "agent",
+          "arguments": { "description": "Summarize build log", "prompt": "Summarize the log handed to you.", "subagent_type": "explore", "context_vars": ["build_log"] }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        { "name": "context", "arguments": { "action": "peek", "name": "build_log" } },
+        { "name": "context", "arguments": { "action": "peek", "name": "private_notes" } }
+      ]
+    },
+    { "text": "Child report: step 2 failed." },
+    { "text": "The subagent says step 2 failed." }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 5,
+    "stdout_contains": ["The subagent says step 2 failed."],
+    "request_contains": [
+      { "request": 3, "contains": ["build_log"], "lacks": ["private_notes", "HANDOVER-PAYLOAD-42"] },
+      { "request": 4, "contains": ["HANDOVER-PAYLOAD-42"], "lacks": ["PARENT-ONLY-77"] },
+      { "request": 5, "contains": ["Child report: step 2 failed."] }
+    ]
+  }
+}

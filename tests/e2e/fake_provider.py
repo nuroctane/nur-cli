@@ -14,7 +14,8 @@ not HTTP errors. "stream_delay": S streams the text one line every S seconds,
 so a client sees output keep arriving. On the Responses wire a
 reply may also carry "reasoning" (an encrypted reasoning item, as OpenAI returns
 with store=false) and "extra_output" (raw output items such as Perplexity's
-search_results), both emitted before the message.
+search_results), both emitted before the message. On Chat Completions a reply
+may carry "reasoning_content", the hidden thinking DeepSeek and Kimi return.
 When the script runs out the server answers with a fixed text, so a runaway
 loop ends instead of hanging; the runner then fails on the request count.
 
@@ -293,6 +294,8 @@ def make_handler(state, mcp=None):
                 self.send_header("content-type", "text/event-stream")
                 self.end_headers()
                 delta = {"role": "assistant"}
+                if reply.get("reasoning_content"):
+                    self._sse({"choices": [{"index": 0, "delta": {**delta, "reasoning_content": reply["reasoning_content"]}, "finish_reason": None}]}, n)
                 pace = reply.get("stream_delay")
                 if text and pace:
                     for line in text.splitlines(keepends=True):
@@ -313,6 +316,8 @@ def make_handler(state, mcp=None):
                 self.wfile.flush()
                 return
             message = {"role": "assistant", "content": text or None}
+            if reply.get("reasoning_content"):
+                message["reasoning_content"] = reply["reasoning_content"]
             if calls:
                 message["tool_calls"] = [{k: v for k, v in c.items() if k != "index"} for c in calls]
             self._json(200, {

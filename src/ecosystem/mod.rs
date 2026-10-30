@@ -153,7 +153,11 @@ impl EcosystemStatus {
             bit(self.plur.available, "plur"),
             bit(self.ruflo.available, "ruflo"),
             bit(self.executor.available, "executor"),
-            bit(self.omp.available, "omp"),
+            if self.omp.available || crate::config::ecosystem_omp_enabled() {
+                bit(self.omp.available, "omp")
+            } else {
+                "omp off".into()
+            },
             bit(self.graphjin.available, "graphjin"),
             bit(self.browser.available, "browser"),
             bit(self.terminal_browser.available, "tb"),
@@ -356,7 +360,9 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
             let h_akm = s.spawn(move || std::panic::catch_unwind(|| packs::ensure_akm(node_ok)));
             let h_executor =
                 s.spawn(move || std::panic::catch_unwind(|| packs::ensure_executor(node_ok)));
-            let h_omp = s.spawn(|| std::panic::catch_unwind(packs::ensure_omp));
+            let omp_managed = crate::config::ecosystem_omp_enabled();
+            let h_omp =
+                s.spawn(move || std::panic::catch_unwind(|| packs::ensure_omp(omp_managed)));
             let h_graphjin = s.spawn(|| std::panic::catch_unwind(packs::ensure_graphjin));
             let h_browser =
                 s.spawn(move || std::panic::catch_unwind(|| packs::ensure_browser_cli(node_ok)));
@@ -490,7 +496,8 @@ fn load_marker_if_fresh() -> Option<EcosystemStatus> {
         && st.ruflo.available
         && st.skills_cli.available
         && st.excalidraw.available
-        && st.omp.available
+        // omp is opt-in: its absence only means a re-run when ensure manages it.
+        && (st.omp.available || !crate::config::ecosystem_omp_enabled())
     {
         Some(st)
     } else {
@@ -688,7 +695,12 @@ fn ensure_headroom() -> ComponentStatus {
     if let Some(uv) = find_bin("uv") {
         // `headroom-ai[all]==x.y.z`: extras before the == pin.
         let spec = lock::pypi_spec("headroom-ai").replace("==", "[all]==");
-        let _ = run_capture(&uv, &["tool", "install", "--python", "3.13", &spec], None, 600_000);
+        let _ = run_capture(
+            &uv,
+            &["tool", "install", "--python", "3.13", &spec],
+            None,
+            600_000,
+        );
     } else if let Some(pip) = find_bin("pip3").or_else(|| find_bin("pip")) {
         let spec = lock::pypi_spec("headroom-ai").replace("==", "[all]==");
         let _ = run_capture(&pip, &["install", "--user", &spec], None, 600_000);

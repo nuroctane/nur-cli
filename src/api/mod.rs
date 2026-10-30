@@ -10,8 +10,10 @@ pub mod key_pool;
 pub mod local;
 pub mod models;
 pub mod perplexity;
+pub mod responses_wire;
 pub mod sse;
 pub mod types;
+pub mod wire_ids;
 
 pub use client::{ApiClient, StreamEvent};
 pub use models::fetch_model_ids;

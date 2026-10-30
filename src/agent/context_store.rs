@@ -96,6 +96,83 @@ fn global() -> &'static Mutex<HashMap<String, SessionStore>> {
     G.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// What a subagent may read from its parent's store: only the variables the
+/// parent named when it spawned the child. Nothing is shared by default - a
+/// child may run on another provider, and the store holds spilled tool output
+/// and oversized pastes. Writes always stay in the child's own store.
+struct Link {
+    parent: String,
+    shared: Vec<String>,
+}
+
+fn lineage() -> &'static Mutex<HashMap<String, Link>> {
+    static L: OnceLock<Mutex<HashMap<String, Link>>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Keeps a child's view of its parent's variables until dropped.
+pub struct ContextLink {
+    child: String,
+}
+
+impl Drop for ContextLink {
+    fn drop(&mut self) {
+        if let Ok(mut links) = lineage().lock() {
+            links.remove(&self.child);
+        }
+    }
+}
+
+/// Let `child` read the `shared` variables of `parent` while the returned
+/// link is held. An empty list shares nothing.
+pub fn link_child(child: &str, parent: &str, shared: &[String]) -> ContextLink {
+    if !child.is_empty() && !parent.is_empty() && child != parent && !shared.is_empty() {
+        if let Ok(mut links) = lineage().lock() {
+            links.insert(
+                child.to_string(),
+                Link {
+                    parent: parent.to_string(),
+                    shared: shared.to_vec(),
+                },
+            );
+        }
+    }
+    ContextLink {
+        child: child.to_string(),
+    }
+}
+
+/// Ancestors `session_id` may read `name` from, nearest first: each hop must
+/// have shared the name. Bounded and cycle-safe.
+fn sources_of(session_id: &str, name: &str) -> Vec<String> {
+    let Ok(links) = lineage().lock() else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut current = session_id;
+    while let Some(link) = links.get(current) {
+        if !link.shared.iter().any(|shared| shared == name)
+            || link.parent == session_id
+            || out.contains(&link.parent)
+            || out.len() >= 8
+        {
+            break;
+        }
+        out.push(link.parent.clone());
+        current = &link.parent;
+    }
+    out
+}
+
+/// The names `session_id`'s parent shared with it.
+fn shared_names(session_id: &str) -> Vec<String> {
+    lineage()
+        .lock()
+        .ok()
+        .and_then(|links| links.get(session_id).map(|link| link.shared.clone()))
+        .unwrap_or_default()
+}
+
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -429,20 +506,53 @@ pub fn list(session_id: &str) -> Vec<ContextVar> {
     let sess = ensure_loaded(&mut g, session_id);
     sess.order
         .iter()
-        .filter_map(|n| {
-            sess.vars.get(n).map(|v| {
-                let mut c = v.clone();
-                c.body = None; // never dump bodies in list
-                c
-            })
-        })
+        .filter_map(|n| sess.vars.get(n).map(metadata))
         .collect()
 }
 
-pub fn get(session_id: &str, name: &str) -> Option<ContextVar> {
+/// A variable without its body (never dumped in listings), built without
+/// copying a body that can run to hundreds of kilobytes.
+fn metadata(var: &ContextVar) -> ContextVar {
+    ContextVar {
+        id: var.id.clone(),
+        name: var.name.clone(),
+        kind: var.kind.clone(),
+        char_count: var.char_count,
+        source: var.source.clone(),
+        created_unix: var.created_unix,
+        body: None,
+        path: var.path.clone(),
+    }
+}
+
+/// The variables a subagent's parent shared with it that it has not shadowed
+/// with its own. Bodies omitted, as in [`list`].
+pub fn inherited(session_id: &str) -> Vec<ContextVar> {
+    let shared = shared_names(session_id);
+    if shared.is_empty() {
+        return Vec::new();
+    }
+    shared
+        .iter()
+        .filter(|name| own_var(session_id, name).is_none())
+        .filter_map(|name| get(session_id, name).as_ref().map(metadata))
+        .collect()
+}
+
+fn own_var(session_id: &str, name: &str) -> Option<ContextVar> {
     let mut g = global().lock().ok()?;
     let sess = ensure_loaded(&mut g, session_id);
     sess.vars.get(name).cloned()
+}
+
+/// `name` from this session's store, else from the nearest ancestor that
+/// shared it.
+pub fn get(session_id: &str, name: &str) -> Option<ContextVar> {
+    own_var(session_id, name).or_else(|| {
+        sources_of(session_id, name)
+            .iter()
+            .find_map(|ancestor| own_var(ancestor, name))
+    })
 }
 
 pub fn peek(
@@ -609,6 +719,12 @@ pub fn delete(session_id: &str, name: &str) -> Result<String, String> {
     let sess = ensure_loaded(&mut g, session_id);
     let name = sanitize_name(name);
     let Some(var) = sess.vars.remove(&name) else {
+        drop(g);
+        if get(session_id, &name).is_some() {
+            return Err(format!(
+                "`{name}` belongs to the parent agent and is read-only here"
+            ));
+        }
         return Err(format!("unknown context var `{name}`"));
     };
     sess.order.retain(|n| n != &name);
@@ -767,23 +883,49 @@ pub fn reload_session(session_id: &str) -> Vec<ContextVar> {
 /// Compact summary for system/user injection after chat compaction (Prime: kernel survives).
 pub fn prompt_inventory(session_id: &str) -> String {
     let vars = list(session_id);
-    if vars.is_empty() {
+    let inherited = inherited(session_id);
+    if vars.is_empty() && inherited.is_empty() {
         return String::new();
     }
     let mut lines = vec![
         "# RLM context store (survives compaction - use tool `context` to peek/slice/search)"
             .to_string(),
     ];
-    for v in vars.iter().take(40) {
+    push_var_lines(&mut lines, &vars);
+    if !inherited.is_empty() {
+        lines.push("## From the parent agent (read-only)".to_string());
+        push_var_lines(&mut lines, &inherited);
+    }
+    lines.join("\n")
+}
+
+/// The variables a subagent's parent handed it, for the child's task prompt
+/// (subagents get a focused system prompt without the turn-state inventory).
+/// Empty when nothing was handed over.
+pub fn handover_inventory(session_id: &str) -> String {
+    let inherited = inherited(session_id);
+    if inherited.is_empty() {
+        return String::new();
+    }
+    let mut lines =
+        vec!["Handed over by the parent agent (read-only; read with tool `context`):".to_string()];
+    push_var_lines(&mut lines, &inherited);
+    lines.join("\n")
+}
+
+/// The newest 40 variables: the one just registered is the one being asked
+/// about, so the cap drops the oldest.
+fn push_var_lines(lines: &mut Vec<String>, vars: &[ContextVar]) {
+    let skipped = vars.len().saturating_sub(40);
+    if skipped > 0 {
+        lines.push(format!("- … and {skipped} older"));
+    }
+    for v in &vars[skipped..] {
         lines.push(format!(
             "- `{}` ({}, {} chars, source={})",
             v.name, v.kind, v.char_count, v.source
         ));
     }
-    if vars.len() > 40 {
-        lines.push(format!("- … and {} more", vars.len() - 40));
-    }
-    lines.join("\n")
 }
 
 /// Drop an entire session store (test cleanup).
@@ -929,6 +1071,76 @@ mod tests {
         delete(&s, "doc").unwrap();
         assert!(get(&s, "doc").is_none());
         clear_session(&s);
+    }
+
+    /// Seed a session in memory only, so the test never writes the real home.
+    fn seed(session: &str, vars: &[(&str, &str)]) {
+        let mut store = SessionStore {
+            loaded: true,
+            ..Default::default()
+        };
+        for (name, body) in vars {
+            store.order.push(name.to_string());
+            store.vars.insert(
+                name.to_string(),
+                ContextVar {
+                    id: name.to_string(),
+                    name: name.to_string(),
+                    kind: "test".into(),
+                    char_count: body.chars().count(),
+                    source: "unit".into(),
+                    created_unix: 0,
+                    body: Some(body.to_string()),
+                    path: None,
+                },
+            );
+        }
+        global().lock().unwrap().insert(session.to_string(), store);
+    }
+
+    // Failure modes: a child cannot read what the parent handed it; a child
+    // reads a variable the parent did not name (it may run on another
+    // provider); a child's delete reaches the parent; a link outlives the
+    // child; a child name does not shadow the parent's; a cycle hangs.
+    #[test]
+    fn a_subagent_reads_only_the_variables_its_parent_named() {
+        let (parent, child) = (sid(), sid());
+        seed(
+            &parent,
+            &[
+                ("dump", "parent needle"),
+                ("shared", "parent copy"),
+                ("private", "not for the child"),
+            ],
+        );
+        seed(&child, &[("shared", "child copy")]);
+        {
+            let named: Vec<String> = ["dump", "shared", "ghost"].map(String::from).to_vec();
+            let _link = link_child(&child, &parent, &named);
+            assert!(peek(&child, "dump", 0, 100)
+                .unwrap()
+                .contains("parent needle"));
+            assert!(peek(&child, "shared", 0, 100)
+                .unwrap()
+                .contains("child copy"));
+            assert!(get(&child, "private").is_none());
+            assert!(!prompt_inventory(&child).contains("private"));
+            let names: Vec<String> = inherited(&child).into_iter().map(|v| v.name).collect();
+            assert_eq!(names, vec!["dump".to_string()]);
+            assert!(delete(&child, "dump").is_err());
+            assert!(get(&parent, "dump").is_some());
+            // A cycle ends instead of looping.
+            let _back = link_child(&parent, &child, &named);
+            assert!(get(&child, "ghost").is_none());
+        }
+        let nothing = link_child(&child, &parent, &[]);
+        assert!(get(&child, "dump").is_none(), "an empty list shared");
+        drop(nothing);
+        assert!(get(&child, "dump").is_none(), "link outlived the child");
+        global()
+            .lock()
+            .unwrap()
+            .retain(|k, _| k != &parent && k != &child);
     }
 
     #[test]

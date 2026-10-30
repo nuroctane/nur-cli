@@ -2244,7 +2244,7 @@ impl AgentRunner {
                     )
                 } else {
                     let context = route_context(&self.config, &session.input_items);
-                    match run_agent_tool(self, call, context, cancel, tx).await {
+                    match run_agent_tool(self, call, &session.id, context, cancel, tx).await {
                         Ok((s, spent)) => {
                             // Roll subagent tokens into the parent session so
                             // totals + the Orca status stay honest.
@@ -3119,20 +3119,17 @@ impl AgentRunner {
                 continue;
             }
             let parsed = parse_agent_call(call);
-            let client = self.client.clone();
-            let config = self.config.clone();
-            let cwd = self.cwd.clone();
-            let mode = self.permission_mode.clone();
-            let domains = self.approved_domains.clone();
+            let spawn = ChildSpawn::for_call(self, &session.id, call);
             let tx_child = tx.clone();
             let cancel_child = cancel.clone();
             let permits = permits.clone();
             let context = context.clone();
-            // RLM recursion depth: children may recurse up to the config budget.
-            let depth = self.subagent_depth;
             handles.push(Some(tokio::spawn(async move {
-                let (prompt, kind, desc, provider_override, model_override) = parsed?;
-                let cfg_limit = config.subagent_depth.max(1);
+                let parsed = parsed?;
+                let spawn = spawn?;
+                // RLM recursion depth: children may recurse up to the config budget.
+                let depth = spawn.depth;
+                let cfg_limit = spawn.config.subagent_depth.max(1);
                 if depth >= cfg_limit {
                     return Err(NurError::Other(format!(
                         "subagent recursion limit reached (depth {depth}, max {cfg_limit}) - \
@@ -3149,51 +3146,9 @@ impl AgentRunner {
                 if cancel_child.is_cancelled() {
                     return Err(NurError::Interrupted);
                 }
+                let desc = &parsed.2;
                 let _ = tx_child.send(AgentEvent::Status(format!("subagent · {desc}")));
-                let (prompt, provider_override, model_override, hopped) = plan_unrouted_child(
-                    &config,
-                    prompt,
-                    context,
-                    provider_override,
-                    model_override,
-                    &tx_child,
-                )
-                .await;
-                // Cross-provider: if the call named a different provider, build a
-                // client + config for it from that provider's stored credentials.
-                // Missing creds → LoginRequired + hard block (no silent parent run).
-                match resolve_planned_target(
-                    hopped,
-                    &client,
-                    &config,
-                    provider_override.as_deref(),
-                    model_override.as_deref(),
-                    Some(prompt.as_str()),
-                    Some(desc.as_str()),
-                    Some(kind.as_str()),
-                    &tx_child,
-                ) {
-                    SubagentTarget::Ready {
-                        client: child_client,
-                        config: child_config,
-                    } => {
-                        subagent::run_subagent(
-                            child_client,
-                            *child_config,
-                            cwd,
-                            mode,
-                            domains,
-                            &prompt,
-                            &kind,
-                            depth,
-                            &cancel_child,
-                            &tx_child,
-                        )
-                        .await
-                    }
-                    SubagentTarget::AwaitingLogin { message, .. }
-                    | SubagentTarget::Unavailable { message } => Err(NurError::Other(message)),
-                }
+                spawn.run(parsed, context, &cancel_child, &tx_child).await
             })));
         }
 
@@ -6667,14 +6622,191 @@ fn extract_provider_routing_phrase(text: &str) -> Option<(String, Option<String>
     None
 }
 
+/// What one `agent` call needs to run its child, captured from the parent so
+/// the blocking, async and fan-out paths route every child the same way:
+/// cache-aware routing, then target resolution, then the nested runner.
+struct ChildSpawn {
+    client: ApiClient,
+    config: Config,
+    cwd: PathBuf,
+    mode: SharedMode,
+    domains: Arc<Mutex<HashSet<String>>>,
+    depth: u32,
+    /// The parent's session id, and the variables of its context store the
+    /// call named in `context_vars`: all the child may read of it.
+    parent_session: String,
+    context_vars: Vec<String>,
+    /// `cost_mode: economy`: a cheap model, low effort (see [`economy_model`]).
+    economy: bool,
+}
+
+/// Most `context_vars` one `agent` call may hand over.
+const MAX_HANDED_OVER_VARS: usize = 16;
+
+impl ChildSpawn {
+    /// The spawn for one `agent` call. Fails when `context_vars` names a
+    /// variable the parent does not have, so a typo is not a silent gap.
+    fn for_call(
+        runner: &AgentRunner,
+        parent_session: &str,
+        call: &FunctionCallRef,
+    ) -> Result<Self> {
+        let args: Value = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
+        let mut context_vars: Vec<String> = Vec::new();
+        for name in args
+            .get("context_vars")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            if !context_vars.iter().any(|known| known == name) {
+                context_vars.push(name.to_string());
+            }
+        }
+        if context_vars.len() > MAX_HANDED_OVER_VARS {
+            return Err(NurError::Tool(format!(
+                "agent.context_vars names {} variables; at most {MAX_HANDED_OVER_VARS}",
+                context_vars.len()
+            )));
+        }
+        let missing: Vec<&str> = context_vars
+            .iter()
+            .filter(|name| super::context_store::get(parent_session, name).is_none())
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            return Err(NurError::Tool(format!(
+                "agent.context_vars: no context variable named `{}` (`context` action=list shows them)",
+                missing.join("`, `")
+            )));
+        }
+        Ok(Self {
+            client: runner.client.clone(),
+            config: runner.config.clone(),
+            cwd: runner.cwd.clone(),
+            mode: runner.permission_mode.clone(),
+            domains: runner.approved_domains.clone(),
+            depth: runner.subagent_depth,
+            parent_session: parent_session.to_string(),
+            context_vars,
+            economy: args.get("cost_mode").and_then(Value::as_str) == Some("economy"),
+        })
+    }
+
+    async fn run(
+        self,
+        parsed: ParsedAgentCall,
+        context: Arc<Vec<String>>,
+        cancel: &CancellationToken,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+    ) -> Result<(String, TokenUsage)> {
+        let (prompt, kind, desc, provider_override, model_override) = parsed;
+        let (prompt, provider_override, model_override, hopped) = plan_unrouted_child(
+            &self.config,
+            prompt,
+            context,
+            provider_override,
+            model_override,
+            tx,
+        )
+        .await;
+        // Cross-provider: a named provider gets a client from its own stored
+        // credentials. Missing creds → LoginRequired + hard block, never a
+        // silent run on the parent.
+        match resolve_planned_target(
+            hopped,
+            &self.client,
+            &self.config,
+            provider_override.as_deref(),
+            model_override.as_deref(),
+            Some(prompt.as_str()),
+            Some(desc.as_str()),
+            Some(kind.as_str()),
+            tx,
+        ) {
+            SubagentTarget::Ready { client, mut config } => {
+                // A named or routed model is a choice; economy fills the gap.
+                if self.economy && model_override.is_none() {
+                    let status = match economy_model(&self.config, &client, &config.provider).await
+                    {
+                        Some(model) => {
+                            config.model = model;
+                            format!("subagent · economy · {}", config.model)
+                        }
+                        None => format!(
+                            "subagent · economy · no priced cheaper model, staying on {}",
+                            config.model
+                        ),
+                    };
+                    config.reasoning_effort = "low".into();
+                    let _ = tx.send(AgentEvent::Status(status));
+                }
+                // Handed-over context leaves the parent's provider: say so.
+                if !self.context_vars.is_empty() && config.provider != self.config.provider {
+                    let name = crate::providers::by_id(&config.provider)
+                        .map(|provider| provider.name)
+                        .unwrap_or(config.provider.as_str());
+                    let n = self.context_vars.len();
+                    let _ = tx.send(AgentEvent::Status(format!(
+                        "subagent · sharing {n} context variable{} with {name}",
+                        if n == 1 { "" } else { "s" }
+                    )));
+                }
+                subagent::run_subagent(
+                    client,
+                    *config,
+                    self.cwd,
+                    self.mode,
+                    self.domains,
+                    &prompt,
+                    &kind,
+                    self.depth,
+                    &self.parent_session,
+                    &self.context_vars,
+                    cancel,
+                    tx,
+                )
+                .await
+            }
+            // A tool error, so the parent model does not take a parent-provider
+            // run for success. LoginRequired was already emitted.
+            SubagentTarget::AwaitingLogin { message, .. }
+            | SubagentTarget::Unavailable { message } => Err(NurError::Other(message)),
+        }
+    }
+}
+
+/// The model an economy child runs on, without launching anything: the
+/// configured `economy_model` when the child stays on the parent's provider,
+/// else the cheapest tool-capable model this account lists that models.dev
+/// prices. `None` leaves the child on the model it resolved to.
+async fn economy_model(parent: &Config, client: &ApiClient, provider: &str) -> Option<String> {
+    let configured = parent.economy_model.trim();
+    if !configured.is_empty() && provider == parent.provider {
+        return Some(configured.to_string());
+    }
+    let ids = client.live_model_ids().await.ok()?;
+    let provider = provider.to_string();
+    crate::typesafe::context::blocking(move || crate::pricing::cheapest_tool_model(&provider, &ids))
+        .await
+        .ok()
+        .flatten()
+}
+
 async fn run_agent_tool(
     runner: &AgentRunner,
     call: &FunctionCallRef,
+    parent_session: &str,
     context: Arc<Vec<String>>,
     cancel: &CancellationToken,
     tx: &mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<(String, TokenUsage)> {
-    let (prompt, kind, desc, provider_override, model_override) = parse_agent_call(call)?;
+    let parsed = parse_agent_call(call)?;
+    let desc = parsed.2.clone();
+    let spawn = ChildSpawn::for_call(runner, parent_session, call)?;
     // Async admission (Prime rlm() / RLM model): if the model asked for a
     // non-blocking child, admit + spawn in the background, return the handle.
     let want_async = serde_json::from_str::<Value>(&call.arguments)
@@ -6683,53 +6815,10 @@ async fn run_agent_tool(
     if want_async && !runner.is_subagent {
         let sid = runner.session_id_for_admission();
         let id = crate::agent::admission::admit(&sid, &desc);
-        let client = runner.client.clone();
-        let config = runner.config.clone();
-        let cwd = runner.cwd.clone();
-        let mode = runner.permission_mode.clone();
-        let domains = runner.approved_domains.clone();
-        let prompt = prompt.clone();
-        let kind = kind.clone();
-        let desc_for_spawn = desc.clone();
         let tx2 = tx.clone();
         let accept = cancel.clone();
-        let depth = runner.subagent_depth;
         tokio::spawn(async move {
-            // Resolve target like the sync path, then run in background.
-            let (prompt, provider_override, model_override, hopped) = plan_unrouted_child(
-                &config,
-                prompt,
-                context,
-                provider_override,
-                model_override,
-                &tx2,
-            )
-            .await;
-            let outcome = match resolve_planned_target(
-                hopped,
-                &client,
-                &config,
-                provider_override.as_deref(),
-                model_override.as_deref(),
-                Some(prompt.as_str()),
-                Some(desc_for_spawn.as_str()),
-                Some(kind.as_str()),
-                &tx2,
-            ) {
-                SubagentTarget::Ready {
-                    client: c,
-                    config: cc,
-                } => {
-                    crate::agent::subagent::run_subagent(
-                        c, *cc, cwd, mode, domains, &prompt, &kind, depth, &accept, &tx2,
-                    )
-                    .await
-                }
-                SubagentTarget::AwaitingLogin { message, .. }
-                | SubagentTarget::Unavailable { message } => {
-                    Err(crate::error::NurError::Other(message))
-                }
-            };
+            let outcome = spawn.run(parsed, context, &accept, &tx2).await;
             match outcome {
                 Ok((text, _)) => crate::agent::admission::finish(&sid, id, &text, true),
                 Err(e) => crate::agent::admission::finish(&sid, id, &e.to_string(), false),
@@ -6749,48 +6838,11 @@ async fn run_agent_tool(
         ));
     }
     let _ = tx.send(AgentEvent::Status(format!("subagent · {desc}")));
-
-    let (prompt, provider_override, model_override, hopped) = plan_unrouted_child(
-        &runner.config,
-        prompt,
-        context,
-        provider_override,
-        model_override,
-        tx,
-    )
-    .await;
-    match resolve_planned_target(
-        hopped,
-        &runner.client,
-        &runner.config,
-        provider_override.as_deref(),
-        model_override.as_deref(),
-        Some(prompt.as_str()),
-        Some(desc.as_str()),
-        Some(kind.as_str()),
-        tx,
-    ) {
-        SubagentTarget::Ready { client, config } => {
-            subagent::run_subagent(
-                client,
-                *config,
-                runner.cwd.clone(),
-                runner.permission_mode.clone(),
-                runner.approved_domains.clone(),
-                &prompt,
-                &kind,
-                runner.subagent_depth,
-                cancel,
-                tx,
-            )
-            .await
-        }
-        SubagentTarget::AwaitingLogin { message, .. } | SubagentTarget::Unavailable { message } => {
-            // Surface as a tool error so the parent model does not treat a
-            // parent-provider run as success. LoginRequired was already emitted.
-            Err(NurError::Other(message))
-        }
-    }
+    // Boxed: the child's routing state (a whole Config and client) would
+    // otherwise sit inside the turn loop's future, which `main` holds on its
+    // stack; an unoptimized build overflowed Windows' 1 MB main stack before
+    // parsing arguments.
+    Box::pin(spawn.run(parsed, context, cancel, tx)).await
 }
 
 /// Parent context a routed child may be shown. Built only when routing is on,
@@ -7050,11 +7102,11 @@ fn resolve_subagent_target(
         )));
         let message = format!(
             "blocked: not signed in to {name} (provider id `{id}`). \
-             A /login modal was opened pre-selected to `{id}`. \
              Do NOT re-run this subagent on the parent provider. \
-             After the user finishes /login, nur will inject a mandatory re-deploy \
-             instruction with the exact `agent` tool call (provider=\"{id}\"). \
-             Original task is preserved for that retry.",
+             The user signs in with `/login {id}` in the TUI (nur opens it pre-selected \
+             there and, once it finishes, hands you the exact re-deploy call) or with \
+             `nur auth login --provider {id}` from a shell; then deploy again with \
+             provider=\"{id}\".",
             name = prov.name,
             id = prov.id,
         );
@@ -7159,21 +7211,21 @@ fn is_prewalk_mutate_tool(name: &str) -> bool {
     )
 }
 
-/// Resolve the cheap/smol target for prewalk (config → env → OMP role).
+/// Resolve the cheap target for prewalk (`[prewalk] into` → `NUR_PREWALK_MODEL`
+/// → `economy_model`). Asking an
+/// installed `omp` for its `smol` role launched that CLI mid-turn, in front of
+/// the next model request, and made nur's routing depend on another harness's
+/// config; nur's own `[prewalk] into` is the setting.
 pub fn resolve_prewalk_into(cfg: &Config) -> Option<String> {
     let configured = cfg.prewalk.into.trim();
     if !configured.is_empty() {
         return Some(configured.to_string());
     }
-    for var in ["NUR_PREWALK_MODEL", "OMP_SMOL_MODEL", "PI_SMOL_MODEL"] {
-        if let Ok(v) = std::env::var(var) {
-            let v = v.trim();
-            if !v.is_empty() {
-                return Some(v.to_string());
-            }
-        }
-    }
-    crate::oauth::omp_bridge::omp_model_role("smol")
+    std::env::var("NUR_PREWALK_MODEL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| Some(cfg.economy_model.trim().to_string()).filter(|v| !v.is_empty()))
 }
 
 fn maybe_fire_prewalk(runner: &AgentRunner, tool_name: &str) -> Option<String> {

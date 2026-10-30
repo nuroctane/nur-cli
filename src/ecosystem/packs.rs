@@ -304,7 +304,10 @@ log_level: info
 /// (headless `omp -p` runs; we deliberately skip its IDE/ACP surface).
 /// Ships as `@oh-my-pi/pi-coding-agent` (Bun) and as a native installer under
 /// `%LOCALAPPDATA%\omp\`. Auto-upgrades when below the feature floor.
-pub fn ensure_omp() -> ComponentStatus {
+/// `managed` is `ecosystem_omp`: only then does ensure install or upgrade omp
+/// (which runs its installer). Otherwise an omp already present is reported
+/// and used as found, and nothing is downloaded.
+pub fn ensure_omp(managed: bool) -> ComponentStatus {
     let mut c = ComponentStatus {
         name: "omp".into(),
         ..Default::default()
@@ -315,6 +318,18 @@ pub fn ensure_omp() -> ComponentStatus {
         None => true,
         Some((_, ver)) => super::ecosystem_force_pub() || !omp_meets_feature_floor(ver),
     };
+    if !managed {
+        match current {
+            Some((bin, version)) => {
+                c.available = omp_meets_feature_floor(&version);
+                c.detail = format!("omp {version} found; not managed (ecosystem_omp = false)");
+                c.path = Some(bin);
+                c.version = Some(version);
+            }
+            None => c.detail = "off (ecosystem_omp = false)".into(),
+        }
+        return c;
+    }
     if needs_upgrade {
         upgrade_omp(&mut c);
     }

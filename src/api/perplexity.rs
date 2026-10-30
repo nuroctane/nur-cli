@@ -158,6 +158,9 @@ fn function_call(item: &Value) -> Value {
         .or_else(|| item.get("id"))
         .and_then(Value::as_str)
         .unwrap_or("");
+    // The Agent API fronts OpenAI and Anthropic models; Anthropic's id rule
+    // (charset and length) satisfies both.
+    let call_id = super::wire_ids::fit(call_id, super::wire_ids::IdRule::Anthropic);
     let arguments = match item.get("arguments").or_else(|| item.get("input")) {
         Some(Value::String(text)) if serde_json::from_str::<Value>(text).is_ok() => text.clone(),
         // Freeform custom-tool input is raw text; arguments must be JSON.
@@ -198,7 +201,10 @@ fn function_call_output(item: &Value) -> Value {
     };
     let mut result = json!({
         "type": "function_call_output",
-        "call_id": item.get("call_id").and_then(Value::as_str).unwrap_or(""),
+        "call_id": super::wire_ids::fit(
+            item.get("call_id").and_then(Value::as_str).unwrap_or(""),
+            super::wire_ids::IdRule::Anthropic,
+        ),
         "output": output,
     });
     if let Some(name) = item.get("name").and_then(Value::as_str) {

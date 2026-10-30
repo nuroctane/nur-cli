@@ -1,0 +1,36 @@
+{
+  "provider": "openai",
+  "model": "gpt-5.5",
+  "description": "A conversation that thought over Chat Completions (DeepSeek-style reasoning_content, including a turn that only called a tool) continues over Responses: the history is replayed without the chat-only field OpenAI rejects with 'Unknown parameter: input[N].reasoning_content', and without the empty assistant message the tool-only turn is stored as.",
+  "prompt": "What did you say before?",
+  "global_args": ["-c", "--model", "gpt-5.5"],
+  "setup_home_files": {
+    "config.toml": "provider = \"openai\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"gpt-5.5\"\n\n[protocols]\n\"openai/deepseek-v4\" = \"chat\"\n"
+  },
+  "setup_files": {
+    "notes.txt": "PELICAN-7\n"
+  },
+  "setup_commands": [
+    ["--model", "deepseek-v4", "run", "--yes", "Read notes.txt, think it over, then greet me."]
+  ],
+  "script": [
+    {
+      "reasoning_content": "PRIVATE-CHAIN-OF-THOUGHT-1",
+      "tool_calls": [{ "name": "read_file", "arguments": { "path": "notes.txt" } }]
+    },
+    { "text": "Hello from the thinking model.", "reasoning_content": "PRIVATE-CHAIN-OF-THOUGHT-2" },
+    { "text": "I said hello." }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "stdout_contains": ["I said hello."],
+    "request_contains": [
+      {
+        "request": 3,
+        "contains": ["Read notes.txt, think it over, then greet me.", "PELICAN-7", "Hello from the thinking model.", "What did you say before?"],
+        "lacks": ["reasoning_content", "PRIVATE-CHAIN-OF-THOUGHT", "\"content\": []"]
+      }
+    ]
+  }
+}

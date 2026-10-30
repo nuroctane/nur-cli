@@ -148,6 +148,18 @@ pub struct Config {
     /// Set false for a pure binary + chat experience until `nur ecosystem ensure`.
     #[serde(default = "default_true")]
     pub ecosystem_auto_ensure: bool,
+    /// Let `nur ecosystem ensure` install and upgrade Oh My Pi (`omp`, the
+    /// backend of the `omp` tool). Default **false**: nur's own `agent` tool
+    /// delegates natively, and installing omp downloads and runs its
+    /// installer. An omp already on PATH is still found and used either way.
+    #[serde(default)]
+    pub ecosystem_omp: bool,
+    /// The cheap model for `agent` calls with `cost_mode: economy` on this
+    /// provider, and for prewalk when `[prewalk] into` is unset. Empty → an
+    /// economy child runs on the cheapest tool-capable model the account
+    /// lists that models.dev prices.
+    #[serde(default)]
+    pub economy_model: String,
     /// When true (default), interactive launch checks GitHub Releases and self-updates
     /// when a newer version is available (TTL-throttled). Opt out with `false` or
     /// env `NUR_SKIP_AUTO_UPDATE=1`. Explicit `nur update` always runs.
@@ -324,8 +336,9 @@ pub struct AuthConfig {
     /// OpenCode, gcloud, OMP, ...) and use it. Default **false**: those
     /// sessions carry rotating refresh tokens, and two tools refreshing one
     /// token sign each other out. Import deliberately with
-    /// `nur auth import --from <cli>` instead.
-    #[serde(default)]
+    /// `nur auth import --from <cli>` instead. The docs spelled it
+    /// `fallback_import`, so that name is read too.
+    #[serde(default, alias = "fallback_import")]
     pub import_fallback: bool,
     /// Encrypt the credential files at rest where the OS offers a per-user
     /// key: Windows DPAPI (`CryptProtectData`, user scope), which ties the
@@ -402,9 +415,29 @@ pub fn import_fallback_enabled() -> bool {
     let Ok(text) = fs::read_to_string(config_path()) else {
         return false;
     };
+    let Ok(value) = toml::from_str::<toml::Value>(&text) else {
+        return false;
+    };
+    let auth = value.get("auth");
+    ["import_fallback", "fallback_import"]
+        .iter()
+        .find_map(|key| auth?.get(*key)?.as_bool())
+        .unwrap_or(false)
+}
+
+/// `ecosystem_omp` as the running process sees it, read from the config file
+/// (ecosystem ensure runs without a `Config` in hand). `NUR_ECOSYSTEM_OMP=1|0`
+/// overrides for one run.
+pub fn ecosystem_omp_enabled() -> bool {
+    if let Ok(v) = std::env::var("NUR_ECOSYSTEM_OMP") {
+        return matches!(v.trim(), "1" | "true" | "yes" | "on");
+    }
+    let Ok(text) = fs::read_to_string(config_path()) else {
+        return false;
+    };
     toml::from_str::<toml::Value>(&text)
         .ok()
-        .and_then(|v| v.get("auth")?.get("import_fallback")?.as_bool())
+        .and_then(|v| v.get("ecosystem_omp")?.as_bool())
         .unwrap_or(false)
 }
 
@@ -417,7 +450,8 @@ pub struct PrewalkConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Target model after the first write/edit once todos exist. Empty → resolve
-    /// from `NUR_PREWALK_MODEL` / `OMP_SMOL_MODEL` / OMP `modelRoles.smol`.
+    /// from `NUR_PREWALK_MODEL`, then `economy_model`; with none set, prewalk
+    /// never switches.
     #[serde(default)]
     pub into: String,
 }
@@ -1164,6 +1198,8 @@ impl Default for Config {
             compact_tool_body_max_chars: default_compact_tool_body_max(),
             poor_mode: false,
             ecosystem_auto_ensure: true,
+            ecosystem_omp: false,
+            economy_model: String::new(),
             auto_update: true,
             fallback_providers: Vec::new(),
             failover_allow_downgrade: false,

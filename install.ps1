@@ -119,7 +119,7 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 Write-Ok "cargo $((cargo --version))"
 
 # -- prerequisites (auto-install latest when missing; best-effort) ---------
-# node 20+ (plur, ruflo, executor, browser), bun (omp backend),
+# node 20+ (plur, ruflo, executor, browser), bun (akm runtime),
 # uv (graphify), ripgrep (fast search), ffmpeg (extract_frames).
 Write-Step "Checking prerequisites (node, bun, uv, rg, ffmpeg)..."
 $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
@@ -147,7 +147,7 @@ Install-Prereq "node"   "OpenJS.NodeJS.LTS"      $null                          
 # Fallback installers are pinned to a known release, not whatever "latest" is.
 $BunVersion = "1.3.14"
 $UvVersion = "0.12.9"
-Install-Prereq "bun"    "Oven-sh.Bun"            { & ([scriptblock]::Create((irm https://bun.sh/install.ps1))) -Version $BunVersion }  "omp coding-agent backend"
+Install-Prereq "bun"    "Oven-sh.Bun"            { & ([scriptblock]::Create((irm https://bun.sh/install.ps1))) -Version $BunVersion }  "akm runtime"
 Install-Prereq "uv"     "astral-sh.uv"           { irm "https://astral.sh/uv/$UvVersion/install.ps1" | iex } "graphify"
 Install-Prereq "rg"     "BurntSushi.ripgrep.MSVC" $null                                    "fast grep / glob"
 Install-Prereq "ffmpeg" "Gyan.FFmpeg"            $null                                     "extract_frames / design-from-video"
@@ -223,7 +223,7 @@ Write-Ok "Installed $dest ($ver)"
 
 # -- Ecosystem: Graphify, PLUR, Ruflo (blocking - same as release EXE) ------
 # Node is required for plur/ruflo; uv for graphify. Best-effort but runs now.
-Write-Step "Provisioning agent ecosystem (graphify, plur, ruflo, omp, browser)..."
+Write-Step "Provisioning agent ecosystem (graphify, plur, ruflo, browser)..."
 try {
     & $dest ecosystem ensure --force 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
     Write-Ok "Ecosystem provisioned"

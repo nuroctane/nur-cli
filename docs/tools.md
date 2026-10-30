@@ -301,7 +301,10 @@ converted document is not.
 
 The store is bound to the calling session (the one that registered the
 variables, also after `/new`, `/resume`, a fork or inside a subagent); there is
-no `session_id` argument. Tool results are auto-registered only when they are
+no `session_id` argument. A parent hands a subagent variables by naming them in
+the `agent` call's `context_vars`: the child reads exactly those, read-only,
+while it runs, and nothing else of the parent's store (spilled tool output,
+oversized pastes) is visible to it. Its own registrations stay in its store. Tool results are auto-registered only when they are
 over `tool_result_max_chars` and will therefore reach the model as a preview;
 smaller results arrive whole and are not registered, and the store's own reads
 are never registered. `peek`/`slice` honour `max_chars` up to the inline limit
@@ -459,7 +462,9 @@ Slash: `/tb` · `/terminal-browser`. Skill: `terminal-browser`.
 
 Delegate a focused coding task to the [Oh My Pi](https://omp.sh) agent backend
 (headless one-shot `omp -p` run in the workspace; the IDE/ACP surface is not
-used). Strong at LSP-backed refactors, debugger-driven diagnosis (DAP), and AST
+used). nur does not install omp unless `ecosystem_omp = true`; an omp already
+on PATH is used. The `agent` tool with `cost_mode: economy` does the same kind
+of delegation natively. Strong at LSP-backed refactors, debugger-driven diagnosis (DAP), and AST
 rewrites.
 
 Focused delegation defaults to `cost_mode=economy`. Nur first honors
@@ -591,6 +596,13 @@ children waiting for approval, the shared approval prompt, and concurrency
 permits, then aborts every queued or running child so no detached task can begin
 credential resolution, edits, or token spend after the parent turn ends.
 
+**Economy children.** `cost_mode: "economy"` runs the child on a cheap model
+with low reasoning effort: `economy_model` from config when the child stays on
+the parent's provider, otherwise the cheapest model the account lists that
+models.dev prices and does not mark as unable to call tools. Nothing external
+is launched; when no priced model is found the child stays on its model and the
+status line says so. An explicit `model` always wins.
+
 **Cross-provider subagents.** An `agent` call may set `provider` (and optionally
 `model`) to run a subagent on a *different* provider than the parent — in natural
 language. `provider:"grok"` → xAI, `"gemini"`/`"google"` → Google, `"claude"` →
@@ -598,7 +610,15 @@ Anthropic, `"chatgpt"`/`"gpt"` → OpenAI, `"antigravity"`/`"agy"` → Antigravi
 (own OAuth — not the same as Gemini), plus `deepseek`, `mistral`, `kimi`, and
 direct catalog ids. Omit both fields to inherit the parent's provider/model.
 This lets one turn fan out across providers — e.g. a Claude reviewer alongside a
-Grok auditor — from a single prompt.
+Grok auditor — from a single prompt. A child on any provider can read the
+`context` variables the call names in `context_vars` (see `context` above);
+when that child runs on another provider, the status line says how many were
+shared with it. The conversation history each provider receives is rebuilt for
+its wire protocol:
+fields another vendor keeps (`reasoning_content`, `thought_signature`, encrypted
+reasoning made on another account) are left out, and tool-call ids are mapped
+to the form the vendor accepts (Anthropic's charset, Mistral's nine characters,
+OpenAI's 40-character limit).
 
 **No silent parent fallback.** If you are not signed in to the requested
 provider, nur **blocks** the spawn (tool result is an error), opens the `/login`

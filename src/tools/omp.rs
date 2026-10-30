@@ -130,9 +130,10 @@ impl Tool for OmpTool {
     fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let bin = ecosystem::find_omp().ok_or_else(|| {
             NurError::Tool(
-                "omp CLI not found. Install Bun (bun.sh) then `nur ecosystem ensure`, \
-                 or install directly: bun install -g @oh-my-pi/pi-coding-agent@latest \
-                 (Windows: irm https://omp.sh/install.ps1 | iex)"
+                "omp CLI not found. nur's own `agent` tool delegates the same way \
+                 (any provider; `cost_mode: economy` for a cheap model). To use omp, set \
+                 `ecosystem_omp = true` in config.toml and run `nur ecosystem ensure`, or \
+                 install it directly: bun install -g @oh-my-pi/pi-coding-agent@latest"
                     .into(),
             )
         })?;

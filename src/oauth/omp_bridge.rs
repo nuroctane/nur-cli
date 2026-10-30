@@ -409,27 +409,6 @@ pub fn invalidate_omp_token_cache() {
     }
 }
 
-/// Read OMP `modelRoles` (smol/slow/plan/…) when available — used to seed
-/// nur economy / subagent cheap-model hints without inventing role names.
-pub fn omp_model_role(role: &str) -> Option<String> {
-    let bin = crate::ecosystem::find_omp()?;
-    let output = crate::ecosystem::run_capture(
-        &bin,
-        &["config", "get", "modelRoles", "--json"],
-        None,
-        15_000,
-    )
-    .ok()?;
-    let value: serde_json::Value = serde_json::from_str(&output).ok()?;
-    let roles = value.get("value").unwrap_or(&value);
-    roles
-        .get(role)
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

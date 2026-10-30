@@ -6,7 +6,7 @@
 
 **Use fewer paid tokens by default.**
 
-The harness supersedes stale duplicate reads, spills large tool results, preserves provider prompt caches, and compacts repeatedly using an OMP-style response reserve instead of a premature fixed percentage. It also supports local context estimates when providers omit usage, prompt caching, local models, and focused Oh My Pi delegation through a verified authenticated economy model.
+The harness supersedes stale duplicate reads, spills large tool results, preserves provider prompt caches, and compacts repeatedly using an OMP-style response reserve instead of a premature fixed percentage. It also supports local context estimates when providers omit usage, prompt caching, local models, and economy subagents that run on the cheapest tool-capable model your account has.
 
 Tool-result previews include their spill path in the size budget, including long paths and tiny limits.
 
@@ -142,7 +142,7 @@ Everything is **local**. Secrets never go into the git repo.
 | **Rust / cargo** | Builds the CLI (one-liner / cargo only; `npx` path needs none) |
 | **Git** | Clone / update |
 | **Node.js 20+** | PLUR · Ruflo · Executor · skills · browser · AKM (the `npx` shim itself needs only Node 18+) |
-| **Bun** | **omp** backend |
+| **Bun** | AKM runtime (and **omp** when `ecosystem_omp = true`) |
 | **uv** | **Graphify** |
 | **ripgrep (`rg`)** | Fast `grep` / `glob`, and the file walk behind `sgrep` |
 | **sgrep** | Semantic code search (`sgrep` tool); built with `cargo install --git https://github.com/context-dot-dev/sgrep --locked`, model (32 MB) downloaded once |
@@ -172,7 +172,7 @@ Everything is **local**. Secrets never go into the git repo.
 
 #### D. Ecosystem packs
 
-Graphify · PLUR · Ruflo · Executor · omp · agent-browser-cli · Text-to-CAD ·
+Graphify · PLUR · Ruflo · Executor · agent-browser-cli · Text-to-CAD ·
 mobile-harness · `/sc-research` whitehat DeFi pack (X bounty intel + historical vuln library) · skill packs. Installed when
 Node/uv/Bun are available.
 

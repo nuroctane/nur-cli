@@ -634,9 +634,8 @@ impl App {
             } else {
                 "OFF"
             };
-            let into = agent::resolve_prewalk_into(&self.cfg).unwrap_or_else(|| {
-                "(unset - set /prewalk into <model> or OMP modelRoles.smol)".into()
-            });
+            let into = agent::resolve_prewalk_into(&self.cfg)
+                .unwrap_or_else(|| "(unset - set /prewalk into <model>)".into());
             let active = self
                 .prewalk_override
                 .lock()
@@ -662,10 +661,7 @@ impl App {
                      compaction {remote}\n\n  \
                      /prewalk on|off       enable (persists in config.toml)\n  \
                      /prewalk into <model> cheap model after first write/edit once todos exist\n  \
-                     /prewalk reset        clear this session's model override\n\n  \
-                     Mirrors Oh My Pi --prewalk: strong model plans, commits todos, starts \
-                     implementation, then hands off. Image snapcompact stays in OMP; nur uses \
-                     optional remote summarization when compaction.remote_endpoint is set."
+                     /prewalk reset        clear this session's model override"
                 ),
             );
             return;
@@ -673,10 +669,15 @@ impl App {
         if lower == "on" || lower == "enable" {
             self.cfg.prewalk.enabled = true;
             let _ = crate::config::save_config(&self.cfg);
-            self.push_note(
-                Tone::Usage,
-                "prewalk ON · first write/edit after todos → smol/into model (saved)".into(),
-            );
+            let note = match agent::resolve_prewalk_into(&self.cfg) {
+                Some(into) => {
+                    format!("prewalk ON · first write/edit after todos → `{into}` (saved)")
+                }
+                None => {
+                    "prewalk ON (saved) · no model to switch to yet: /prewalk into <model>".into()
+                }
+            };
+            self.push_note(Tone::Usage, note);
             return;
         }
         if lower == "off" || lower == "disable" {

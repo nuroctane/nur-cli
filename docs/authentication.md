@@ -218,7 +218,7 @@ Imports are **deliberate, not automatic**: a plain `nur auth login` always
 starts a fresh browser or key flow and never silently reuses another tool's
 session, because most vendor CLIs rotate a *shared* refresh token - whichever
 tool refreshes second is signed out. The import prints exactly that warning so
-the trade-off is yours to make. Set `fallback_import = true` under `[auth]` in
+the trade-off is yours to make. Set `import_fallback = true` under `[auth]` in
 `~/.nur/config.toml` to restore the old behaviour (a missing credential quietly
 falls back to a vendor CLI / OMP session) for every provider at once.
 
@@ -544,7 +544,7 @@ Credential resolution order:
 3. That provider's saved key, then saved OAuth session (imports land here)
 4. The global `NUR_API_KEY` fallback
 5. A supported vendor CLI session, then an OMP credential - **only** when
-   `[auth] fallback_import = true` opts in; otherwise `nur auth import --from`
+   `[auth] import_fallback = true` opts in; otherwise `nur auth import --from`
    is the explicit path
 6. Interactive TUI prompt (opens `/login` when no credential is found)
 

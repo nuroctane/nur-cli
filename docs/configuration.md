@@ -39,7 +39,7 @@ compact_tool_body_max_chars = 800
 # remote_enabled = true
 # remote_endpoint = "https://example.com/compact"
 
-# OMP-style prewalk: strong model plans + todos, then switch to a cheap model at
+# Prewalk: strong model plans + todos, then switch to a cheap model at
 # the first write/edit. Off by default. Toggle with /prewalk in the TUI.
 # [prewalk]
 # enabled = true
@@ -61,6 +61,10 @@ poor_mode = false
 
 # Background TTL pack repair on later TUI opens (first install is foreground)
 ecosystem_auto_ensure = true
+# Let ecosystem ensure install/upgrade Oh My Pi (omp); an omp on PATH is used either way
+# ecosystem_omp = false
+# Cheap model for `agent` cost_mode=economy (and prewalk when [prewalk] into is unset)
+# economy_model = "<a cheap model id on your provider>"
 
 # Self-update from GitHub Releases — checked on EVERY launch (60s network floor)
 auto_update = true
@@ -77,7 +81,7 @@ auto_update = true
 
 # Auth behaviour.
 # [auth]
-# fallback_import = false   # true restores silent vendor CLI / OMP import when
+# import_fallback = false   # true restores silent vendor CLI / OMP import when
                             # no credential is found (default is the explicit
                             # `nur auth import --from <source>`)
 ```
@@ -95,7 +99,7 @@ auto_update = true
 | `failover_allow_downgrade` | bool | `false` | Allow failover to a provider whose privacy tier is weaker than the active one. `false` means an outage never silently weakens data privacy |
 | `failover_allow_paid` | bool | `false` | Allow failover from a subscription route (OAuth sign-in, or an OpenCode Go `/zen/go/` base URL) to a per-token provider. `false` skips the paid fallback with a status line instead of silently billing it |
 | `protocols` | map | empty | Force the wire protocol per route: `{"provider/model" = "responses" \| "chat" \| "anthropic" \| "gemini"}` (a bare `provider` key covers every model). Wins over the catalog's per-model routing; use it when a gateway rejects the default protocol (the 400 error names this table). Ignored for Anthropic and Gemini providers, whose protocol is not negotiable |
-| `auth.fallback_import` | bool | `false` | When no credential is found, silently import a signed-in vendor CLI / OMP session. `false` (default) keeps imports explicit via `nur auth import --from <source>`, because rotating vendor refresh tokens sign out whichever tool refreshes second |
+| `auth.import_fallback` | bool | `false` | When no credential is found, silently import a signed-in vendor CLI / OMP session. `false` (default) keeps imports explicit via `nur auth import --from <source>`, because rotating vendor refresh tokens sign out whichever tool refreshes second |
 | `auth.encrypt_at_rest` | bool | `true` | Seal `auth.json`, `provider_keys.json` and `provider_sessions.json` with Windows DPAPI (user scope) before writing, so a copied file is inert on another account or machine. Older plaintext files are read as-is and sealed in place on first read. Set `false` when `~/.nur` is synced between machines or Windows accounts. No effect on Unix, where mode 0600 is the protection |
 | `path_models` | array | empty | Per-directory model: `[[path_models]]` with `path`, `model` and optional `provider` / `effort`. See [Per-directory models](#per-directory-models) |
 | `advisor.model` | string | empty | A second model that reviews each turn and leaves notes (empty = off). `advisor.provider` (empty = the session's) and `advisor.every_round` (`false`). See [Advisor](#advisor) |
@@ -159,8 +163,8 @@ auto_update = true
 | `headroom.min_chars` | integer | `2000` | Skip compression below this many chars |
 | `headroom.model` | string | active session model | Token-counter model passed to Headroom; empty = the active session model |
 | `optmem.enabled` | bool | `true` | [OptMem](https://github.com/VictorTaelin/OptMem) permanent memory under upstream `~/.optmem` (wake inject + `optmem` tool; `/optmem` · `/memo`) |
-| `prewalk.enabled` | bool | `false` | After todos exist, first write/edit switches to `prewalk.into` / smol |
-| `prewalk.into` | string | unset | Cheap model for prewalk handoff (`/prewalk into …`, or `OMP_SMOL_MODEL` / OMP `modelRoles.smol`) |
+| `prewalk.enabled` | bool | `false` | After todos exist, first write/edit switches to `prewalk.into` |
+| `prewalk.into` | string | unset | Cheap model for prewalk handoff (`/prewalk into …`, or `NUR_PREWALK_MODEL`) |
 | `helix_memory.mode` | string | `auto` | `auto` enables only when `HELIX_URL`/`NUR_HELIX_URL` or a configured URL exists; `on` uses the configured/local endpoint; `off` disables the resident |
 | `helix_memory.url` | string | local endpoint when on | HelixDB gateway base URL. Nur uses `/healthz` and typed `/v2/query` requests |
 | `helix_memory.api_key_env` | string | `HELIX_API_KEY` | Name of the env var containing the Helix bearer token. The token is never written to config or memory |
@@ -182,6 +186,8 @@ auto_update = true
 | `theme_setup.transparent` | bool | `false` | Skip painting panel/code backgrounds so a translucent terminal shows through (`/theme transparent`) |
 | `theme_setup.motion` | string | `auto` | Animation. With `full`, the NUR banner shimmers whenever it is on screen, idle included; every other ambient animation (aurora rules, the input border, modal edges) moves only while an agent turn, startup or a modal is active, and holds its frame while idle. `reduced` is an accessibility setting: the banner and all ambient animation hold one still frame, and spinners tick at ~10fps. `auto` picks `reduced` only over SSH (`SSH_TTY`/`SSH_CONNECTION`), where every frame crosses a network link. `/theme motion` toggles and saves; `NUR_REDUCED_MOTION=1|0` overrides for one run |
 | `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via npx / one-liner / EXE / `nur install\); set `false` to skip repair |
+| `ecosystem_omp` | bool | `false` | Let `nur ecosystem ensure` install and upgrade Oh My Pi (`omp`, backend of the `omp` tool), which runs its installer. Off: an `omp` already on PATH is still found and used, and nothing is downloaded. `NUR_ECOSYSTEM_OMP=1` for one run |
+| `economy_model` | string | unset | Model for `agent` calls with `cost_mode: economy` that stay on this provider, and for prewalk when `[prewalk] into` is unset. Unset: an economy child runs on the cheapest tool-capable model the account lists that models.dev prices |
 | `skills.auto_activate` | bool | `false` | Natural-language skill activation ("think like fable" injects the skill body). Off by default; explicit `/skill-name` and the `skill` tool always work. See [natural-language skill activation](./ecosystem.md#natural-language-skill-activation) |
 | `tools.profile` | string | `lean` | `lean` = the editing shell and session tools up front, every ecosystem tool loaded on demand through `tool_search` (about 6.1k tool-schema tokens, 27 tools, plus 5k system prompt; a loaded tool joins the end of the roster from the next request on). `full` = every tool up front. `core` = minimal local editing shell (16 tools: read/list/write/edit/multi_edit/apply_patch/hashline_edit, bash, sgrep/grep/glob, web_fetch/web_search, question, todo_write, submit_plan) with no ecosystem tools or prose. Restart to change. Unknown values fall back to `lean`. Measured per-request overhead on the E2E harness (chars/4, no PLUR or OptMem installed): `full` about 3.9k system-prompt + 15.4k tool-schema tokens (54 tools), `core` about 1.8k + 2.8k (15 tools) |
 | `tools.sgrep_first` | bool | `true` | Semantic search is enforced, not suggested: a `grep` whose pattern is a description is answered by `sgrep`, a `grep` past its default cap comes back reranked by `sgrep` (an explicit `max_matches` is honored), and shell searches (`grep`/`rg`/`findstr`/`Select-String` as the command) are refused. Needs sgrep installed to change anything; see [Tools](tools.md#sgrep) |

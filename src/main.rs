@@ -1435,7 +1435,7 @@ fn run_doctor() -> Result<()> {
                 "ffmpeg  not on PATH (optional — extract_frames / design-from-video)",
             );
         } else if name == "bun" {
-            theme::print_info("bun     not on PATH (optional - omp coding-agent backend)");
+            theme::print_info("bun     not on PATH (optional - akm runtime, omp)");
         } else {
             theme::print_info(&format!("{name:<7} not on PATH"));
         }
@@ -1669,7 +1669,7 @@ async fn run_headless(
                 // Headless: no TUI modal — print how to auth. Spawn is already
                 // blocked (no silent parent fallback); user must re-run after login.
                 out.notice(&format!(
-                    "not signed in to {provider_name} — spawn blocked. Run `nur` then `/login {provider_id}` (or export its API key), then re-deploy the subagent there"
+                    "not signed in to {provider_name} - subagent blocked. Sign in with `nur auth login --provider {provider_id}` (or export its API key), then run again"
                 ));
             }
             AgentEvent::FusionLoginRequired {

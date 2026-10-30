@@ -551,7 +551,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/typesafe-ai` | Loads the TypeSafe *skill* (how to design and use judgments) - distinct from `/typesafe`, which is the layer's status/controls |
 | `/enclave` | Enclave security agents over native MCP: `status` · `tools [name]` · `login` ([docs/enclave.md](./enclave.md)) |
 | `/headroom` | Context compression doctor (inline tool-result compress on by default) |
-| `/prewalk` | OMP-style: strong model plans, then cheap/smol at first edit after todos (`on` \| `off` \| `status` \| `into <model>` \| `reset`). Off by default. |
+| `/prewalk` | Strong model plans, then a cheap model at the first edit after todos (`on` \| `off` \| `status` \| `into <model>` \| `reset`). Off by default. |
 | `/egaki` | Image/video gen via egaki (`login --provider chatgpt` supported) |
 | `/image <path>` | Stage an image in the composer for vision; F4 previews it (generation is `/egaki`) |
 | `/tb` · `/terminal-browser` | terminal-browser: `open` \| `ls` \| `action` \| `setup` (Windows host fallback via agent-browser-cli) |

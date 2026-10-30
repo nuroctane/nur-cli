@@ -484,7 +484,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
                  git_status/git_diff for repository state. Prefer dedicated edit tools over \
                  shell rewrites. Never run interactive/watch commands. Keep paths inside the \
                  workspace. Read tool errors before changing approach.\n\n\
-                 Delegation tools and OMP are intentionally unavailable in child runs. Do not \
+                 Delegation tools are intentionally unavailable in child runs. Do not \
                  substitute another backend when a tool or provider fails. Return a clear \
                  failure with any useful partial findings so the parent can retry or recover.\n\n\
                  Finish with a concise report of findings, files touched, and checks run.\n",
@@ -984,9 +984,20 @@ mod tests {
         .render(PermissionMode::Auto, "(no todos)", "");
         let prompt = rendered.system;
         assert!(rendered.turn_state.is_empty());
-        assert!(prompt.contains("read_file"));
-        assert!(prompt.contains("write_file"));
-        assert!(prompt.contains("Delegation tools and OMP are intentionally unavailable"));
+        let focused: Vec<&str> = prompt
+            .split("# Focused tools\n")
+            .nth(1)
+            .and_then(|rest| rest.lines().next())
+            .unwrap_or("")
+            .split(", ")
+            .collect();
+        assert!(focused.contains(&"read_file") && focused.contains(&"write_file"));
+        for delegation in ["agent", "omp"] {
+            assert!(
+                !focused.contains(&delegation),
+                "child offered `{delegation}`"
+            );
+        }
         assert!(!prompt.contains("# Cross-provider subagents"));
         assert!(!prompt.contains("plur:"));
         assert!(!prompt.contains("ruflo:"));

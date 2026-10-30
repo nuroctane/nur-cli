@@ -20,7 +20,7 @@ pub fn build_body(req: &ResponseRequest, stream: bool) -> Value {
 /// types for tools.
 #[cfg(test)]
 pub fn build_body_for_provider(req: &ResponseRequest, stream: bool, provider_id: &str) -> Value {
-    build_body_opts(req, stream, provider_id, false)
+    build_body_opts(req, stream, provider_id, "", false)
 }
 
 /// Placeholder swapped in for an image/video part when the endpoint has no
@@ -40,6 +40,7 @@ pub fn build_body_opts(
     req: &ResponseRequest,
     stream: bool,
     provider_id: &str,
+    base_url: &str,
     drop_media: bool,
 ) -> Value {
     let mut messages: Vec<Value> = Vec::new();
@@ -53,12 +54,12 @@ pub fn build_body_opts(
         // A run of tool calls must reach the server as ONE assistant turn whose
         // `tool_calls` list every following `tool` message can point back at.
         // Reasoning items have no chat-completions equivalent and are dropped
-        // below — but on the OpenCode route they must not *split* such a run
-        // either, or the tool results that follow reference call ids the last
-        // assistant message never declared and the gateway rejects the turn.
-        // Histories interleaved that way come from a Responses/Anthropic
-        // session replayed after switching provider to OpenCode.
-        let merge_across_reasoning = provider_id == "opencode";
+        // below — so they must not *split* such a run either, or the tool
+        // results that follow reference call ids the last assistant message
+        // never declared and strict servers reject the turn. Histories
+        // interleaved that way come from a Responses session replayed after a
+        // provider switch.
+        let id_rule = super::wire_ids::IdRule::for_chat(provider_id, base_url);
         let mut index = 0;
         while index < items.len() {
             if item_type(&items[index]) == Some("function_call") {
@@ -74,10 +75,10 @@ pub fn build_body_opts(
                 while index < items.len() {
                     match item_type(&items[index]) {
                         Some("function_call") => {
-                            tool_calls.push(chat_tool_call(&items[index]));
+                            tool_calls.push(chat_tool_call(&items[index], id_rule));
                             index += 1;
                         }
-                        Some("reasoning") if merge_across_reasoning => index += 1,
+                        Some("reasoning") => index += 1,
                         _ => break,
                     }
                 }
@@ -144,6 +145,7 @@ pub fn build_body_opts(
                 drop_media,
                 provider_id,
                 deepseek_rules,
+                id_rule,
             );
             index += 1;
         }
@@ -273,7 +275,12 @@ pub fn build_body_opts(
     if provider_id == "openrouter" {
         apply_openrouter_options(&mut body);
     }
-    apply_chat_effort(&mut body, provider_id, &req.model, req.reasoning.as_ref().and_then(|r| r.effort.as_deref()));
+    apply_chat_effort(
+        &mut body,
+        provider_id,
+        &req.model,
+        req.reasoning.as_ref().and_then(|r| r.effort.as_deref()),
+    );
     body
 }
 
@@ -430,30 +437,24 @@ fn push_item_messages_opts(
     drop_media: bool,
     provider_id: &str,
     deepseek_rules: bool,
+    id_rule: super::wire_ids::IdRule,
 ) {
     // function_call_output → a `tool` role message.
     if item.get("type").and_then(|t| t.as_str()) == Some("function_call_output") {
+        let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
         out.push(json!({
             "role": "tool",
-            "tool_call_id": item.get("call_id").and_then(|v| v.as_str()).unwrap_or(""),
+            "tool_call_id": super::wire_ids::fit(call_id, id_rule),
             "content": item.get("output").and_then(|v| v.as_str()).unwrap_or(""),
         }));
         return;
     }
     // function_call → an assistant message carrying a tool_call.
     if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
-        let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
         out.push(json!({
             "role": "assistant",
             "content": Value::Null,
-            "tool_calls": [{
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": item.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-                    "arguments": item.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}"),
-                }
-            }]
+            "tool_calls": [chat_tool_call(item, id_rule)]
         }));
         return;
     }
@@ -528,13 +529,14 @@ fn item_type(item: &Value) -> Option<&str> {
     item.get("type").and_then(|t| t.as_str())
 }
 
-fn chat_tool_call(item: &Value) -> Value {
+fn chat_tool_call(item: &Value, id_rule: super::wire_ids::IdRule) -> Value {
+    let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
     json!({
-        "id": item.get("call_id").and_then(|v| v.as_str()).unwrap_or(""),
+        "id": super::wire_ids::fit(call_id, id_rule),
         "type": "function",
         "function": {
             "name": item.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-            "arguments": item.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}"),
+            "arguments": super::types::call_arguments(item),
         }
     })
 }
@@ -1239,11 +1241,12 @@ mod tests {
         }
     }
 
-    /// Reasoning items are dropped for chat completions, so on the OpenCode
-    /// route they must not split a run of tool calls into two assistant turns —
-    /// that is exactly what leaves a `tool` message orphaned.
+    /// Reasoning items are dropped for chat completions, so they must not split
+    /// a run of tool calls into two assistant turns on any route — that is
+    /// exactly what leaves a `tool` message orphaned (OpenAI, DeepSeek and
+    /// OpenCode Go all reject it).
     #[test]
-    fn reasoning_between_tool_calls_does_not_split_the_opencode_turn() {
+    fn reasoning_between_tool_calls_does_not_split_the_turn() {
         let mut request = req();
         request.input = json!([
             {"role":"user","content":[{"type":"input_text","text":"inspect"}]},
@@ -1254,18 +1257,18 @@ mod tests {
             {"type":"function_call_output","call_id":"a","output":"clean"},
             {"type":"function_call_output","call_id":"b","output":"src"}
         ]);
-        let body = build_body_for_provider(&request, false, "opencode");
-        let messages = body["messages"].as_array().unwrap();
-        assert_eq!(messages[2]["tool_calls"].as_array().unwrap().len(), 2);
-        assert_eq!(messages[2]["tool_calls"][0]["id"], "a");
-        assert_eq!(messages[2]["tool_calls"][1]["id"], "b");
-        tool_call_ids_are_declared_before_use(&body);
-
-        // Other providers keep the previous grouping exactly.
-        let other = build_body_for_provider(&request, false, "");
-        let messages = other["messages"].as_array().unwrap();
-        assert_eq!(messages[2]["tool_calls"].as_array().unwrap().len(), 1);
-        assert_eq!(messages[3]["tool_calls"].as_array().unwrap().len(), 1);
+        for provider in ["opencode", "openai", "deepseek", ""] {
+            let body = build_body_for_provider(&request, false, provider);
+            let messages = body["messages"].as_array().unwrap();
+            assert_eq!(
+                messages[2]["tool_calls"].as_array().unwrap().len(),
+                2,
+                "{provider}"
+            );
+            assert_eq!(messages[2]["tool_calls"][0]["id"], "a");
+            assert_eq!(messages[2]["tool_calls"][1]["id"], "b");
+            tool_call_ids_are_declared_before_use(&body);
+        }
     }
 
     #[test]
@@ -1372,7 +1375,7 @@ mod tests {
         assert!(request_has_media(&request));
         assert!(!request_has_media(&req()));
 
-        let body = build_body_opts(&request, false, "", false);
+        let body = build_body_opts(&request, false, "", "", false);
         let parts = body["messages"][1]["content"].as_array().unwrap();
         assert_eq!(parts[0]["type"], "text");
         assert_eq!(parts[1]["type"], "image_url");
@@ -1380,7 +1383,7 @@ mod tests {
 
     #[test]
     fn drop_media_replaces_images_with_a_text_marker() {
-        let body = build_body_opts(&req_with_image(), false, "", true);
+        let body = build_body_opts(&req_with_image(), false, "", "", true);
         let content = body["messages"][1]["content"].as_str().unwrap();
         assert!(content.starts_with("what is this"));
         assert!(content.contains(MEDIA_DROPPED));
@@ -1752,7 +1755,8 @@ mod tool_choice_tests {
             "total_tokens": 1050,
             "prompt_tokens_details": { "cached_tokens": 900 },
         });
-        let v = build_response_value_with_status(Some("id"), Some("m"), "hi", &[], Some(&usage), None);
+        let v =
+            build_response_value_with_status(Some("id"), Some("m"), "hi", &[], Some(&usage), None);
         assert_eq!(v["usage"]["input_tokens"], 1000);
         assert_eq!(v["usage"]["input_tokens_details"]["cached_tokens"], 900);
     }
