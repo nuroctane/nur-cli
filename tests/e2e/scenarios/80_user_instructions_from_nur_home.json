@@ -1,0 +1,19 @@
+{
+  "description": "Standing instructions in the nur home reach the system prompt in every workspace, ahead of the project's own instructions.",
+  "prompt": "Say hi.",
+  "setup_home_files": {
+    "AGENTS.md": "Run builds through the low-CPU wrapper (user-rule-marker)."
+  },
+  "setup_files": {
+    "AGENTS.md": "Project conventions (project-rule-marker)."
+  },
+  "script": [
+    {"text": "hi"}
+  ],
+  "expect": {
+    "requests": 1,
+    "request_contains": [
+      {"request": 1, "contains": ["# User instructions (AGENTS.md)", "user-rule-marker", "# Project instructions (AGENTS.md)", "project-rule-marker"]}
+    ]
+  }
+}

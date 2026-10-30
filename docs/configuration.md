@@ -568,3 +568,10 @@ NurCLI reads project-level instruction files from your working directory:
 | `CLAUDE.md` | Legacy instructions (still loaded) |
 
 These are loaded at session start and prepended to the system prompt.
+
+### User instructions
+
+Standing rules that apply in every workspace go in the nur home: `~/.nur/NUR.md`, or
+`~/.nur/AGENTS.md` when there is no `NUR.md` (`NUR_HOME` relocates both). The file is
+loaded each turn, for subagents too, ahead of the project's instructions, so project
+rules can refine it. Use it for machine-wide constraints such as CPU limits for builds.

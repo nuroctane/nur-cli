@@ -604,6 +604,9 @@ NurCLI loads project-level instructions from your working directory at session s
 | `AGENTS.md` | Agent conventions |
 | `CLAUDE.md` | Also loaded |
 
+User instructions that apply everywhere live in `~/.nur/NUR.md` (or `~/.nur/AGENTS.md`)
+and load ahead of the project's.
+
 ---
 
 ## Safe workspace

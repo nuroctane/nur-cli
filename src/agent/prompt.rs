@@ -111,6 +111,18 @@ pub fn attribute_request(
 /// Project instruction files (first found wins). NUR.md is preferred.
 pub const PROJECT_INSTRUCTION_FILES: &[&str] = &["NUR.md", "AGENTS.md", "CLAUDE.md"];
 
+/// The user's own standing instructions, from the nur home (`~/.nur/NUR.md`, else
+/// `~/.nur/AGENTS.md`): rules that hold in every workspace, such as machine resource
+/// limits. Same lookup and cap as project instructions. Skipped when the session's
+/// workspace is the nur home itself, whose file is then already the project's.
+pub fn find_user_instructions(cwd: &Path) -> Option<(String, String)> {
+    let home = crate::config::nur_home();
+    if home == cwd {
+        return None;
+    }
+    find_project_instructions(&home)
+}
+
 pub fn find_project_instructions(cwd: &Path) -> Option<(String, String)> {
     for name in PROJECT_INSTRUCTION_FILES {
         let p = cwd.join(name);
@@ -147,6 +159,8 @@ pub struct PromptContext {
     /// Human provider name (e.g. "xAI Grok", "Meta Model API").
     provider: String,
     shell_label: String,
+    /// Standing instructions from the nur home; rendered before the project's.
+    user: Option<(String, String)>,
     project: Option<(String, String)>,
     memory: String,
     /// PLUR inject block - auto-loaded so the agent remembers past corrections.
@@ -361,6 +375,7 @@ impl PromptContext {
             model: model.to_string(),
             provider: provider.to_string(),
             shell_label: shell_backend().label.clone(),
+            user: find_user_instructions(cwd),
             project: find_project_instructions(cwd),
             memory,
             plur,
@@ -478,6 +493,9 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
                 self.shell_label,
                 crate::tools::SUBAGENT_TOOL_NAMES.join(", "),
             );
+            if let Some((name, text)) = &self.user {
+                prompt.push_str(&format!("\n# User instructions ({name})\n{text}\n"));
+            }
             if let Some((name, text)) = &self.project {
                 prompt.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
             }
@@ -747,6 +765,9 @@ reflects the moment the request was sent; follow it over anything earlier.
 "#,
         );
 
+        if let Some((name, text)) = &self.user {
+            s.push_str(&format!("\n# User instructions ({name})\n{text}\n"));
+        }
         if let Some((name, text)) = &self.project {
             s.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
         }
@@ -910,6 +931,7 @@ mod tests {
             model: "test-model".into(),
             provider: "test-provider".into(),
             shell_label: "PowerShell".into(),
+            user: None,
             project: None,
             memory: String::new(),
             plur: "\n# PLUR shared memory (auto-injected)\nremembered correction\n".into(),

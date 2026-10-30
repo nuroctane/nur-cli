@@ -222,7 +222,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 - `/poor` cost-saver prompt
 - **Usage ledger**: `nur ledger` · `/ledger` totals seven agent log formats locally, without importing keys or prompt content ([docs/ledger.md](docs/ledger.md))
 - `/startup-skill` routes to the installed startup validation, competitor research, positioning, and pitch workflows
-- Project instructions: `NUR.md` · `AGENTS.md` · `CLAUDE.md`
+- Project instructions: `NUR.md` · `AGENTS.md` · `CLAUDE.md`; user-wide rules in `~/.nur/NUR.md` (or `AGENTS.md`)
 - Session resume: `-c`, `-r`, `/sessions` (alias `/resume`)
 - **Takeover** cross-agent migration (`/takeover` · `/hijack`): import a session from **Claude Code · Codex · Cursor · Grok Build** into a native nur session and resume it. Two windows in one modal — press **`c`** to switch between `/sessions` and `/takeover`
 - `/model` opens a live model list for the active provider (or `/model <id>` to set one directly)
