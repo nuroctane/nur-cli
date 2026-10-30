@@ -49,7 +49,7 @@ mod tests {
             });
             for _ in 0..100 {
                 let value: serde_json::Value =
-                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                    serde_json::from_slice(&crate::config::read_replaced(&path).unwrap()).unwrap();
                 assert_eq!(value["payload"], payload);
             }
         });

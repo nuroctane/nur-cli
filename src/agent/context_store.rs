@@ -226,7 +226,7 @@ fn persist_session(session_id: &str, sess: &SessionStore) -> Result<(), String> 
 
 fn load_session(session_id: &str) -> SessionStore {
     let index = session_index_path(session_id);
-    let Ok(text) = std::fs::read_to_string(index) else {
+    let Ok(text) = crate::config::read_replaced_string(&index) else {
         return SessionStore {
             loaded: true,
             ..Default::default()

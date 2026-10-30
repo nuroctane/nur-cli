@@ -343,6 +343,28 @@ impl AgentRunner {
 
     /// Session id used for async subagent admissions. The runner does not own a
     /// session; prefer the ambient `NUR_SESSION_ID`, else a process-global id.
+    /// Append the AGENTS.md / NUR.md of directories below the cwd that this
+    /// tool call touched for the first time this session. They ride in the
+    /// tool result, never the system prompt, so the cached prefix holds.
+    fn with_nested_instructions(
+        &self,
+        session_id: &str,
+        tool: &str,
+        args: &str,
+        body: String,
+    ) -> String {
+        match super::instructions::nested_for_tool(
+            &self.cwd,
+            session_id,
+            tool,
+            args,
+            self.config.instructions.max_chars,
+        ) {
+            Some(extra) => body + &extra,
+            None => body,
+        }
+    }
+
     fn session_id_for_admission(&self) -> String {
         if let Ok(sid) = std::env::var("NUR_SESSION_ID") {
             if !sid.is_empty() {
@@ -2081,6 +2103,16 @@ impl AgentRunner {
                     })
                     .await
                     .unwrap_or_else(|e| format!("error: headroom task failed: {e}"));
+                    let body = if ok {
+                        self.with_nested_instructions(
+                            &session.id,
+                            &name,
+                            &call_arguments(calls, &call_id),
+                            body,
+                        )
+                    } else {
+                        body
+                    };
                     record_auxiliary_telemetry(&session.id);
                     receipt::record(
                         &session.id,
@@ -2374,13 +2406,14 @@ impl AgentRunner {
                 let tname = call.name.clone();
                 let model = self.config.model.clone();
                 let spill_max = self.config.tool_result_max_chars as usize;
-                crate::typesafe::context::spawn_blocking(move || {
+                let body = crate::typesafe::context::spawn_blocking(move || {
                     crate::headroom::prepare_tool_body(
                         &hr, &sid, &tname, body, true, spill_max, &model,
                     )
                 })
                 .await
-                .unwrap_or_else(|e| format!("error: headroom task failed: {e}"))
+                .unwrap_or_else(|e| format!("error: headroom task failed: {e}"));
+                self.with_nested_instructions(&session.id, &call.name, &call.arguments, body)
             } else {
                 // Keep error messages intact (usually short).
                 body

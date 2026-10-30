@@ -1,0 +1,31 @@
+{
+  "description": "An @import line in AGENTS.md inlines a file from the repository, while an import of a credential file is refused with a notice and its content never reaches the model.",
+  "prompt": "Say ok.",
+  "setup_files": {
+    ".git/HEAD": "ref: refs/heads/main\n",
+    "AGENTS.md": "Rules:\n@docs/build.md\n@.env\n",
+    "docs/build.md": "BUILD-RULES-MARKER\n",
+    ".env": "DB_PASSWORD=HUNTER2-LEAK-MARKER\n"
+  },
+  "script": [
+    {
+      "text": "ok"
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 1,
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "BUILD-RULES-MARKER",
+          "[import @.env refused: credential path]"
+        ],
+        "lacks": [
+          "HUNTER2-LEAK-MARKER"
+        ]
+      }
+    ]
+  }
+}

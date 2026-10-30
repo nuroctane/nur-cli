@@ -565,15 +565,36 @@ Override with `NUR_HOME`.
 
 ## Project instructions
 
-NurCLI reads project-level instruction files from your working directory:
+nur reads instruction files from every directory between the git root and the
+working directory, root first, each time a user turn starts:
 
 | File | Purpose |
 |------|---------|
-| `NUR.md` | Primary project instructions |
-| `AGENTS.md` | Agent conventions (shared with other tools) |
-| `CLAUDE.md` | Legacy instructions (still loaded) |
+| `AGENTS.md` | Project instructions shared with other agents (`/init` creates or audits it) |
+| `CLAUDE.md` | Read in a directory that has no `AGENTS.md` |
+| `NUR.md` | nur-only layer, loaded after the `AGENTS.md` of the same directory |
 
-These are loaded at session start and prepended to the system prompt.
+- **Budget.** `[instructions] max_chars` (default `48000`) covers the whole chain.
+  Nothing is cut silently: what does not fit is stored as a context variable (or,
+  when it looks like a credential, left in the file) and the prompt says where it
+  continues. `/context` lists each file with its size and anything spilled.
+- **Imports.** A line that is exactly `@path` (outside a code fence) is replaced
+  by that file, relative to the file that names it, five levels deep. Project
+  files may import only inside their repository and user files only under your
+  home directory; credential paths (`.ssh`, `.aws`, `.env`, `*.pem`, ...) and
+  credential-shaped content are refused with a one-line notice.
+- **Nested directories.** A directory below the working directory with its own
+  `AGENTS.md` is delivered once per session, appended to the result of the first
+  tool that reads or edits a file there (`node_modules`, `vendor`, `target`,
+  `.git` and `third_party` are skipped). The system prompt stays the same, so
+  provider prompt caches hold.
+- Hidden Unicode (tag characters and bidi controls) is removed before any of it
+  reaches a model, and `/context` names the file.
+
+```toml
+[instructions]
+max_chars = 48000
+```
 
 ### User instructions
 
@@ -581,3 +602,5 @@ Standing rules that apply in every workspace go in the nur home: `~/.nur/NUR.md`
 `~/.nur/AGENTS.md` when there is no `NUR.md` (`NUR_HOME` relocates both). The file is
 loaded each turn, for subagents too, ahead of the project's instructions, so project
 rules can refine it. Use it for machine-wide constraints such as CPU limits for builds.
+It can import shared rules kept elsewhere under your home, e.g. a line
+`@~/.agents/AGENTS.md`.

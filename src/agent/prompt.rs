@@ -108,37 +108,6 @@ pub fn attribute_request(
     out
 }
 
-/// Project instruction files (first found wins). NUR.md is preferred.
-pub const PROJECT_INSTRUCTION_FILES: &[&str] = &["NUR.md", "AGENTS.md", "CLAUDE.md"];
-
-/// The user's own standing instructions, from the nur home (`~/.nur/NUR.md`, else
-/// `~/.nur/AGENTS.md`): rules that hold in every workspace, such as machine resource
-/// limits. Same lookup and cap as project instructions. Skipped when the session's
-/// workspace is the nur home itself, whose file is then already the project's.
-pub fn find_user_instructions(cwd: &Path) -> Option<(String, String)> {
-    let home = crate::config::nur_home();
-    if home == cwd {
-        return None;
-    }
-    find_project_instructions(&home)
-}
-
-pub fn find_project_instructions(cwd: &Path) -> Option<(String, String)> {
-    for name in PROJECT_INSTRUCTION_FILES {
-        let p = cwd.join(name);
-        if p.is_file() {
-            if let Ok(text) = std::fs::read_to_string(&p) {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    let capped: String = trimmed.chars().take(20_000).collect();
-                    return Some((name.to_string(), capped));
-                }
-            }
-        }
-    }
-    None
-}
-
 /// The parts of the system prompt that come off disk (project instructions,
 /// memory, shell probe) plus **on-demand** skill activation.
 ///
@@ -159,9 +128,9 @@ pub struct PromptContext {
     /// Human provider name (e.g. "xAI Grok", "Meta Model API").
     provider: String,
     shell_label: String,
-    /// Standing instructions from the nur home; rendered before the project's.
-    user: Option<(String, String)>,
-    project: Option<(String, String)>,
+    /// Standing instructions: the nur home's, then the project chain from the
+    /// git root down to the cwd (`super::instructions`).
+    instructions: super::instructions::Instructions,
     memory: String,
     /// PLUR inject block - auto-loaded so the agent remembers past corrections.
     plur: String,
@@ -249,6 +218,24 @@ pub fn prefetch_slow_sources(cwd: &Path, cfg: &crate::config::Config) {
 }
 
 impl PromptContext {
+    /// User then project instruction sections. Stable for the session: the
+    /// files are read once per user turn and an overflow's context variable is
+    /// registered once, so the cached system prefix does not move.
+    fn render_instructions(&self, session_id: &str) -> String {
+        let mut out = String::new();
+        for section in &self.instructions.user {
+            out.push_str(&super::instructions::render_section(
+                "User", section, session_id,
+            ));
+        }
+        for section in &self.instructions.project {
+            out.push_str(&super::instructions::render_section(
+                "Project", section, session_id,
+            ));
+        }
+        out
+    }
+
     /// Build the complete prompt on Tokio's blocking pool, for every provider.
     /// Skill activation can perform blocking Jev HTTP calls, and the other
     /// prompt sources can read disk or run subprocesses. None belongs on an
@@ -375,8 +362,7 @@ impl PromptContext {
             model: model.to_string(),
             provider: provider.to_string(),
             shell_label: shell_backend().label.clone(),
-            user: find_user_instructions(cwd),
-            project: find_project_instructions(cwd),
+            instructions: super::instructions::load(cwd, cfg.instructions.max_chars),
             memory,
             plur,
             optmem,
@@ -493,12 +479,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
                 self.shell_label,
                 crate::tools::SUBAGENT_TOOL_NAMES.join(", "),
             );
-            if let Some((name, text)) = &self.user {
-                prompt.push_str(&format!("\n# User instructions ({name})\n{text}\n"));
-            }
-            if let Some((name, text)) = &self.project {
-                prompt.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
-            }
+            prompt.push_str(&self.render_instructions(session_id));
             return RenderedPrompt {
                 system: prompt,
                 turn_state: String::new(),
@@ -765,12 +746,7 @@ reflects the moment the request was sent; follow it over anything earlier.
 "#,
         );
 
-        if let Some((name, text)) = &self.user {
-            s.push_str(&format!("\n# User instructions ({name})\n{text}\n"));
-        }
-        if let Some((name, text)) = &self.project {
-            s.push_str(&format!("\n# Project instructions ({name})\n{text}\n"));
-        }
+        s.push_str(&self.render_instructions(session_id));
         if let Some(tuning) = self.model_tuning {
             s.push_str(tuning);
         }
@@ -931,8 +907,7 @@ mod tests {
             model: "test-model".into(),
             provider: "test-provider".into(),
             shell_label: "PowerShell".into(),
-            user: None,
-            project: None,
+            instructions: Default::default(),
             memory: String::new(),
             plur: "\n# PLUR shared memory (auto-injected)\nremembered correction\n".into(),
             optmem: "\n# OptMem (permanent memory)\nlong-term memory block\n".into(),

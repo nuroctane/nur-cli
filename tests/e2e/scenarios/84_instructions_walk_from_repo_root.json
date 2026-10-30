@@ -1,0 +1,37 @@
+{
+  "description": "Started in a subdirectory, nur reads instructions from the git root down: the root AGENTS.md, the root NUR.md layered on top of it (no longer hiding it), and the subdirectory's own AGENTS.md.",
+  "cwd": "pkg/app",
+  "prompt": "Say ok.",
+  "setup_files": {
+    ".git/HEAD": "ref: refs/heads/main\n",
+    "AGENTS.md": "ROOT-RULES-MARKER\n",
+    "NUR.md": "ROOT-NUR-LAYER-MARKER\n",
+    "pkg/app/AGENTS.md": "APP-RULES-MARKER\n",
+    "pkg/app/main.rs": "fn main() {}\n"
+  },
+  "script": [
+    {
+      "text": "ok"
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 1,
+    "stdout_contains": [
+      "ok"
+    ],
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "# Project instructions (AGENTS.md)",
+          "ROOT-RULES-MARKER",
+          "# Project instructions (NUR.md)",
+          "ROOT-NUR-LAYER-MARKER",
+          "# Project instructions (pkg/app/AGENTS.md)",
+          "APP-RULES-MARKER"
+        ]
+      }
+    ]
+  }
+}

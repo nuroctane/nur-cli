@@ -264,6 +264,10 @@ pub struct Config {
     /// model at the first edit/write. Default **off**.
     #[serde(default)]
     pub prewalk: PrewalkConfig,
+    /// `[instructions]`: how much of the AGENTS.md / NUR.md chain rides in the
+    /// system prompt before the rest is spilled to the context store.
+    #[serde(default)]
+    pub instructions: InstructionsConfig,
     /// Compaction remote summarization (OMP `compaction.remoteEndpoint` shape).
     /// Default off - local model summarization unchanged.
     #[serde(default)]
@@ -412,7 +416,7 @@ pub fn import_fallback_enabled() -> bool {
     if let Ok(v) = std::env::var("NUR_AUTH_IMPORT_FALLBACK") {
         return matches!(v.trim(), "1" | "true" | "yes" | "on");
     }
-    let Ok(text) = fs::read_to_string(config_path()) else {
+    let Ok(text) = read_replaced_string(&config_path()) else {
         return false;
     };
     let Ok(value) = toml::from_str::<toml::Value>(&text) else {
@@ -432,13 +436,35 @@ pub fn ecosystem_omp_enabled() -> bool {
     if let Ok(v) = std::env::var("NUR_ECOSYSTEM_OMP") {
         return matches!(v.trim(), "1" | "true" | "yes" | "on");
     }
-    let Ok(text) = fs::read_to_string(config_path()) else {
+    let Ok(text) = read_replaced_string(&config_path()) else {
         return false;
     };
     toml::from_str::<toml::Value>(&text)
         .ok()
         .and_then(|v| v.get("ecosystem_omp")?.as_bool())
         .unwrap_or(false)
+}
+
+/// `[instructions]` - the standing-instruction chain (`agent::instructions`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstructionsConfig {
+    /// Characters of instructions (user file plus every project file from the
+    /// git root to the cwd) carried in the system prompt. What does not fit is
+    /// spilled and the prompt says where it continues; nothing is cut silently.
+    #[serde(default = "default_instruction_chars")]
+    pub max_chars: usize,
+}
+
+fn default_instruction_chars() -> usize {
+    48_000
+}
+
+impl Default for InstructionsConfig {
+    fn default() -> Self {
+        Self {
+            max_chars: default_instruction_chars(),
+        }
+    }
 }
 
 /// `[prewalk]` — plan on the active model, implement on a cheap/smol model.
@@ -1223,6 +1249,7 @@ impl Default for Config {
             scoped: None,
             route_pinned: false,
             prewalk: PrewalkConfig::default(),
+            instructions: InstructionsConfig::default(),
             compaction: CompactionConfig::default(),
             proposal_mode: false,
             quality_gate: String::new(),
@@ -1525,7 +1552,7 @@ pub fn ensure_dirs() -> Result<()> {
 /// but mentions the setting is treated as on, so a typo elsewhere in the file
 /// cannot quietly let writes reach the workspace.
 pub fn proposal_mode_on() -> bool {
-    let Ok(text) = fs::read_to_string(config_path()) else {
+    let Ok(text) = read_replaced_string(&config_path()) else {
         return false;
     };
     match toml::from_str::<toml::Value>(&text) {
@@ -1545,7 +1572,7 @@ pub fn load_config() -> Result<Config> {
         save_config(&cfg)?;
         cfg
     } else {
-        let text = fs::read_to_string(&path)?;
+        let text = read_replaced_string(&path)?;
         toml::from_str(&text).map_err(|e| NurError::Config(e.to_string()))?
     };
     // One-time: older configs → unlimited agent rounds (user sets caps later).
@@ -1633,6 +1660,35 @@ pub fn apply_base_url_env(cfg: &mut Config) {
             cfg.base_url = u;
         }
     }
+}
+
+/// Read a file that [`atomic_write`] may be replacing right now. On Windows
+/// the replace briefly leaves the old file delete-pending, and opening it then
+/// fails with "Access is denied" although the next attempt sees the new file;
+/// retry that for up to a second, like the writer does. Other errors (and every
+/// error on Unix, where rename is atomic for readers) return at once.
+pub fn read_replaced(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let mut delay = std::time::Duration::from_millis(1);
+    loop {
+        match fs::read(path) {
+            Err(error)
+                if cfg!(windows)
+                    && error.kind() == std::io::ErrorKind::PermissionDenied
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(std::time::Duration::from_millis(16));
+            }
+            result => return result,
+        }
+    }
+}
+
+/// [`read_replaced`] as UTF-8 text.
+pub fn read_replaced_string(path: &std::path::Path) -> std::io::Result<String> {
+    String::from_utf8(read_replaced(path)?)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 pub fn atomic_write(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
@@ -2320,7 +2376,8 @@ mod tests {
         let reader = std::thread::spawn(move || {
             let mut reads = 0;
             while worker_running.load(Ordering::Acquire) || reads < 50 {
-                let bytes = fs::read(&worker_path).expect("snapshot vanished during replacement");
+                let bytes =
+                    read_replaced(&worker_path).expect("snapshot vanished during replacement");
                 assert!(
                     bytes == first || bytes == second,
                     "reader saw a partial snapshot"

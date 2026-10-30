@@ -561,7 +561,9 @@ def run_scenario(binary, scenario_path):
         try:
             # `global_args` go before the subcommand (`-v`), `run_args` after
             # it (`--output-format json`).
-            args = [str(binary), *scenario.get("global_args", []), "--cwd", str(workspace), "run"]
+            # `cwd` starts nur in a workspace subdirectory (instruction chain).
+            start_dir = workspace / scenario["cwd"] if scenario.get("cwd") else workspace
+            args = [str(binary), *scenario.get("global_args", []), "--cwd", str(start_dir), "run"]
             mode = scenario.get("mode", "auto")
             args += ["--yes"] if mode == "auto" else ["--mode", mode]
             args += scenario.get("run_args", [])
@@ -570,7 +572,7 @@ def run_scenario(binary, scenario_path):
             child = spawn_process(
                 args,
                 env=env,
-                cwd=workspace,
+                cwd=start_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,

@@ -128,7 +128,8 @@ fn read_snapshot(home: &Path) -> Option<Arc<SkillCacheFile>> {
             }
         }
     }
-    let data: SkillCacheFile = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
+    let data: SkillCacheFile =
+        serde_json::from_slice(&crate::config::read_replaced(&path).ok()?).ok()?;
     let data = Arc::new(data);
     if let Ok(mut guard) = memory.lock() {
         guard.insert(path, (current_stamp, data.clone()));

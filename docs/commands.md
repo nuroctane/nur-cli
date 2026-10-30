@@ -584,7 +584,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/ruflo` | Vector memory / swarm |
 | `/ecosystem` | Check / provision the ecosystem |
 | `/todos` | Show the session task list |
-| `/init` | Generate a `NUR.md` project guide |
+| `/init` | Create `AGENTS.md`, or audit the one that exists (with the `agents-md` skill) |
 | `/config` | Show config + data paths |
 | `/permissions` | Show or reload allow/deny/ask rules; `trust` / `untrust` this project's allow rules |
 | `/hooks` | Show local tool hook status |
@@ -596,13 +596,15 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 
 ## Project instruction files
 
-NurCLI loads project-level instructions from your working directory at session start:
+nur loads instruction files from every directory between the git root and the
+working directory, root first (see [Configuration](configuration.md#project-instructions)
+for the budget, `@` imports and nested directories):
 
 | File | Purpose |
 |------|---------|
-| `NUR.md` | Primary project instructions |
-| `AGENTS.md` | Agent conventions |
-| `CLAUDE.md` | Also loaded |
+| `AGENTS.md` | Project instructions shared with other agents |
+| `CLAUDE.md` | Read in a directory that has no `AGENTS.md` |
+| `NUR.md` | nur-only layer on top of the same directory's `AGENTS.md` |
 
 User instructions that apply everywhere live in `~/.nur/NUR.md` (or `~/.nur/AGENTS.md`)
 and load ahead of the project's.

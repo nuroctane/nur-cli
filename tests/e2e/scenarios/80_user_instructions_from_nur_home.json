@@ -13,7 +13,7 @@
   "expect": {
     "requests": 1,
     "request_contains": [
-      {"request": 1, "contains": ["# User instructions (AGENTS.md)", "user-rule-marker", "# Project instructions (AGENTS.md)", "project-rule-marker"]}
+      {"request": 1, "contains": ["# User instructions (~/.nur/AGENTS.md)", "user-rule-marker", "# Project instructions (AGENTS.md)", "project-rule-marker"]}
     ]
   }
 }

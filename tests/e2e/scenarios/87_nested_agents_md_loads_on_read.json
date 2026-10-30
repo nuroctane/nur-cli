@@ -1,0 +1,53 @@
+{
+  "description": "A directory below the working directory with its own AGENTS.md is not in the system prompt; its rules arrive once, appended to the result of the first tool that reads a file there.",
+  "prompt": "Read the view.",
+  "setup_files": {
+    ".git/HEAD": "ref: refs/heads/main\n",
+    "AGENTS.md": "ROOT-RULES-MARKER\n",
+    "src/ui/AGENTS.md": "UI-RULES-MARKER\n",
+    "src/ui/view.rs": "fn view() {}\n"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "read_file",
+          "arguments": {
+            "path": "src/ui/view.rs"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Read it."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": [
+      "Read it."
+    ],
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "ROOT-RULES-MARKER"
+        ],
+        "lacks": [
+          "UI-RULES-MARKER"
+        ]
+      },
+      {
+        "request": 2,
+        "contains": [
+          "[nur instructions: src/ui/AGENTS.md]",
+          "UI-RULES-MARKER"
+        ],
+        "count_once": [
+          "UI-RULES-MARKER"
+        ]
+      }
+    ]
+  }
+}

@@ -10,6 +10,7 @@ pub mod guardrails;
 pub mod harness;
 pub mod helix_memory;
 pub mod hooks;
+pub mod instructions;
 pub mod r#loop;
 pub mod mailbox;
 pub mod memory;

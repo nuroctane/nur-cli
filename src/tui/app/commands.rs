@@ -231,11 +231,23 @@ impl App {
             "/takeover" | "/hijack" => self.cmd_chagent(&arg),
             "/config" => self.cmd_config(),
             "/init" => {
-                self.submit_text(
-                    "Analyze this codebase (structure, build/test commands, conventions, \
-                     architecture) and create a NUR.md file at the workspace root that future \
-                     agent sessions can use as project instructions. Keep it under 120 lines.",
-                );
+                // AGENTS.md is the file every agent reads; nur layers NUR.md on
+                // top of it, so /init never writes a second file beside one.
+                if self.cwd.join("AGENTS.md").is_file() {
+                    self.submit_text(
+                        "Load the `agents-md` skill, then audit the AGENTS.md at the workspace \
+                         root against this codebase (structure, build/test commands, \
+                         conventions, architecture): fix what is stale or wrong and cut what an \
+                         agent does not need. Edit that file; do not create another one.",
+                    );
+                } else {
+                    self.submit_text(
+                        "Load the `agents-md` skill, then analyze this codebase (structure, \
+                         build/test commands, conventions, architecture) and create an AGENTS.md \
+                         at the workspace root that future agent sessions can use as project \
+                         instructions. Keep it under 120 lines.",
+                    );
+                }
             }
             "/scan" => self.cmd_scan(&arg),
             "/graphify" => self.cmd_graphify(&arg),
@@ -2269,6 +2281,27 @@ impl App {
         let cells = 20usize;
         let filled = ((pct / 100.0) * cells as f64).round() as usize;
         let bar: String = "█".repeat(filled) + &"░".repeat(cells.saturating_sub(filled));
+        let loaded = crate::agent::instructions::load(&self.cwd, self.cfg.instructions.max_chars);
+        let mut instructions = String::new();
+        for section in loaded.sections() {
+            let shown = section.text.chars().count();
+            let spilled = section
+                .overflow
+                .as_ref()
+                .map(|o| format!("  ·  {} spilled", fmt_num(o.remaining_chars as u64)))
+                .unwrap_or_default();
+            instructions.push_str(&format!(
+                "\n  {:<24} {} chars{spilled}",
+                section.label,
+                fmt_num(shown as u64)
+            ));
+        }
+        if instructions.is_empty() {
+            instructions.push_str("\n  none");
+        }
+        for notice in &loaded.notices {
+            instructions.push_str(&format!("\n  ! {notice}"));
+        }
         self.push_note(
             Tone::Usage,
             format!(
@@ -2276,7 +2309,7 @@ impl App {
                  window   {} tok  ·  meter = last-turn tokens / configured window\n  \
                  cached   {} tok  (prompt-cache hits when the API reports them)\n  \
                  tip  window comes from models.dev when known, else config.toml context_window\n  \
-                 /compact frees context when this climbs",
+                 /compact frees context when this climbs\n\ninstructions{instructions}",
                 fmt_num(used),
                 fmt_num(self.u_last.input_tokens),
                 fmt_num(self.u_last.output_tokens),

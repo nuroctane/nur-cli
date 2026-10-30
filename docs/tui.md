@@ -378,7 +378,7 @@ The note is appended to your persistent memory file and recalled automatically i
 |---------|---------|
 | `/cd <path>` | Change the working directory tools are sandboxed to (`~` and relative paths OK). A [`[[path_models]]`](configuration.md#per-directory-models) entry for the new directory switches the model, with a note |
 | `/pwd` | Print the current working directory |
-| `/init` | Initialise project instructions (`NUR.md`) |
+| `/init` | Create or audit project instructions (`AGENTS.md`) |
 | `/scan` | Map this codebase → local `.foglamp/scan.json`, then optionally publish to foglamp.dev. `/scan [focus]` centers the map. **Writes need manual/auto** (plan is lifted to auto). Ask only before **upload**, not before the local file. |
 | `/config` | Show config + data paths |
 | `/permissions` | Show or reload allow/deny/ask rules (`permissions.toml`); `trust` / `untrust` this project's allow rules |
