@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Integration report: RLM · Prime · Shepherd · AnyDoc · OpenAI Agents → nur-cli
 
 This is the satisfaction report for the amalgamation work. Do not ship until you have re-read this and the tests green on your machine.

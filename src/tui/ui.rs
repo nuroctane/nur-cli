@@ -175,6 +175,7 @@ fn draw_focused_modal(f: &mut Frame, app: &mut App, area: Rect) {
     match app.modal_focus() {
         Some(ModalFocus::Theme) => draw_theme_picker(f, app, area),
         Some(ModalFocus::Login) => draw_login(f, app, area),
+        Some(ModalFocus::Secret) => draw_secret(f, app, area),
         Some(ModalFocus::Model) => draw_model_picker(f, app, area),
         Some(ModalFocus::Plugin) => draw_plugin_picker(f, app, area),
         Some(ModalFocus::Question) => draw_question(f, app, area),
@@ -1434,8 +1435,13 @@ fn draw_plugin_picker(f: &mut Frame, app: &mut App, area: Rect) {
             let marker = if selected { "❯ " } else { "  " };
             let badge = p.status_badge();
             // name (pad) · category · status
+            let at = if p.commit.is_empty() {
+                String::new()
+            } else {
+                format!(" @ {}", p.commit)
+            };
             let text = format!(
-                "{marker}{:<16} {:<12} {badge}",
+                "{marker}{:<16} {:<12} {badge}{at}",
                 truncate(&p.name, 16),
                 truncate(&p.category, 14),
             );
@@ -1655,6 +1661,110 @@ fn draw_login_key(f: &mut Frame, app: &mut App, area: Rect) {
         ]));
     }
     draw_login_form(f, app, rect, lines);
+}
+
+/// The secret modal: name, masked value. Same chrome, field and type as the
+/// `/login` key stage, so entering a credential looks the same everywhere.
+fn draw_secret(f: &mut Frame, app: &mut App, area: Rect) {
+    use super::app::{SecretField, SecretOrigin};
+    let Some(m) = &app.secret else { return };
+    let want: u16 = if m.error.is_some() { 13 } else { 12 };
+    let rect = fit_modal_rect(area, 64, want, 44, 8);
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme::SURFACE_2())),
+        rect,
+    );
+    let phase = modal_phase(app);
+    let (title, hint, footer) = match &m.origin {
+        SecretOrigin::Command => (
+            " 🔒 New secret ".to_string(),
+            "set in every shell command · the model sees the name only".to_string(),
+            " ↵ save · tab next field · Ctrl+V paste · esc/✕ cancel ",
+        ),
+        SecretOrigin::Pasted { kind, .. } => (
+            format!(" 🔒 {kind} in your message "),
+            "your message goes out with the name in its place".to_string(),
+            " ↵ save and send · tab next field · esc/✕ back to editing ",
+        ),
+        SecretOrigin::Request { purpose, .. } => (
+            " 🔒 The agent needs a secret ".to_string(),
+            if purpose.is_empty() {
+                "it gets the name back, never the value".to_string()
+            } else {
+                purpose.clone()
+            },
+            " ↵ save · Ctrl+V paste · esc/✕ decline ",
+        ),
+    };
+    draw_modal_frame(f, rect, phase, theme::INDIGO(), &title, None, footer);
+    let inner = modal_inner(rect);
+    let label_w = 7usize;
+    let field_w = (inner.width as usize).saturating_sub(4 + label_w).max(8);
+    let cursor = theme::blink_on(app.spinner_epoch.elapsed());
+    let field_style = |focused: bool| {
+        if focused {
+            Style::default()
+                .fg(theme::BLUE_100())
+                .bg(theme::SURFACE())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::FG()).bg(theme::SURFACE())
+        }
+    };
+    let field_line = |label: &str, text: String, focused: bool| {
+        let mut text = text;
+        if focused && cursor {
+            text.push('▉');
+        }
+        Line::from(vec![
+            Span::styled(format!("  {label:<label_w$}"), theme::style_faint()),
+            Span::styled(
+                format!("{:<field_w$}", field_tail(&text, field_w)),
+                field_style(focused),
+            ),
+        ])
+    };
+    let dots = "•".repeat(m.value.chars().count().min(field_w.saturating_sub(1)));
+    let mut meta = format!("{} chars  ·  stored only in ~/.nur/secrets.json", m.value.chars().count());
+    if m.replaces() {
+        meta = format!("{} chars  ·  replaces the saved ${}", m.value.chars().count(), m.name);
+    }
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            format!("  {}", truncate(&hint, inner.width.saturating_sub(4) as usize)),
+            theme::style_faint(),
+        )),
+        Line::default(),
+        field_line("name", m.name.clone(), m.field == SecretField::Name),
+        Line::default(),
+        field_line("value", dots, m.field == SecretField::Value),
+        Line::default(),
+        Line::from(Span::styled(
+            format!("  {}", truncate(&meta, inner.width.saturating_sub(4) as usize)),
+            theme::style_faint(),
+        )),
+    ];
+    if let Some(e) = &m.error {
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            Span::raw("  ".to_string()),
+            Span::styled(truncate(e, field_w + label_w), theme::style_error()),
+        ]));
+    }
+    let row = |i: u16| Rect::new(inner.x, inner.y + i, inner.width, 1);
+    if let Some(m) = &mut app.secret {
+        m.hit = super::app::SecretHit {
+            frame: rect,
+            close: Rect::new(rect.right().saturating_sub(5), rect.y, 3, 1),
+            name_row: row(2),
+            value_row: row(4),
+        };
+    }
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::SURFACE_2())),
+        inner,
+    );
 }
 
 /// Stage 3 (OpenAI-compatible only) — optional base-URL override. Prefilled
@@ -2542,6 +2652,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
                 | Cell::Graph { live: true, .. }
                 | Cell::Swarm { .. }
                 | Cell::Queued { .. }
+                | Cell::Resume { settled: None, .. }
         );
         let mut key = if content_changed
             || animated
@@ -2787,8 +2898,23 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             }
             found
         };
-        // Queued follow-up actions: steer / cut in / dismiss.
+        // Queued follow-up actions: steer / cut in / dismiss; resume card
+        // chips: auto-continue toggle / continue now.
         let mut qa: Vec<(usize, usize, usize, u8)> = Vec::new();
+        if matches!(cell, Cell::Resume { settled: None, .. }) {
+            use super::app::resume::{ACTION_NOW, ACTION_TOGGLE};
+            for (label, action) in [
+                ("auto-continue on", ACTION_TOGGLE),
+                ("auto-continue off", ACTION_TOGGLE),
+                ("continue now", ACTION_NOW),
+            ] {
+                if let Some(byte_i) = plain.find(label) {
+                    let start = UnicodeWidthStr::width(&plain[..byte_i]);
+                    let end = start + UnicodeWidthStr::width(label);
+                    qa.push((cell_idx, start, end, action));
+                }
+            }
+        }
         if matches!(cell, Cell::Queued { .. }) {
             if let Some(byte_i) = plain.find("steer") {
                 let start = UnicodeWidthStr::width(&plain[..byte_i]);
@@ -3669,7 +3795,70 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 ]));
             }
         }
+        Cell::Resume {
+            plan,
+            armed,
+            settled,
+        } => resume_card(plan, *armed, settled.as_deref(), width, out),
     }
+}
+
+/// The resume card (`app::resume`): what stopped and when it goes on, the
+/// provider's words, and the two chips while it waits. Styled like the queued
+/// card: the toggle is the one accent, the other action is a quiet link.
+fn resume_card(
+    plan: &crate::agent::resume::Plan,
+    armed: bool,
+    settled: Option<&str>,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+) {
+    out.push(Line::default());
+    let hue = theme::WARN();
+    let head = super::app::resume::resume_headline(plan, armed, settled);
+    let (glyph, head_style) = if settled.is_some() {
+        ("↻ ", theme::style_status())
+    } else {
+        ("⏸ ", Style::default().fg(hue).add_modifier(Modifier::BOLD))
+    };
+    out.push(Line::from(vec![
+        Span::styled(glyph.to_string(), Style::default().fg(hue)),
+        Span::styled(head, head_style),
+    ]));
+    if settled.is_some() {
+        return;
+    }
+    out.push(Line::from(Span::styled(
+        format!("  {}", truncate(&plan.reason, width.saturating_sub(4))),
+        theme::style_faint(),
+    )));
+    let toggle = if armed {
+        Span::styled(
+            "auto-continue on".to_string(),
+            Style::default()
+                .fg(theme::ON_ACCENT_FG())
+                .bg(theme::NUR_GOLD())
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(
+            "auto-continue off".to_string(),
+            Style::default()
+                .fg(theme::MUTED())
+                .add_modifier(Modifier::UNDERLINED),
+        )
+    };
+    out.push(Line::from(vec![
+        Span::raw("  ".to_string()),
+        toggle,
+        Span::styled("  ·  ".to_string(), theme::style_faint()),
+        Span::styled(
+            "continue now".to_string(),
+            Style::default()
+                .fg(theme::MUTED())
+                .add_modifier(Modifier::UNDERLINED),
+        ),
+    ]));
 }
 
 // ── subagent swarm card ──────────────────────────────────────────────────
@@ -4525,7 +4714,9 @@ fn sg_cat_for_tool(name: &str) -> SgCat {
     match name {
         // search / read
         "read_file" | "list_dir" | "sgrep" | "grep" | "glob" | "git_status" | "git_diff"
-        | "web_fetch" | "web_search" | "look" | "browser" | "terminal_browser" => SgCat::Search,
+        | "slop_scan" | "web_fetch" | "web_search" | "look" | "browser" | "terminal_browser" => {
+            SgCat::Search
+        }
         // editing
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit" => SgCat::Edit,
         // execution
@@ -7693,6 +7884,17 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
             8u8.hash(&mut h);
             t.hash(&mut h);
         }
+        Cell::Resume {
+            plan,
+            armed,
+            settled,
+        } => {
+            9u8.hash(&mut h);
+            // The headline carries the countdown, so it is the key.
+            super::app::resume::resume_headline(plan, *armed, settled.as_deref())
+                .hash(&mut h);
+            plan.reason.hash(&mut h);
+        }
     }
     h.finish()
 }
@@ -8911,6 +9113,157 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
                     text.contains(error),
                     "the error row must stay inside the compact modal:\n{text}"
                 );
+            }
+        }
+    }
+
+    /// Dumps the secret modal and the resume card to `$NUR_SECRET_DUMP` for a
+    /// visual pass, and checks their click targets sit on what they name.
+    /// Needs an isolated NUR_HOME like the other previews.
+    #[test]
+    #[ignore]
+    fn secret_and_resume_preview() {
+        use super::super::app::{SecretField, SecretHit, SecretModal, SecretOrigin};
+        use crate::agent::resume::{Plan, Stop};
+        use ratatui::{backend::TestBackend, Terminal};
+        let home = std::env::var_os("NUR_HOME").expect("preview requires an isolated NUR_HOME");
+        let dump = std::env::var_os("NUR_SECRET_DUMP").expect("set NUR_SECRET_DUMP to the dump dir");
+        let cwd = std::path::PathBuf::from(home).join("secret-workspace");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&dump).unwrap();
+        let cfg = crate::config::Config {
+            native_memory: false,
+            theme: Some("gold".into()),
+            ..Default::default()
+        };
+        let session = crate::agent::Session::new_for_provider(
+            "e2e-model",
+            "vllm",
+            &cwd.display().to_string(),
+        );
+        let usage =
+            crate::usage::UsageTracker::new(session.id.clone(), "e2e-model".into(), cwd.clone());
+        let client =
+            crate::api::ApiClient::for_provider("http://127.0.0.1:1/v1", "", "vllm").unwrap();
+        let mode = crate::agent::SharedMode::new(crate::agent::PermissionMode::Manual);
+        let mut app = super::super::app::new_app(client, cfg, cwd, mode, session, usage);
+        let screen = |app: &mut App, width: u16, height: u16| {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| draw(frame, app)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let mut text = String::new();
+            for y in 0..height {
+                for x in 0..width {
+                    text.push_str(buffer[(x, y)].symbol());
+                }
+                text.push('\n');
+            }
+            (buffer, text)
+        };
+        let now = crate::agent::resume::now_secs();
+        let plan = |stop, wait: u64, known_reset| Plan {
+            stop,
+            at: now + wait,
+            known_reset,
+            attempt: 1,
+            reason: "API error (429): You've hit your usage limit. Try again in 2 hours 13 minutes."
+                .into(),
+        };
+        app.cells.push(Cell::User("keep going on the migration".into()));
+        app.cells.push(Cell::Resume {
+            plan: plan(Stop::Limit, 7980, true),
+            armed: false,
+            settled: Some("continued at 15:42".into()),
+        });
+        app.cells.push(Cell::Resume {
+            plan: plan(Stop::Transient, 120, false),
+            armed: false,
+            settled: None,
+        });
+        app.cells.push(Cell::Resume {
+            plan: plan(Stop::Limit, 7980, true),
+            armed: true,
+            settled: None,
+        });
+        app.transcript_revision += 1;
+        for (width, height) in [(100u16, 30u16), (60, 24)] {
+            let (buffer, text) = screen(&mut app, width, height);
+            std::fs::write(
+                std::path::PathBuf::from(&dump).join(format!("resume-{width}x{height}.txt")),
+                &text,
+            )
+            .unwrap();
+            assert!(text.contains("auto-continue on"), "{text}");
+            assert!(text.contains("continue now"), "{text}");
+            // Each chip's hitbox covers its own label on screen.
+            let left = app.transcript_body.x;
+            let top = app.transcript_body.y;
+            let mut chips = 0;
+            for (row, actions) in app.hit_queue_actions.iter().enumerate() {
+                for (_, lo, hi, action) in actions {
+                    let Some(y) = (row as u16)
+                        .checked_sub(app.transcript_top as u16)
+                        .map(|r| r + top)
+                    else {
+                        continue;
+                    };
+                    if y >= height {
+                        continue;
+                    }
+                    let label: String = (*lo..*hi)
+                        .map(|x| buffer[(left + x as u16, y)].symbol().to_string())
+                        .collect();
+                    let want = if *action == super::super::app::resume::ACTION_NOW {
+                        "continue now"
+                    } else {
+                        "auto-continue"
+                    };
+                    assert!(label.starts_with(want), "{width}x{height}: {label:?}");
+                    chips += 1;
+                }
+            }
+            assert!(chips >= 4, "{width}x{height}: {chips} chips\n{text}");
+        }
+
+        for (width, height, origin, error) in [
+            (100u16, 30u16, "pasted", None),
+            (64, 20, "command", None),
+            (46, 16, "request", Some("a secret needs at least 6 characters")),
+        ] {
+            let origin = match origin {
+                "pasted" => SecretOrigin::Pasted {
+                    prompt: "use ghp_x to push".into(),
+                    range: 4..9,
+                    kind: "GitHub token",
+                },
+                "command" => SecretOrigin::Command,
+                _ => SecretOrigin::Request {
+                    purpose: "push the release branch to GitHub".into(),
+                    respond: None,
+                },
+            };
+            app.secret = Some(SecretModal {
+                name: "GITHUB_TOKEN".into(),
+                value: "ghp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5".into(),
+                field: SecretField::Name,
+                origin,
+                error: error.map(str::to_string),
+                hit: SecretHit::default(),
+            });
+            let (buffer, text) = screen(&mut app, width, height);
+            std::fs::write(
+                std::path::PathBuf::from(&dump).join(format!("secret-{width}x{height}.txt")),
+                &text,
+            )
+            .unwrap();
+            assert!(!text.contains("aB3dE5"), "the value is never drawn:\n{text}");
+            let hit = app.secret.as_ref().unwrap().hit.clone();
+            let at = |r: Rect| buffer[(r.x + 2, r.y)].symbol().to_string();
+            assert_eq!(at(hit.name_row), "n", "{width}x{height}:\n{text}");
+            assert_eq!(at(hit.value_row), "v", "{width}x{height}:\n{text}");
+            assert_eq!(buffer[(hit.close.x + 1, hit.close.y)].symbol(), "✕", "{text}");
+            if let Some(error) = error {
+                assert!(text.contains(error), "{text}");
             }
         }
     }

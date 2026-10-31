@@ -35,6 +35,12 @@ secrets*
 !skills/**/agents.md
 !skills/**/credentials/
 !skills/**/secrets/
+# The secrets store's source, not a secret.
+!/src/secrets.rs
+# The local instruction tree nests too (after the negations above, so it wins).
+/skills/AGENTS.md
+/src/tui/AGENTS.md
+/tests/e2e/AGENTS.md
 
 # Editor / OS
 .idea/

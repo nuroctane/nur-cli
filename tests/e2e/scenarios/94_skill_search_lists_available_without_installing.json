@@ -1,0 +1,65 @@
+{
+  "description": "The model's `skill search` lists a market skill with the command the user runs to install it; searching installs nothing.",
+  "prompt": "Is there a skill for greetings?",
+  "env": {
+    "NUR_SKILL_MARKET_INDEX": "{home}/market-index.json",
+    "NUR_SKILL_RAW_BASE": "http://127.0.0.1:{port}/raw"
+  },
+  "setup_home_files": {
+    "market-index.json": "{\n  \"version\": 1,\n  \"entries\": [\n    {\n      \"id\": \"demo/hello-skill\",\n      \"name\": \"hello-skill\",\n      \"description\": \"greets in the house style\",\n      \"category\": \"writing\",\n      \"license\": \"MIT\",\n      \"author\": \"Demo\",\n      \"repo\": \"demo/hello\",\n      \"commit\": \"abc1234def5678901234567890abcdef12345678\",\n      \"path\": \"skills/hello-skill\",\n      \"files\": {\n        \"SKILL.md\": \"b1d2137b8ae2c68fdc23b0ba758bfed7672ffa0963cbee091c353200db2ba4dd\"\n      },\n      \"installable\": true\n    },\n    {\n      \"id\": \"demo/hidden-skill\",\n      \"name\": \"hidden-skill\",\n      \"description\": \"looks harmless\",\n      \"category\": \"writing\",\n      \"license\": \"MIT\",\n      \"author\": \"Demo\",\n      \"repo\": \"demo/hello\",\n      \"commit\": \"abc1234def5678901234567890abcdef12345678\",\n      \"path\": \"skills/hidden-skill\",\n      \"files\": {\n        \"SKILL.md\": \"a2f0f74ea4ebfd46127567ccc3a63409af80ce64235dbc9acfd2d6c3106ecf0a\"\n      },\n      \"installable\": true\n    }\n  ]\n}"
+  },
+  "serve_files": {
+    "demo/hello/abc1234def5678901234567890abcdef12345678/skills/hello-skill/SKILL.md": "---\nname: hello-skill\ndescription: greets in the house style for the end-to-end harness\n---\n\n# Hello\n\nMARKET-SKILL-BODY-MARKER: greet with exactly 'hello there'.\n",
+    "demo/hello/abc1234def5678901234567890abcdef12345678/skills/hidden-skill/SKILL.md": "---\nname: hidden-skill\ndescription: looks harmless\n---\n\n# Helper\n\nBe helpful.\udb40\udc48\udb40\udc49\udb40\udc44\udb40\udc44\udb40\udc45\udb40\udc4e\udb40\udc2d\udb40\udc4f\udb40\udc52\udb40\udc44\udb40\udc45\udb40\udc52\nHIDDEN-SKILL-BODY-MARKER\n"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "skill",
+          "arguments": {
+            "action": "search",
+            "query": "greets"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "skill",
+          "arguments": {
+            "action": "read",
+            "name": "hello-skill"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Install it with nur skills add."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "requests_lack": [
+      "MARKET-SKILL-BODY-MARKER"
+    ],
+    "request_contains": [
+      {
+        "request": 2,
+        "contains": [
+          "demo/hello-skill",
+          "only the user installs these",
+          "never run it yourself"
+        ]
+      },
+      {
+        "request": 3,
+        "contains": [
+          "not found"
+        ]
+      }
+    ]
+  }
+}

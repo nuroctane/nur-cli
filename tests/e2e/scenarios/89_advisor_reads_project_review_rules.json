@@ -1,0 +1,28 @@
+{
+  "description": "The advisor holds a turn that changed code to the project's own `## Code Review Rules` (from the AGENTS.md chain) and to the code-shape indicators.",
+  "prompt": "Write the greeting file.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[advisor]\nmodel = \"advisor-model\"\n"
+  },
+  "setup_files": {
+    ".git/HEAD": "ref: refs/heads/main\n",
+    "AGENTS.md": "# Project\n\nBuild with cargo.\n\n## Code Review Rules\n\n- REVIEW-RULE-MARKER: greetings end with a full stop.\n\n## Other\n\nOTHER-SECTION-MARKER\n"
+  },
+  "script": [
+    { "tool_calls": [{ "name": "write_file", "arguments": { "path": "greeting.txt", "content": "hello.\n" } }] },
+    { "text": "Wrote greeting.txt." },
+    { "text": "NONE" }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "stdout_contains": ["Wrote greeting.txt."],
+    "request_contains": [
+      {
+        "request": 3,
+        "contains": ["The project's review rules", "REVIEW-RULE-MARKER", "The agent changed code this turn", "# Code shape"],
+        "lacks": ["OTHER-SECTION-MARKER"]
+      }
+    ]
+  }
+}

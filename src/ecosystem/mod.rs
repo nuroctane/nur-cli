@@ -26,7 +26,7 @@ pub(crate) use install::run_install;
 
 pub use plur_context::{plur_context, plur_prefetch};
 
-pub use skills::install_bundled_skills;
+pub use skills::{bundled_skill_names, install_bundled_skills};
 
 /// Absolute path to the newest available `omp` binary (Bun / native / PATH).
 pub fn find_omp() -> Option<String> {

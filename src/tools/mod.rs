@@ -26,6 +26,7 @@ pub mod optmem_tool;
 pub mod penecho_tool;
 mod proposal_tool;
 pub mod question_tool;
+pub mod secret_tool;
 pub mod t3code_tool;
 pub use browser::is_read_only_action as browser_is_read_only;
 pub mod capabilities;
@@ -50,12 +51,15 @@ pub mod omp;
 pub mod plur;
 mod read_file;
 pub mod ruflo;
+mod rust_builder;
 mod sandbox;
 mod search_util;
+pub(crate) mod secscan;
 pub(crate) mod sensitive;
 mod sgrep;
 mod shell;
 mod skill_tool;
+mod slop_scan;
 pub mod spill;
 mod submit_plan;
 pub mod tldraw;
@@ -93,6 +97,16 @@ pub type SharedSteer = Arc<Mutex<std::collections::VecDeque<String>>>;
 pub fn shared_steer() -> SharedSteer {
     Arc::new(Mutex::new(std::collections::VecDeque::new()))
 }
+
+/// The tools that write files (screened for secrets, and what the advisor
+/// counts as a turn that changed code).
+pub const EDIT_TOOLS: &[&str] = &[
+    "write_file",
+    "edit_file",
+    "multi_edit",
+    "apply_patch",
+    "hashline_edit",
+];
 
 /// Focused tool surface for child agents.
 ///
@@ -169,6 +183,7 @@ pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
     "skill",
     "memory",
     "question",
+    "secret",
     "todo_write",
     "submit_plan",
     "agent",
@@ -247,26 +262,28 @@ pub trait Tool: Send + Sync {
 }
 
 /// Stateful tool host (todos/plan/steer share with TUI).
-/// Drop model-provider keys from a tool subprocess's environment, unless
+/// A tool subprocess's environment: the user's saved secrets are set
+/// (`crate::secrets`), and model-provider keys are dropped unless
 /// `[tools] pass_provider_keys = true` (see [`crate::providers::is_model_provider_key`]).
-pub(crate) fn scrub_provider_keys(cmd: &mut std::process::Command) {
+pub(crate) fn tool_env(cmd: &mut std::process::Command) {
     static PASS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let pass = *PASS.get_or_init(|| {
         crate::config::load_config()
             .map(|cfg| cfg.tools.pass_provider_keys)
             .unwrap_or(false)
     });
-    if pass {
-        return;
-    }
-    for (name, _) in std::env::vars_os() {
-        if name
-            .to_str()
-            .is_some_and(crate::providers::is_model_provider_key)
-        {
-            cmd.env_remove(name);
+    if !pass {
+        for (name, _) in std::env::vars_os() {
+            if name
+                .to_str()
+                .is_some_and(crate::providers::is_model_provider_key)
+            {
+                cmd.env_remove(name);
+            }
         }
     }
+    // After the scrub: a key the user saved as a secret is theirs to pass.
+    crate::secrets::inject(cmd);
 }
 
 pub struct ToolHost {
@@ -309,6 +326,8 @@ impl ToolHost {
             Box::new(media::ExtractFrames),
             Box::new(git_status::GitStatus),
             Box::new(git_diff::GitDiff),
+            Box::new(slop_scan::SlopScan),
+            Box::new(secscan::SecScan),
             Box::new(context_tool::ContextTool),
             Box::new(anydoc_tool::AnydocTool),
             Box::new(goal_tool::GoalTool),
@@ -319,6 +338,7 @@ impl ToolHost {
             Box::new(admission_tool::AdmissionTool),
             Box::new(message_tool::MessageTool),
             Box::new(question_tool::QuestionTool),
+            Box::new(secret_tool::SecretTool),
             Box::new(mem_tool::MemTool),
             Box::new(graphify::Graphify),
             Box::new(graphjin::GraphJin),
@@ -442,7 +462,37 @@ impl ToolHost {
     /// boxed tool on each dispatch — a hot-path regression. The trade-off is
     /// that the arm roster here must mirror [`Self::boxed_tools`]; the
     /// `roster_stays_in_sync` test locks that invariant.
+    /// Run one tool call. Edit tools are screened first: a private key is never
+    /// written, and a live-looking token is written with a warning in the result.
     pub fn dispatch(&self, name: &str, arguments: &str, ctx: &ToolContext) -> Result<String> {
+        let secret = EDIT_TOOLS
+            .contains(&name)
+            .then(|| sensitive::secret_in_write(&sensitive::written_text(name, arguments)))
+            .flatten();
+        if secret == Some(sensitive::WriteSecret::PrivateKey) {
+            return Err(NurError::Tool(
+                "refused: this write contains a private key. Keys belong in a credential store \
+                 or a gitignored file the user writes; use a placeholder here, and generate test \
+                 keys when the test runs rather than committing one."
+                    .into(),
+            ));
+        }
+        let result = self.dispatch_unscreened(name, arguments, ctx);
+        match (result, secret) {
+            (Ok(body), Some(sensitive::WriteSecret::Token(kind))) => Ok(format!(
+                "{body}\n\nwarning: what was written looks like a live {kind}. Keep secrets in \
+                 environment variables or a gitignored file, not in tracked source."
+            )),
+            (result, _) => result,
+        }
+    }
+
+    fn dispatch_unscreened(
+        &self,
+        name: &str,
+        arguments: &str,
+        ctx: &ToolContext,
+    ) -> Result<String> {
         if name == "agent" {
             return Err(NurError::Tool(
                 "agent tool must be executed by the runtime (internal error)".into(),
@@ -491,6 +541,8 @@ impl ToolHost {
             "extract_frames" => media::ExtractFrames.execute(&args, ctx),
             "git_status" => git_status::GitStatus.execute(&args, ctx),
             "git_diff" => git_diff::GitDiff.execute(&args, ctx),
+            "slop_scan" => slop_scan::SlopScan.execute(&args, ctx),
+            "secscan" => secscan::SecScan.execute(&args, ctx),
             "context" => context_tool::ContextTool.execute(&args, ctx),
             "anydoc" => anydoc_tool::AnydocTool.execute(&args, ctx),
             "goal" => goal_tool::GoalTool.execute(&args, ctx),
@@ -501,6 +553,7 @@ impl ToolHost {
             "admission" => admission_tool::AdmissionTool.execute(&args, ctx),
             "message" => message_tool::MessageTool.execute(&args, ctx),
             "question" => question_tool::QuestionTool.execute(&args, ctx),
+            "secret" => secret_tool::SecretTool.execute(&args, ctx),
             "mem" => mem_tool::MemTool.execute(&args, ctx),
             "graphify" => graphify::Graphify.execute(&args, ctx),
             "graphjin" => graphjin::GraphJin.execute(&args, ctx),
@@ -785,6 +838,8 @@ mod tests {
             "extract_frames",
             "git_status",
             "git_diff",
+            "slop_scan",
+            "secscan",
             "context",
             "anydoc",
             "goal",
@@ -795,6 +850,7 @@ mod tests {
             "admission",
             "message",
             "question",
+            "secret",
             "mem",
             "graphify",
             "graphjin",

@@ -513,7 +513,7 @@ pub fn run_in_shell_with(
         .env("NPM_CONFIG_YES", "true")
         .env("DEBIAN_FRONTEND", "noninteractive")
         .env("PYTHONUNBUFFERED", "1");
-    super::scrub_provider_keys(&mut cmd);
+    super::tool_env(&mut cmd);
     // The model's scratch space (see `agent::scratch`): durable, inside the
     // sandbox, and the place the prompt sends throwaway files instead of /tmp.
     if let Some(scratch) = crate::agent::scratch::ensure(cwd) {

@@ -54,7 +54,9 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
     match name {
         "read_file" | "list_dir" | "sgrep" | "grep" | "glob" | "web_fetch" | "web_search"
         | "look" | "git_status" | "git_diff" | "skill" | "todo_write" | "submit_plan"
-        | "tool_search" => true,
+        | "tool_search" | "slop_scan" => true,
+        // `status` only looks; `run` executes scanners, `baseline` writes.
+        "secscan" => action_is(args, &["status"]),
         // A script is as read-only as the calls it makes, and its bridge admits
         // a nested call only when this same function says so, so the tool
         // inherits the classification transitively.
@@ -168,6 +170,7 @@ fn is_concurrency_safe_inner(name: &str, _args: &Value) -> bool {
             | "look"
             | "git_status"
             | "git_diff"
+            | "slop_scan"
             | "skill"
             | "context"
             | "anydoc"
@@ -208,6 +211,7 @@ pub fn is_destructive(name: &str, args: &Value) -> bool {
         "terminal_browser" => !is_read_only("terminal_browser", args),
         "executor" => !is_read_only("executor", args),
         "enclave" => !is_read_only("enclave", args),
+        "secscan" => !is_read_only("secscan", args),
         _ => false,
     }
 }

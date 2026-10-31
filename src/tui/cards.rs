@@ -131,6 +131,8 @@ pub fn frame_hue(cell: &Cell) -> Option<Color> {
         Cell::Queued { .. } => (theme::WARN(), Normal),
         Cell::Graph { .. } | Cell::Swarm { .. } => (theme::NUR_GOLD(), Normal),
         Cell::Error(_) => (theme::ERROR(), Strong),
+        Cell::Resume { settled: None, .. } => (theme::WARN(), Normal),
+        Cell::Resume { .. } => (theme::WARN(), Quiet),
     };
     Some(theme::card_frame(hue, weight))
 }

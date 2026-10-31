@@ -138,6 +138,40 @@ impl Tool for Bash {
             }
         }
 
+        // Opt-in blaze routing for plain cargo builds (`[tools] rust_builder`).
+        let builder = config
+            .as_ref()
+            .map(|c| c.tools.rust_builder.as_str())
+            .unwrap_or("cargo");
+        if let Some(blaze) = super::rust_builder::route(&command, builder) {
+            match run_in_shell_with(shell_backend(), &blaze, &ctx.cwd, &opts, &ctx.cancel) {
+                Ok(out) if !super::rust_builder::refused(&out) => {
+                    return Ok(format!("{out}\n{}", super::rust_builder::BORROW_CHECK_NOTE));
+                }
+                // A timeout, idle kill or cancel is the build's own outcome:
+                // running cargo after it would spend the whole budget again.
+                Err(e) if failure_kind(&e.to_string()).is_some() => {
+                    if let Some(kind) = failure_kind(&e.to_string()) {
+                        note_failure(&ctx.cwd, &command, kind, timeout_ms);
+                    }
+                    return Err(e);
+                }
+                Ok(_) | Err(_) => {
+                    // A refusal (or blaze failing to start) runs cargo as asked.
+                    return run_in_shell_with(
+                        shell_backend(),
+                        &command,
+                        &ctx.cwd,
+                        &opts,
+                        &ctx.cancel,
+                    )
+                    .map(|out| {
+                        format!("[blaze could not take this build; ran cargo instead]\n{out}")
+                    });
+                }
+            }
+        }
+
         match run_in_shell_with(shell_backend(), &command, &ctx.cwd, &opts, &ctx.cancel) {
             // A bg handoff comes back as Ok and is not a failure to lock out.
             Ok(out) => Ok(out),

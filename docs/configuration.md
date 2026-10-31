@@ -189,9 +189,10 @@ auto_update = true
 | `ecosystem_omp` | bool | `false` | Let `nur ecosystem ensure` install and upgrade Oh My Pi (`omp`, backend of the `omp` tool), which runs its installer. Off: an `omp` already on PATH is still found and used, and nothing is downloaded. `NUR_ECOSYSTEM_OMP=1` for one run |
 | `economy_model` | string | unset | Model for `agent` calls with `cost_mode: economy` that stay on this provider, and for prewalk when `[prewalk] into` is unset. Unset: an economy child runs on the cheapest tool-capable model the account lists that models.dev prices |
 | `skills.auto_activate` | bool | `false` | Natural-language skill activation ("think like fable" injects the skill body). Off by default; explicit `/skill-name` and the `skill` tool always work. See [natural-language skill activation](./ecosystem.md#natural-language-skill-activation) |
-| `tools.profile` | string | `lean` | `lean` = the editing shell and session tools up front, every ecosystem tool loaded on demand through `tool_search` (about 6.1k tool-schema tokens, 27 tools, plus 5k system prompt; a loaded tool joins the end of the roster from the next request on). `full` = every tool up front. `core` = minimal local editing shell (16 tools: read/list/write/edit/multi_edit/apply_patch/hashline_edit, bash, sgrep/grep/glob, web_fetch/web_search, question, todo_write, submit_plan) with no ecosystem tools or prose. Restart to change. Unknown values fall back to `lean`. Measured per-request overhead on the E2E harness (chars/4, no PLUR or OptMem installed): `full` about 3.9k system-prompt + 15.4k tool-schema tokens (54 tools), `core` about 1.8k + 2.8k (15 tools) |
+| `tools.profile` | string | `lean` | `lean` = the editing shell and session tools up front, every ecosystem tool loaded on demand through `tool_search` (about 6.1k tool-schema tokens, 27 tools, plus 5k system prompt; a loaded tool joins the end of the roster from the next request on). `full` = every tool up front. `core` = minimal local editing shell (16 tools: read/list/write/edit/multi_edit/apply_patch/hashline_edit, bash, sgrep/grep/glob, web_fetch/web_search, question, todo_write, submit_plan) with no ecosystem tools or prose. Restart to change. Unknown values fall back to `lean`. Measured per-request overhead on the E2E harness (chars/4, no PLUR or OptMem installed): `full` about 3.9k system-prompt + 15.4k tool-schema tokens (54 tools), `core` about 1.8k + 2.8k (15 tools). Measured before the code-shape block (about 280 tokens, in `lean` and `full` only) and the `slop_scan` and `secscan` tools were added |
 | `tools.sgrep_first` | bool | `true` | Semantic search is enforced, not suggested: a `grep` whose pattern is a description is answered by `sgrep`, a `grep` past its default cap comes back reranked by `sgrep` (an explicit `max_matches` is honored), and shell searches (`grep`/`rg`/`findstr`/`Select-String` as the command) are refused. Needs sgrep installed to change anything; see [Tools](tools.md#sgrep) |
 | `tools.pass_provider_keys` | bool | `false` | Model-provider keys (`OPENAI_API_KEY`, `NUR_API_KEY`, and the rest of the catalog's key variables) are removed from the environment of commands that tools run, so `printenv` or an injected `curl` cannot leak them. `GITHUB_TOKEN`, `HF_TOKEN`, `CLOUDFLARE_API_TOKEN` and `AWS_BEARER_TOKEN_BEDROCK` pass through for your own tools. `true` passes every key, for scripts that call a provider themselves |
+| `tools.rust_builder` | string | `"cargo"` | `"blaze"` or `"auto"` runs plain `cargo build`/`check`/`test`/`run` through [blaze](https://github.com/indexable-inc/blaze), the incremental Rust compiler (`auto` only on Linux x86-64/aarch64 and macOS arm64 with blaze installed; `NUR_BLAZE_BIN` overrides the binary). `--release`, `+toolchain`, compound shell lines and flags blaze refuses stay on cargo, a blaze refusal reruns the command on cargo, and every blaze result reminds the agent to run `cargo check` once (blaze's borrow checker is partial). nur never installs blaze |
 | `auto_update` | bool | `true` | On **every** launch (bare TUI, `nur "prompt"`, `nur run …`, gateway), check [GitHub Releases](https://github.com/nuroctane/nur-cli/releases/latest) and install a newer binary when available; it runs on a background thread so it never delays or breaks a run, and the new binary is picked up on the next launch. A 60s floor between network checks stops a script that loops `nur` from hammering the API — tune it with `NUR_AUTO_UPDATE_TTL_SECS` (`0` = check every run). Opt out with `false` or env `NUR_SKIP_AUTO_UPDATE=1`. Verify with `nur update --check`; `nur update` always runs the full update path |
 
 ### Personal accent (theme setup)
@@ -260,7 +261,7 @@ route because it is an instruction to the agent rather than a request field.
 
 Write **`ultrathink`** as a word anywhere in a prompt to send the strongest rung the route
 accepts for that turn only; the saved level does not change. Inside code spans, fenced blocks,
-paths, flags and identifiers (`docs/ultrathink.md`, `--ultrathink`) it is just text.
+paths, flags and identifiers (`notes/ultrathink.md`, `--ultrathink`) it is just text.
 
 Provider references: [OpenAI](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6), [xAI](https://docs.x.ai/developers/model-capabilities/text/reasoning), [Anthropic](https://platform.claude.com/docs/en/build-with-claude/effort).
 
@@ -433,6 +434,40 @@ Notes appear in the transcript (`advisor · <model>`) and as `advice` events in
 `nur run --output-format stream-json`. Advisor requests are metered under their
 own route. A failed advisor request is a status line and the turn goes on. A
 provider without a saved key turns the advisor off for that turn with a note.
+
+The advisor also holds the work to the project's own rules: a
+`## Code Review Rules` section in any AGENTS.md of the instruction chain (up to
+4,000 characters) is added to its brief, and when the turn wrote files it checks
+them against the code-shape indicators (implicit coupling, duplication, god
+files, pass-through wrappers and the rest; see the `codebase-slop` skill).
+
+---
+
+## Auto-continue
+
+A turn that stops on a usage limit (429, "usage limit reached", a quota with a
+reset) or an outage the client's own retries could not ride out (5xx,
+overloaded, a dropped connection) continues by itself once it lifts: the TUI
+shows a card with a toggle (`/autocontinue`), and `nur run` and
+`--continuous` wait in place (Ctrl+C stops; a waited-out step does not count
+against `--max-iters`). The reset comes from the provider's headers
+(`retry-after`, `anthropic-ratelimit-unified-reset`, `x-ratelimit-reset-*`),
+error body (`resets_in_seconds`, `resets_at`, `RetryInfo`) or message ("try
+again in 2 hours"). Billing, sign-in and bad requests never continue.
+
+```toml
+[auto_continue]
+enabled = true      # default
+delay_secs = 60     # after the reset the provider gave
+max_attempts = 8    # resumes in a row before handing back
+```
+
+## Secrets
+
+`[secrets] catch_pasted = true` (default): a live-looking credential typed or
+pasted into the TUI prompt opens the secret modal instead of being sent. Saved
+secrets (`/secrets`, `nur secrets set NAME`) are environment variables in every
+shell command and are redacted from tool output; see the `secret` tool.
 
 ---
 

@@ -133,7 +133,7 @@ fn run_bash_shell(cwd: &std::path::Path, cmd: &str) -> Result<String> {
     let (prog, args) = ("sh", vec!["-c".to_string(), cmd.to_string()]);
     let mut command = std::process::Command::new(prog);
     command.args(&args).current_dir(cwd);
-    super::scrub_provider_keys(&mut command);
+    super::tool_env(&mut command);
     let out = command
         .output()
         .map_err(|e| NurError::Tool(format!("repl %%bash failed: {e}")))?;

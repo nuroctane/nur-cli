@@ -24,6 +24,8 @@ pub struct PluginRow {
     pub category: String,
     pub installed: bool,
     pub enabled: bool,
+    /// Short commit the install is at (empty when unknown or not installed).
+    pub commit: String,
 }
 
 impl PluginRow {
@@ -58,9 +60,13 @@ pub fn marketplace_rows() -> Vec<PluginRow> {
 }
 
 fn row_for(p: &Entry, reg: &Registry) -> PluginRow {
-    let _ = reg; // registry is still loaded by marketplace_rows for batch consistency
     let installed = is_installed(p.id);
     let enabled = installed && is_enabled(p.id);
+    let commit = reg
+        .plugins
+        .get(p.id)
+        .map(|rec| rec.commit.chars().take(7).collect())
+        .unwrap_or_default();
     PluginRow {
         id: p.id.to_string(),
         name: p.name.to_string(),
@@ -68,6 +74,7 @@ fn row_for(p: &Entry, reg: &Registry) -> PluginRow {
         category: p.category.to_string(),
         installed,
         enabled,
+        commit,
     }
 }
 

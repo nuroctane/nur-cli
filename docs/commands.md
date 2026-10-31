@@ -76,6 +76,7 @@ nur run "run the tests and summarise" -y --output-format json | jq .result
 - **The result object** (`json`, and the last line of `stream-json`): `ok`, `exit_code`, `result` (the answer, or `null` on error), `error`, `blocked` (the text after `BLOCKED:`), `session_id`, `model`, `provider`, `tool_calls`, `duration_ms`, `usage` (`input_tokens`, `output_tokens`, `total_tokens`, `estimated_cost_usd`) and `layers`.
 - **Layers line.** Every headless run reports once which side layers are live and why not when they are not: `layers · typesafe: off (no key: ...) · headroom: active (inline compress)`. On stderr in text mode, a `layers` event in `stream-json`, the `layers` field of the `json` result. The probe runs on a background thread, never in front of the first request.
 - **Notices print once.** A standing condition (the provider capability profile, for example) is said the first time, not before every request.
+- **Limits wait in place.** A turn that stops on a usage limit or a provider outage prints `usage limit reached · continuing at 15:42 (in 2h 13m) · Ctrl+C stops`, waits, and continues the same session (see [Auto-continue](configuration.md#auto-continue)); billing and sign-in errors exit with their code as before.
 - **Side-model spend is visible.** Every row in `~/.nur/usage.jsonl` carries `purpose`: `chat` for the turn itself, `compaction` / `compaction-remote` for summaries, `fusion` for panel members, `subagent` for child sessions.
 
 ---
@@ -330,6 +331,30 @@ nur skills untrust    # hold them again
 Trust records a digest of every project `SKILL.md`, so a `git pull` that edits
 one holds the set again. The TUI equivalent is `/skills trust`.
 
+The skills market (see [Ecosystem](ecosystem.md#skills-market)):
+
+```bash
+nur skills search postgres rls        # --json for the raw index entries
+nur skills add <owner>/<skill>        # --as <name>, --replace
+nur skills remove <skill>             # market installs only
+nur skills verify                     # re-hash installed market skills
+nur skills scan ./my-skill            # hidden characters and risky patterns
+```
+
+---
+
+### `nur secrets`
+
+Credentials kept out of the conversation: every shell command the agent runs
+gets each one as `$NAME`, and tool output shows `[secret:NAME]` instead of the
+value. The TUI equivalent is `/secrets`.
+
+```bash
+nur secrets                       # list saved names
+nur secrets set GITHUB_TOKEN      # value read without echo (or from stdin when piped)
+nur secrets remove GITHUB_TOKEN
+```
+
 ---
 
 ### `nur doctor`
@@ -561,6 +586,8 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/steer` | Inject a message into the running turn without cancelling it |
 | `/scan` | Map the codebase → shareable foglamp scan |
 | `/goal` | Set a standing session goal (starts a goal-driven turn; stalls auto-continue while the goal is active) |
+| `/secrets` | Save a credential outside the chat (`add [NAME]` opens a masked modal), list names, or `remove NAME` |
+| `/autocontinue` | Toggle continuing after usage limits and outages for this session; `on` / `off` / `now` |
 | `/btw` | One-off note attached to the next message |
 | `/bro` | Chill mode: plain words, straight answers (toggle) |
 | `/adhd` | Sticky ADHD-friendly output for this session (toggle) |
@@ -576,7 +603,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/<skill>` | **Any installed skill** — sticky toggle, or `/<skill> <prompt>` one-shot |
 | `/codesearch` · `/cs` | Fast ripgrep over the workspace |
 | `/mc` · `/mcp` | Manage MCP servers via Executor |
-| `/skills` | List installed skills. `/skills trust` approves this project's local skills (`.nur/skills`, `.claude/skills`, `.agents/skills`) - held inert until trusted, re-held on edit |
+| `/skills` | List installed skills. `/skills find <words>` searches the skills market, `/skills add <id>` installs one, `/skills remove <name>` and `/skills verify` manage market installs. `/skills trust` approves this project's local skills (`.nur/skills`, `.claude/skills`, `.agents/skills`) - held inert until trusted, re-held on edit |
 | `/memory` | Show the `~/.nur` memory excerpt |
 | `/graphify` | Knowledge graph: status / query / extract |
 | `/graphjin` | Live data (`/gj`): `catalog` \| `schema` \| `help` \| `explain` \| `query` \| `security` \| `ask`. Writes go through the model so they hit the approval gate. |

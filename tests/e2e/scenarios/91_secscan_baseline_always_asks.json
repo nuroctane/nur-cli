@@ -1,0 +1,20 @@
+{
+  "description": "Marking security findings as noise is the user's decision: secscan baseline asks for approval even in auto mode (headless stdin denies), so the agent cannot quietly baseline its own findings.",
+  "prompt": "Mark that finding as noise.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[tools]\nprofile = \"full\"\n"
+  },
+  "script": [
+    { "tool_calls": [{ "name": "secscan", "arguments": { "action": "baseline", "ids": ["a1b2c3d4e5f6"], "reason": "test fixture" } }] },
+    { "text": "The baseline needs your approval." }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "absent_files": [".nur/secscan-baseline.json"],
+    "tool_results": [
+      { "request": 2, "contains": ["user denied this tool call"] }
+    ],
+    "stderr_contains": ["approve?"]
+  }
+}

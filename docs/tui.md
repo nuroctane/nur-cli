@@ -325,7 +325,7 @@ input height, sidegraph width) so peeks are not re-uploaded every tick.
 | `/graphify` | Query the code knowledge graph |
 | `/plur` | Search shared engram memory |
 | `/ruflo` | Search vector memory |
-| `/skills` | List installed skills (also shows sticky session skills) |
+| `/skills` | List installed skills (also shows sticky session skills); `find <words>`, `add <id>`, `remove <name>`, `verify` for the skills market |
 | `/ecosystem` | Show ecosystem status |
 | `/memory` | Show session memory |
 | `/optmem` · `/memo` | OptMem permanent memory (`~/.optmem`): `status` `wake` `note` `nap` `recall` `zoom` `forget` `config` `doctor`. `nap lines=[...]` drains several compressions in one call |
@@ -388,6 +388,8 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/login` | Multi-provider sign-in (see below) |
 | `/logout` | Sign out of the active provider (clears its credential, saved copies and rotation-pool keys; the next `/login` signs in fresh instead of reusing a vendor CLI session; other providers keep theirs) |
 | `/goal` | Standing session goal (see below) |
+| `/secrets` | Saved credentials: `/secrets` lists names, `/secrets add [NAME]` opens the masked modal, `/secrets remove NAME` (see below) |
+| `/autocontinue` | Continue sessions stopped by a usage limit once it lifts: no argument toggles, `on` / `off` / `now` (see below) |
 | `/bro` | Chill mode: plain words, no jargon, no preamble — toggle (see below) |
 | `/adhd` | Sticky ADHD-friendly output (toggle) |
 | `/<skill>` | Any installed skill — sticky, or `/skill <prompt>` one-shot |
@@ -441,6 +443,26 @@ Completion claims are verified part by part against the transcript by Jev -
 hosted key or local engine, whichever is configured - and only a confident
 not-done reopens the goal; with no judgment layer the claim is accepted and
 marked unverified. Esc stops the chain; `/goal pause` suspends it; `/goal clear` drops it.
+
+When a turn stops on a usage limit or a provider outage, a card replaces the
+error: what stopped, when it lifts, and two chips. With **auto-continue on**
+(the default, `[auto_continue] enabled`) the session continues by itself a
+minute after the reset the provider gave (or on a widening schedule when it gave
+none: 5, 15, 30 then 60 minutes; outages retry after 30s, 2, 5, 15 and 30
+minutes), as the same kind of turn: a `/goal` run stays a goal run. Prompts you
+queue meanwhile wait and go first. **continue now** goes at once; clicking the
+toggle or `/autocontinue` switches it for the session; sending a message
+yourself settles the card. Billing, sign-in and bad-request errors never
+continue, since waiting cannot fix them, and eight resumes in a row hand back.
+
+A credential never goes out in a message. `/secrets add [NAME]` opens a masked
+modal (name, value; Tab switches, Ctrl+V pastes, Esc cancels). A live-looking
+key typed or pasted into the prompt (OpenAI, Anthropic, GitHub, GitLab, Slack,
+AWS, Google, Stripe, Hugging Face, npm, xAI, OpenRouter) opens the same modal
+before anything is sent: saving it sends your message with `$NAME` in its place,
+Esc puts the message back in the editor unsent (`[secrets] catch_pasted = false`
+turns this off). When the agent needs a credential it asks through the modal
+too (`secret` tool) and gets the name back, never the value.
 | `/btw <note>` | Queues a one-off note that rides along with your **next** message only (stackable) |
 | `/bro` | Toggle chill mode: every turn asks for plain, low-jargon, no-preamble replies. `/bro on` / `/bro off` force a state. Tone only — facts, caveats, and bad news stay complete and accurate. `/status` shows when it's on. |
 | `/adhd` | Sticky ADHD-friendly shape for every reply this session (action-first, numbered steps, no fluff). `/adhd off` clears it. |

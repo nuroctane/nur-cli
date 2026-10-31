@@ -14,6 +14,7 @@ termination through stale PID records.
 | `~/.nur/auth.json` | Provider API key / tokens after `/login` or `nur auth login`; 0600 on Unix, owner-only ACL on Windows, and sealed with Windows DPAPI at rest |
 | Env `NUR_API_KEY` / vendor keys | Optional override (never printed in logs) |
 | `~/.nur/provider_keys.json`, `provider_sessions.json` | Scoped and sidecar keys (TypeSafe, Enclave, failover routes) and per-provider OAuth sessions; same protection as `auth.json` |
+| `~/.nur/secrets.json` | Your own credentials (`/secrets`, `nur secrets set`): owner-only. Shell commands get each as `$NAME`; tool output shows `[secret:NAME]`, never the value, and a key pasted into the prompt is saved here instead of sent |
 | `~/.nur/plugins/` | Marketplace skill packs (local clones; no secrets) |
 | `~/.nur/sessions/` | Session files + `.json.bak` / `.precompact.bak` (no key) |
 | `~/.nur/tool-results/` | Spilled large tool outputs (may include workspace text) |
@@ -33,6 +34,12 @@ termination through stale PID records.
 
 !!! warning "Session sensitivity"
     Session `input_items` may include base64 media when vision (`look` / auto-attach) is used. Treat session files as potentially sensitive.
+
+The edit tools (`write_file`, `edit_file`, `multi_edit`, `apply_patch`, `hashline_edit`) are
+screened before they write: a private key (a `BEGIN ... PRIVATE KEY` block with key material) is
+refused, and a live-looking token (OpenAI, Anthropic, GitHub, Slack, AWS, Google) is written with a
+warning in the tool result so the model moves it to an environment variable or a gitignored file.
+Code and docs that only mention keys, and placeholders such as `sk-xxxx…`, are not flagged.
 
 ---
 

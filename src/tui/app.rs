@@ -37,7 +37,10 @@ use tokio_util::sync::CancellationToken;
 // Slash-command handlers (`run_command` + `cmd_*`) live in a child module so
 // this file stays focused on state, rendering hooks, and the event loop.
 mod commands;
+pub mod resume;
+mod secret;
 mod startup;
+pub use secret::{SecretField, SecretHit, SecretModal, SecretOrigin};
 
 /// `/bro` style rider, prepended to every turn while chill mode is on.
 /// Mirrors `skills/bro/SKILL.md`, but phrased as a standing style rather than a
@@ -226,7 +229,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     ("/drawings", "penecho canvas: ink · MathJax · plots  (alias of /pen)"),
     ("/memory", "show ~/.nur/memory.md excerpt"),
-    ("/skills", "list installed skills"),
+    ("/skills", "installed skills; find <q> | add <id> | remove <name> | verify | trust"),
     ("/adhd", "sticky ADHD-friendly output for this session (toggle)"),
     ("/fable-method", "skill: Fable think-act-prove loop (sticky or /fable-method <task>)"),
     ("/fable-loop", "skill: orchestrated Fable multi-step loop"),
@@ -299,6 +302,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/init", "create or audit the AGENTS.md project guide"),
     ("/scan", "map this codebase → shareable foglamp scan: /scan [focus]"),
     ("/goal", "set a session goal and immediately start working toward it"),
+    ("/secrets", "save credentials outside the chat: /secrets [add NAME | remove NAME]"),
+    ("/autocontinue", "continue stopped sessions when limits lift: /autocontinue [on|off|now]"),
     ("/bro", "chill mode: plain words, no jargon, no preamble (toggle)"),
     ("/btw", "add a one-off note to your next message"),
     ("/codesearch", "fast ripgrep over the workspace  (/cs)"),
@@ -422,6 +427,15 @@ pub enum Cell {
         detail: bool,
     },
     Error(String),
+    /// A turn stopped on a usage limit or an outage (`agent::resume`). While
+    /// `settled` is `None` the session waits; with `armed` it continues by
+    /// itself at `plan.at`. Ephemeral - not persisted to the session log.
+    Resume {
+        plan: crate::agent::resume::Plan,
+        armed: bool,
+        /// How the wait ended ("continued at 15:42"), once it has.
+        settled: Option<String>,
+    },
 }
 
 /// State of a `/sidegraph` node (mirrors the swarm run states).
@@ -929,7 +943,7 @@ impl Cell {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum TurnMode {
     Chat,
     /// A `/goal` work order (or one of its harness auto-continuations).
@@ -2135,6 +2149,7 @@ fn relative_when(dt: chrono::DateTime<chrono::Utc>) -> String {
 pub(super) enum ModalFocus {
     Theme,
     Login,
+    Secret,
     Model,
     Plugin,
     Question,
@@ -2474,6 +2489,18 @@ pub struct App {
 
     pub approval: Option<ApprovalState>,
     pub question: Option<QuestionState>,
+    /// The masked secret modal (`/secrets add`, a pasted credential, the
+    /// agent's `secret` request), when open.
+    pub secret: Option<SecretModal>,
+    /// Auto-continue after limits for this session (`/autocontinue`);
+    /// starts from `[auto_continue] enabled`.
+    pub auto_continue: bool,
+    /// Resumes in a row since a turn last finished.
+    resume_attempts: u32,
+    /// The kind of turn the waiting resume card continues.
+    resume_kind: TurnMode,
+    /// Last countdown repaint.
+    resume_tick: Instant,
     pub picker: Option<SessionPicker>,
     /// When the picker modal opened (Instant). Keys that arrive in the first ~300ms
     /// of an async-loaded picker (sessions/takeover scan disk + subprocess readers
@@ -2796,6 +2823,7 @@ pub(super) fn new_app(
     let u_session = usage.session_usage().clone();
     let session_id = session.id.clone();
     let permissions = SharedPermissions::load(&cwd);
+    let auto_continue = cfg.auto_continue.enabled;
     App {
         startup: startup::StartupState::new(),
         client,
@@ -2956,6 +2984,11 @@ pub(super) fn new_app(
         u_last: TokenUsage::default(),
         approval: None,
         question: None,
+        secret: None,
+        auto_continue,
+        resume_attempts: 0,
+        resume_kind: TurnMode::Chat,
+        resume_tick: Instant::now(),
         picker: None,
         palette_idx: 0,
         palette_scroll: 0,
@@ -3120,6 +3153,9 @@ pub async fn run_tui(
         if app.poll_slash_jobs() {
             dirty = true;
         }
+        if app.poll_resume() {
+            dirty = true;
+        }
         while let Ok(ev) = app.rx.try_recv() {
             app.on_agent_event(ev);
             dirty = true;
@@ -3132,6 +3168,7 @@ pub async fn run_tui(
             || app.approval.is_some()
             || app.question.is_some()
             || app.login.is_some()
+            || app.secret.is_some()
             || app.model_picker.is_some()
             || app.theme_picker.is_some()
             || app.plugin_picker.is_some()
@@ -3171,6 +3208,7 @@ pub async fn run_tui(
         // Modals own the keyboard: never route their keys through paste-chip
         // coalescing (that path is for the main prompt only).
         let modal_open = app.login.is_some()
+            || app.secret.is_some()
             || app.model_picker.is_some()
             || app.theme_picker.is_some()
             || app.plugin_picker.is_some()
@@ -3536,6 +3574,7 @@ impl App {
         [
             (self.theme_picker.is_some(), ModalFocus::Theme),
             (self.login.is_some(), ModalFocus::Login),
+            (self.secret.is_some(), ModalFocus::Secret),
             (self.model_picker.is_some(), ModalFocus::Model),
             (self.plugin_picker.is_some(), ModalFocus::Plugin),
             (self.question.is_some(), ModalFocus::Question),
@@ -4338,6 +4377,7 @@ impl App {
             match focus {
                 ModalFocus::Theme => self.on_theme_picker_key(key),
                 ModalFocus::Login => self.on_login_key(key),
+                ModalFocus::Secret => self.on_secret_key(key),
                 ModalFocus::Model => self.on_model_picker_key(key),
                 ModalFocus::Plugin => self.on_plugin_picker_key(key),
                 ModalFocus::Question => self.on_question_key(key),
@@ -4901,6 +4941,7 @@ impl App {
             match focus {
                 ModalFocus::Theme => self.on_theme_picker_mouse(m),
                 ModalFocus::Login => self.on_login_mouse(m),
+                ModalFocus::Secret => self.on_secret_mouse(m),
                 ModalFocus::Model => self.on_model_picker_mouse(m),
                 ModalFocus::Plugin => self.on_plugin_picker_mouse(m),
                 ModalFocus::Sessions => self.on_picker_mouse(m),
@@ -7589,7 +7630,7 @@ impl App {
                 crate::plugins::install_plugin(&id)
             } else if enabled {
                 crate::plugins::set_enabled(&id, false)
-                    .map(|_| format!("disabled {name} (skills stay on disk; re-enable anytime)"))
+                    .map(|_| format!("disabled {name} (its skills are off until you re-enable it)"))
             } else {
                 crate::plugins::set_enabled(&id, true)
                     .map(|_| format!("enabled {name} - skills active on next agent turn"))
@@ -9150,6 +9191,11 @@ impl App {
         if text.is_empty() {
             return;
         }
+        // A credential never goes out in a message: it is saved as a secret
+        // first and the message carries `$NAME` (see `secret::SecretOrigin`).
+        if !text.starts_with("/secret") && self.catch_pasted_secret(&text) {
+            return;
+        }
         // Claude-Code-style quick memory: a line starting with `#` (but not a
         // `##` markdown heading) is saved to ~/.nur/memory.md without a turn.
         if let Some(rest) = text.strip_prefix('#') {
@@ -10330,6 +10376,8 @@ impl App {
         self.cancelling = false;
         self.turn_kind = TurnMode::Chat;
         self.turn_started = Instant::now();
+        // A turn the user started themselves ends any wait for a limit.
+        self.settle_resume("you continued");
         // Tool ids restart at 1 each turn, so last turn's map would alias this
         // turn's ids onto finished cards sitting in the scrollback.
         self.tool_cells.clear();
@@ -10615,6 +10663,8 @@ impl App {
                 self.refresh_sidegraph();
             }
             AgentEvent::ToolEnd { id, result, ok, .. } => {
+                // The transcript never shows a secret value (see `secrets`).
+                let result = crate::secrets::redact(&result).into_owned();
                 if let Some(&idx) = self.tool_cells.get(&id) {
                     if let Some(Cell::Tool {
                         result: r,
@@ -10748,6 +10798,11 @@ impl App {
                     format!("plan saved - Shift+Tab to manual/auto, then implement\n{text}"),
                 );
             }
+            AgentEvent::SecretRequest {
+                name,
+                purpose,
+                respond,
+            } => self.open_secret_request(name, purpose, respond),
             AgentEvent::Done {
                 session,
                 usage,
@@ -10770,6 +10825,7 @@ impl App {
                 self.cancel = None;
                 self.question = None;
                 self.approval = None;
+                self.drop_secret_request();
                 self.status = "idle".into();
                 // Final graph snapshot for this turn, then stop it animating.
                 self.refresh_graph();
@@ -10805,22 +10861,16 @@ impl App {
                     (TurnMode::Compact, Err(e), _) => {
                         self.push_error(format!("compaction failed: {e}"))
                     }
-                    (TurnMode::Chat, Err(e), _) => {
+                    (kind @ (TurnMode::Chat | TurnMode::Goal { .. }), Err(e), _) => {
                         // Interrupted surfaces as Err("interrupted") sometimes.
+                        // A failed goal turn hands back like a chat error, except
+                        // a limit or an outage, which waiting fixes: that one gets
+                        // a resume card (`resume`) and continues as the same kind
+                        // of turn once it lifts. Any other error is not re-driven:
+                        // a broken route burns budget.
+                        let kind = *kind;
                         let was_interrupt = e.contains("interrupted");
-                        if !was_interrupt {
-                            let e =
-                                annotate_model_unavailable(&e, &self.cfg.provider, &self.cfg.model);
-                            self.push_error(e);
-                        }
-                        self.push_turn_done(turn_dur, was_interrupt);
-                    }
-                    (TurnMode::Goal { .. }, Err(e), _) => {
-                        // A failed goal turn hands back like a chat error: the
-                        // user sees the failure and decides. No auto-continue
-                        // on errors - re-driving a broken route burns budget.
-                        let was_interrupt = e.contains("interrupted");
-                        if !was_interrupt {
+                        if !was_interrupt && !self.offer_resume(&e, kind) {
                             let e =
                                 annotate_model_unavailable(&e, &self.cfg.provider, &self.cfg.model);
                             self.push_error(e);
@@ -10828,6 +10878,7 @@ impl App {
                         self.push_turn_done(turn_dur, was_interrupt);
                     }
                     (TurnMode::Chat, Ok(_), _) => {
+                        self.resume_attempts = 0;
                         // Always post turn + thought timers at end of finished output.
                         self.push_turn_done(turn_dur, false);
                     }
@@ -10835,6 +10886,7 @@ impl App {
                         // Copy the budget out first: the match holds `&self`,
                         // and everything below needs `&mut self`.
                         let left = *auto_left;
+                        self.resume_attempts = 0;
                         // Always post turn + thought timers at end of finished output.
                         self.push_turn_done(turn_dur, false);
                         // Goal-driven turn finished cleanly: while the tracked
@@ -10852,6 +10904,9 @@ impl App {
                 if interrupted && !self.preserve_queue_on_interrupt {
                     self.queue.clear();
                     self.remove_cells_matching(|c| matches!(c, Cell::Queued { .. }));
+                } else if self.resume_holds_queue() {
+                    // Queued prompts wait for the limit too, then go first.
+                    self.preserve_queue_on_interrupt = false;
                 } else if let Some(next) = self.queue.pop_front() {
                     self.preserve_queue_on_interrupt = false;
                     // Each card owns one occurrence, even for repeated text.
@@ -10963,6 +11018,10 @@ impl App {
                         0 => self.queue_steer(*cell_idx), // inject mid-turn
                         1 => self.queue_dismiss(*cell_idx),
                         3 => self.queue_cut_in(*cell_idx), // cancel + front
+                        &resume::ACTION_TOGGLE | &resume::ACTION_NOW => {
+                            let (cell_idx, action) = (*cell_idx, *action);
+                            self.on_resume_action(cell_idx, action);
+                        }
                         _ => {}
                     }
                     return;
@@ -11343,6 +11402,10 @@ impl App {
             .collect();
         if self.theme_picker.is_some() {
             self.filter_themes(Some(&field_text), false);
+            return;
+        }
+        if self.secret.is_some() && self.login.is_none() {
+            self.on_secret_paste(&field_text);
             return;
         }
         if let Some(m) = &mut self.login {
@@ -11774,6 +11837,7 @@ fn cells_to_ui_log(cells: &[Cell]) -> Vec<crate::agent::session::UiLogItem> {
             Cell::Queued { .. } => {}
             Cell::Graph { .. } => {}
             Cell::Swarm { .. } => {}
+            Cell::Resume { .. } => {}
             Cell::Error(text) => out.push(UiLogItem {
                 kind: "error".into(),
                 text: text.clone(),

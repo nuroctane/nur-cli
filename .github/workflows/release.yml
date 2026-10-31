@@ -121,6 +121,16 @@ jobs:
           python-version: '3.11'
       - name: Build skill pack
         run: python scripts/build_skill_pack.py --out nur-skills.zip
+      # Skills market index: discovery from skills/market-sources.json, every
+      # entry pinned to its author's commit with per-file sha256. Signed with
+      # the binaries below (it matches dist/nur-*). A failed build (GitHub API
+      # trouble) ships a release without an index; clients then report the
+      # market unavailable, so it must not block the release.
+      - name: Build skills market index
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/build_market_index.py --out nur-market-index.json
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -128,6 +138,7 @@ jobs:
           path: |
             nur-skills.zip
             nur-skills.zip.sha256
+            nur-market-index.json
           if-no-files-found: error
 
   publish:

@@ -104,6 +104,14 @@ impl PackSource {
 /// present. Otherwise the pack is fetched, written under `~/.nur/skills`, and
 /// mirrored. A fetch failure is an error for the caller's notes; whatever an
 /// earlier version installed stays usable in the meantime.
+/// Names of the skills nur ships itself (`skills/bundled.json`), which a
+/// plugin must never replace in `~/.nur/skills`.
+pub fn bundled_skill_names() -> Vec<String> {
+    manifest()
+        .map(|packs| packs.into_iter().map(|p| p.name).collect())
+        .unwrap_or_default()
+}
+
 pub fn install_bundled_skills() -> Result<Vec<String>> {
     let root = nur_home().join("skills");
     fs::create_dir_all(&root)?;

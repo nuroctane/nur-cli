@@ -39,6 +39,7 @@ jobs:
       - run: python scripts/check_skill_snapshot.py
       - run: python scripts/check_vendored_credentials.py
       - run: python scripts/build_skill_pack.py --check
+      - run: python scripts/check_docs.py
       - run: cargo clippy --all-targets --no-default-features --locked -- -D warnings
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --bin nur --locked

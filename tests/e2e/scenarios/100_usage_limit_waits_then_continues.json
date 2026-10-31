@@ -1,0 +1,70 @@
+{
+  "description": "A turn that stops on a usage limit waits for the reset the provider gave, then continues the same session by itself with a continue message, instead of ending on the error.",
+  "prompt": "Finish the migration.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[auto_continue]\ndelay_secs = 0\n"
+  },
+  "script": [
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "You've hit your usage limit.",
+          "type": "usage_limit_reached",
+          "resets_in_seconds": 2
+        }
+      }
+    },
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "You've hit your usage limit.",
+          "type": "usage_limit_reached",
+          "resets_in_seconds": 2
+        }
+      }
+    },
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "You've hit your usage limit.",
+          "type": "usage_limit_reached",
+          "resets_in_seconds": 2
+        }
+      }
+    },
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "You've hit your usage limit.",
+          "type": "usage_limit_reached",
+          "resets_in_seconds": 2
+        }
+      }
+    },
+    {
+      "text": "Picked back up after the limit."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "usage limit reached · continuing at",
+      "Picked back up after the limit."
+    ],
+    "requests_contain": [
+      "Continue from where you left off"
+    ],
+    "requests": 5,
+    "stdout_count": [
+      {
+        "needle": "continuing at",
+        "min": 1,
+        "max": 1
+      }
+    ]
+  }
+}

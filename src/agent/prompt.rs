@@ -191,6 +191,39 @@ fn model_tuning(provider: &str, model: &str) -> Option<&'static str> {
     None
 }
 
+/// Names of the user's saved secrets (never values), when there are any.
+fn push_secrets_note(prompt: &mut String) {
+    if let Some(note) = crate::secrets::prompt_note() {
+        prompt.push_str("\n\n# Secrets\n");
+        prompt.push_str(&note);
+        prompt.push('\n');
+    }
+}
+
+/// Codebase slop indicators to keep out of code the agent writes (prompts of
+/// agents that edit; the `codebase-slop` skill holds the detection recipes).
+/// Worded so reading code never turns into critique or an unrequested refactor.
+pub(crate) const CODE_SHAPE: &str = r#"
+# Code shape
+In code you write or change, avoid these. Leave existing code as it is and say nothing about it
+unless asked or it bears on the task.
+- Implicit coupling: no reliance on another module's internals, shared mutable globals or call
+  order without a visible interface.
+- Structure: follow the project's layout; in new code, group by feature, not into controllers/,
+  services/ or utils/ buckets.
+- Duplication: search for an existing helper before writing one; extend it rather than copy it.
+- Illegal states: model data so invalid combinations cannot be built (enums over flag pairs,
+  newtypes over raw strings).
+- God files: put new code that is a separate responsibility in its own file; do not split
+  existing files unless asked.
+- Shotgun surgery: if one change needs edits in many unrelated places, say which abstraction is
+  missing.
+- Layering: respect the dependency direction the project documents.
+- Pass-through wrappers: no function that only forwards its arguments to another.
+- Boundaries: parse and validate input where it enters (CLI, HTTP, files, model output) and turn
+  failures into typed errors there; interior code trusts its types.
+"#;
+
 /// Effort `ultracode` for the root agent. The strongest effort rung already
 /// rides the request; this adds the orchestration half.
 const ULTRACODE_BLOCK: &str = r#"
@@ -479,7 +512,12 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
                 self.shell_label,
                 crate::tools::SUBAGENT_TOOL_NAMES.join(", "),
             );
+            // Read-only (plan-mode) children write no code.
+            if mode != PermissionMode::Plan {
+                prompt.push_str(CODE_SHAPE);
+            }
             prompt.push_str(&self.render_instructions(session_id));
+            push_secrets_note(&mut prompt);
             return RenderedPrompt {
                 system: prompt,
                 turn_state: String::new(),
@@ -745,8 +783,13 @@ session inventories (goal, harness, context variables, routed memory). It
 reflects the moment the request was sent; follow it over anything earlier.
 "#,
         );
+        // Not in the minimal `core` profile (session-fixed, so the prefix holds).
+        if !self.core_profile {
+            s.push_str(CODE_SHAPE);
+        }
 
         s.push_str(&self.render_instructions(session_id));
+        push_secrets_note(&mut s);
         if let Some(tuning) = self.model_tuning {
             s.push_str(tuning);
         }

@@ -2141,10 +2141,12 @@ pub fn aurora_cell_at(elapsed: Duration, pos: usize, span: usize, period_ms: u12
 /// net (deep teal) · git (teal) · delegate (pink) · knowledge (indigo/orange).
 pub fn tool_color(name: &str) -> Color {
     match name {
-        "read_file" | "list_dir" | "sgrep" | "grep" | "glob" => BLUE_300(),
+        "read_file" | "list_dir" | "sgrep" | "grep" | "glob" | "slop_scan" => BLUE_300(),
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit" => VIOLET(),
         "bash" => AMBER(),
-        "web_fetch" | "web_search" | "browser" | "terminal_browser" | "enclave" => TEAL(),
+        "web_fetch" | "web_search" | "browser" | "terminal_browser" | "enclave" | "secscan" => {
+            TEAL()
+        }
         "look" | "extract_frames" => PINK(),
         "git_status" | "git_diff" => CYAN(),
         "agent" | "omp" => PINK(),
@@ -2158,10 +2160,11 @@ pub fn tool_color(name: &str) -> Color {
 /// A one-word family label used in the tool card gutter.
 pub fn tool_family(name: &str) -> &'static str {
     match name {
-        "read_file" | "list_dir" | "sgrep" | "grep" | "glob" => "read",
+        "read_file" | "list_dir" | "sgrep" | "grep" | "glob" | "slop_scan" => "read",
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit" => "edit",
         "bash" => "shell",
         "web_fetch" | "web_search" => "web",
+        "secscan" => "security",
         "browser" => "browser",
         "terminal_browser" => "term-browser",
         "look" => "vision",
@@ -2656,7 +2659,10 @@ mod tests {
         );
         let force_on = env_of(&[("NUR_REDUCED_MOTION", "1")]);
         assert!(resolve_reduced_motion("full", &force_on));
-        let garbage = env_of(&[("NUR_REDUCED_MOTION", "maybe"), ("SSH_CONNECTION", "10.0.0.2 1 10.0.0.9 2")]);
+        let garbage = env_of(&[
+            ("NUR_REDUCED_MOTION", "maybe"),
+            ("SSH_CONNECTION", "10.0.0.2 1 10.0.0.9 2"),
+        ]);
         assert!(
             resolve_reduced_motion("auto", &garbage),
             "unknown env value falls through"

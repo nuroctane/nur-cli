@@ -121,8 +121,36 @@ Type a category in the picker filter (`design`, `finance`, `trading`, `workflow`
 | `robotics` | Robotics Agent Skills |
 | `catalog` | Mega packs / awesome indexes (install selectively) |
 
-Install: `/plugins` or `nur plugins install <id>`. Nested `SKILL.md` layouts are discovered recursively and mirrored into `~/.nur/skills/<name>/` so `/skill-name` works.
+Install: `/plugins` or `nur plugins install <id>`. Nested `SKILL.md` layouts are discovered recursively and mirrored into `~/.nur/skills/<name>/` so `/skill-name` works. Each mirrored folder carries a `.nur-provenance.json` stamp naming its plugin and commit: a plugin never replaces your own skill or another plugin's (the install message says which it kept), disabling or uninstalling a plugin removes its copies, and enabling puts them back. `/plugins` and `nur plugins` show the commit each install is at, and a disabled plugin stays disabled when ecosystem ensure updates it.
 
+
+## Skills market
+
+Third-party skills install from a signed index, each pinned to its author's
+repository at a fixed commit:
+
+- **Index.** `nur-market-index.json` is built for every release by
+  `scripts/build_market_index.py` from the sources in
+  `skills/market-sources.json` (aidentity's public-domain registry, plus any
+  repositories listed there) and signed with the release key. nur downloads the
+  index for its own version, verifies the signature, and caches it for a day in
+  `~/.nur/cache/market-index.json`; it never queries a registry at runtime.
+  `NUR_SKILL_MARKET_INDEX` points at a local index instead.
+- **Install** (`nur skills add <id>` or `/skills add <id>`) fetches each file
+  from `raw.githubusercontent.com/<repo>/<commit>/...`, checks its SHA-256
+  against the index, scans the skill (Unicode tag characters, bidi controls and
+  zero-width characters block it; instruction-override phrasing, pipe-to-shell
+  installs, credential reads next to a network send, base64 blobs, wildcard
+  `allowed-tools` and executables are listed for review), then moves it into
+  `~/.nur/skills/<name>` with a `.nur-market.json` stamp. A name taken by a
+  skill the market did not install is refused unless you pass `--as` or
+  `--replace`. Entries without a distributable license are link only.
+- **Only you install.** The model's `skill` tool can search the market and
+  tells you the command, but it cannot install: instructions that ride in the
+  next session have to be your choice, or a web page could talk the agent into
+  loading one. `skill read` of a market skill starts with where it came from.
+- `nur skills remove` deletes market installs only, never a skill you wrote;
+  `nur skills verify` re-hashes them against what was installed.
 
 ## Slash skill invocation
 
@@ -240,7 +268,9 @@ nur plugins install superpowers
 the `resume-session` engine, the `bro`, `coding-standards`, `prelude`,
 `tech-spec`, `cloudflare-composition-root`, `herdr` skills (from
 [dmmulroy/skills](https://github.com/dmmulroy/skills)), pointer skill
-**`toolcraft`**, and the whitehat DeFi pack under `skills/security/SCA/` - are
+**`toolcraft`**, **`agents-md`** (what `/init` uses), **`codebase-slop`**
+(audit for structural slop with `file:line` evidence, changing nothing until you
+pick items), and the whitehat DeFi pack under `skills/security/SCA/` - are
 listed in `skills/bundled.json` and published with every release as
 `nur-skills.zip` (signed with the same minisign key as the binaries). They are
 not compiled into the binary: on install / `nur ecosystem ensure` /

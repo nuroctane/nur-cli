@@ -501,7 +501,9 @@ pub fn function_call_output_item(call_id: &str, output: &str) -> Value {
     serde_json::json!({
         "type": "function_call_output",
         "call_id": call_id,
-        "output": output
+        // Every tool result enters the conversation here: a secret value in
+        // it reads `[secret:NAME]` (see `secrets`).
+        "output": crate::secrets::redact(output)
     })
 }
 

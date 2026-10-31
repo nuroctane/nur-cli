@@ -253,6 +253,11 @@ pub fn canonical(tool: &str, args_json: &str) -> String {
             .to_string(),
         // One remote action covers tools of very different impact, so an
         // "always" rule names the Enclave tool it was granted for.
+        "secscan" => v
+            .get("action")
+            .and_then(|a| a.as_str())
+            .unwrap_or("run")
+            .to_string(),
         "enclave" => match v.get("action").and_then(|c| c.as_str()) {
             Some("call") => format!(
                 "call:{}",

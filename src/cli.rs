@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 // Re-export for main.rs match arms.
 
@@ -212,6 +213,22 @@ pub enum Commands {
         #[command(subcommand)]
         action: SkillsCmd,
     },
+    /// Credentials kept out of the conversation: shell commands get each as
+    /// $NAME, and tool output never shows a value
+    Secrets {
+        #[command(subcommand)]
+        action: Option<SecretsCmd>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SecretsCmd {
+    /// List saved secret names
+    List,
+    /// Save a secret; the value is read without echo (or from stdin when piped)
+    Set { name: String },
+    /// Remove a saved secret
+    Remove { name: String },
 }
 
 /// A project's own skills (`./.nur/skills`, `./.claude/skills`,
@@ -222,6 +239,31 @@ pub enum SkillsCmd {
     Trust,
     /// Hold this project's skills again (forget the trust)
     Untrust,
+    /// Search the skills market index
+    Search {
+        /// Words to match against id, name, description and category
+        query: Vec<String>,
+        /// Print the matching index entries as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install a skill from the market (pinned commit, hashed and scanned)
+    Add {
+        /// Index id (owner/name), or a name that is unique in the index
+        id: String,
+        /// Install under another name
+        #[arg(long = "as")]
+        as_name: Option<String>,
+        /// Replace a skill of that name the market did not install
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Remove a market-installed skill (never one you wrote)
+    Remove { name: String },
+    /// Re-hash market-installed skills against what was installed
+    Verify,
+    /// Scan a skill directory for hidden characters and risky patterns
+    Scan { dir: PathBuf },
 }
 
 /// A project's `.nur/permissions.toml` deny and ask rules always apply; its

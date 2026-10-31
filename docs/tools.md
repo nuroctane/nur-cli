@@ -10,7 +10,7 @@ within that budget. If the path cannot fit, the result is truncated without a sp
 
 | Family | Tools | Colour |
 |--------|-------|--------|
-| **read** | `read_file` `list_dir` `sgrep` `grep` `glob` | sky |
+| **read** | `read_file` `list_dir` `sgrep` `grep` `glob` `slop_scan` | sky |
 | **edit** | `write_file` `edit_file` `multi_edit` `apply_patch` `hashline_edit` | violet |
 | **shell** | `bash` | amber |
 | **vision** | `look` `extract_frames` | pink |
@@ -22,7 +22,7 @@ within that budget. If the path cannot fit, the result is truncated without a sp
 | **agent** | `todo_write` `submit_plan` `agent` `harness` `codemode` `tool_search` | - |
 | **memory** | `optmem` `connectome` `mem` `memory` `plur` `ruflo` | indigo |
 | **judgments** | `typesafe` | violet |
-| **security** | `enclave` | teal |
+| **security** | `enclave` `secscan` | teal |
 | **context** | `context` `anydoc` | sky |
 | **async** | `bg` `admission` `goal` `proposal` `message` | amber |
 | **diagrams** | `excalidraw` `tldraw` `penecho` | pink |
@@ -31,7 +31,7 @@ within that budget. If the path cannot fit, the result is truncated without a sp
 
 Which schemas ride on every request depends on `[tools] profile`:
 
-- **`lean` (default):** the editing shell and session tools are always offered (`read_file`, `list_dir`, the edit tools, `bash`, `sgrep`/`grep`/`glob`, `web_search`/`web_fetch`, `look`, `git_status`/`git_diff`, `context`, `goal`, `message`, `bg`, `skill`, `memory`, `question`, `todo_write`, `submit_plan`, `agent`, `codemode`, `tool_search`). Every other tool is listed by name and one line in the system prompt and loads through `tool_search`; from the next request on the model calls it by its real name, so permissions, approvals and plan mode see the real tool. The loaded set is read back from the conversation, so `/resume` keeps it. About 6k tool-schema tokens per request instead of 15k.
+- **`lean` (default):** the editing shell and session tools are always offered (`read_file`, `list_dir`, the edit tools, `bash`, `sgrep`/`grep`/`glob`, `web_search`/`web_fetch`, `look`, `git_status`/`git_diff`, `context`, `goal`, `message`, `bg`, `skill`, `memory`, `question`, `secret`, `todo_write`, `submit_plan`, `agent`, `codemode`, `tool_search`). Every other tool is listed by name and one line in the system prompt and loads through `tool_search`; from the next request on the model calls it by its real name, so permissions, approvals and plan mode see the real tool. The loaded set is read back from the conversation, so `/resume` keeps it. About 6k tool-schema tokens per request instead of 15k.
 - **`full`:** every schema on every request.
 - **`core`:** 16 local tools, no ecosystem tools.
 
@@ -134,7 +134,10 @@ Apply a unified diff patch to a file. `@@ -N,0 +M,k @@` inserts after line N; hu
 
 ### `bash`
 
-Execute shell commands in the workspace cwd (cwd-scoped, not a full OS sandbox). Hardened with:
+Execute shell commands in the workspace cwd (cwd-scoped, not a full OS sandbox). With
+`[tools] rust_builder = "blaze"` or `"auto"`, a plain `cargo build|check|test|run` runs on
+blaze and falls back to cargo when blaze refuses (see [Configuration](configuration.md)).
+Hardened with:
 
 - **Denylist** — blocks dangerous commands (e.g. `rm -rf /`, fork bombs) and hang-prone patterns (dev servers, `watch`, interactive prompts)
 - **Timeout with handoff** — default **60s**, hard max **600s**. A command that has produced output in the last 15 s at the deadline is **not killed**: it moves to a `bg` job and the model gets a "still running" placeholder with the job id and the output so far, so the turn carries on and the result arrives as a completion note in a later turn (or on demand via `bg(action=result, id=N)`). A command that has been silent is killed and reported as timed out, and the error says how to retry (`timeout_ms` up to the cap, or `background=true`). `background=true` hands off almost at once (long builds, test suites). Handed-off jobs still end after 30 minutes. `shell_timeout_handoff = false` in `config.toml` restores kill-on-timeout.
@@ -206,6 +209,43 @@ Show working tree status.
 ### `git_diff`
 
 Show file changes.
+
+---
+
+## Quality and security tools
+
+### `secscan`
+
+Runs the security scanners installed on the machine and returns normalized
+findings (id, scanner, severity, `file:line`, rule, message), most severe first:
+**gitleaks** for secrets in the working tree (values are redacted and never
+read into a finding), **osv-scanner** for vulnerable dependencies, **semgrep**
+(`p/default`, metrics off) for code patterns. nur never installs them; `status`
+lists which are present with install links, and a missing one is skipped with a
+note. Each scanner writes its JSON report under `.nur/scratch/secscan/`, which
+is parsed and deleted. Actions: `run` (default, approval-gated like a shell
+command), `status` (read-only), `baseline` (records finding ids the user
+accepts as noise, with a reason, in `.nur/secscan-baseline.json`; later runs
+hide them). `baseline` asks for approval in every mode, auto included: the
+agent that fixes findings does not get to decide which are noise, and triage is
+meant for a separate `agent` reviewer. In plan mode a scan asks first and a
+baseline is refused. gitleaks scans the repository's history (tracked content,
+so gitignored output stays out); osv-scanner queries osv.dev with package names
+and versions, and semgrep fetches its `p/default` rules, so both use the
+network.
+
+### `slop_scan`
+
+Read-only structural scan for codebase-slop candidates, for the model to judge
+(it pairs with the `codebase-slop` skill): god files against the repository's
+own size distribution, duplicated blocks across files (normalized 8-line
+windows merged into ranges), file pairs in different directories that change
+together in most of their commits and shotgun-surgery commits (last 500
+commits of `git log`), layer-first folders, and pass-through wrappers in Rust,
+TypeScript/JavaScript and Python. `path` narrows the scan, `signals` picks
+which to compute. Bounded by file count, bytes and the search time budget;
+allowed in plan mode, deferred behind `tool_search` in the lean profile, not in
+the core profile.
 
 ---
 
@@ -502,7 +542,8 @@ List or load a skill pack (`SKILL.md`) into context.
 | Action | Behaviour |
 |--------|-----------|
 | `list` | Installed skills under `~/.nur/skills`, enabled plugins, project skill dirs |
-| `read` | Full skill body (large packs are not truncated the way the system catalog is) |
+| `search` | Installed skills and the skills market for `query`; a market hit names the `nur skills add <id>` command. The model never installs |
+| `read` | Full skill body (large packs are not truncated the way the system catalog is); a market-installed skill starts with its `repo@commit (license)` |
 
 **Natural-language activation:** many workflow skills also auto-activate from plain wording (no slash, no first `skill` call). Examples: *think like fable*, *TDD this*, *debug systematically*, *polish the UI*, *resume from Claude*. When that fires, the harness injects the skill body for the whole turn and shows a status chip. Details: **[Ecosystem → Natural-language skill activation](ecosystem.md#natural-language-skill-activation)**.
 
@@ -711,6 +752,22 @@ suffice. A dismissed question returns guidance, never an invented answer - do
 not re-ask immediately.
 
 <!-- src/tools/question_tool.rs:30 no action enum; executed by the loop, not dispatch -->
+
+### `secret`
+
+Credentials without the conversation. `list` names the secrets the user saved;
+`request` (`name` like `GITHUB_TOKEN`, `purpose`) opens the TUI's masked
+secret modal and returns only the name once the user saves it, or that they
+declined. Every shell command (`bash`, `bg`, `repl`) gets each saved secret as
+an environment variable, so the model uses `$NAME`; any tool result that would
+show a value (as written, JSON-escaped or URL-encoded) reads `[secret:NAME]`
+instead, and the system prompt lists the names, never the values. Subagents and
+headless runs cannot prompt: a request there says to run `nur secrets set NAME`.
+Values live in `~/.nur/secrets.json` (owner-only, like `auth.json`); values
+shorter than 6 characters are refused because redacting them would rewrite
+ordinary text.
+
+<!-- src/tools/secret_tool.rs:39 actions: list|request; request executed by the loop -->
 
 ### `bg`
 

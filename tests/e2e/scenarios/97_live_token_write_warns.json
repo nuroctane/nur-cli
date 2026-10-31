@@ -1,0 +1,16 @@
+{
+  "description": "Writing a live-looking API key into a file goes ahead but the tool result warns the model to keep secrets in the environment or a gitignored file.",
+  "prompt": "Save the key in settings.env.",
+  "script": [
+    { "tool_calls": [{ "name": "write_file", "arguments": { "path": "settings.env", "contents": "OPENAI_API_KEY=sk-proj-Q7vLm2Xa9Pz4Rt8Kw1Hy6Ub3Nc5Jd0Fe\n" } }] },
+    { "text": "Saved, with a warning." }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "files": { "settings.env": "OPENAI_API_KEY=sk-proj-Q7vLm2Xa9Pz4Rt8Kw1Hy6Ub3Nc5Jd0Fe\n" },
+    "tool_results": [
+      { "request": 2, "contains": ["looks like a live OpenAI API key"] }
+    ]
+  }
+}

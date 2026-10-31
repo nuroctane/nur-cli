@@ -6,14 +6,25 @@
     "OPENCODE_API_KEY": "e2e-isolated-key"
   },
   "setup_home_files": {
-    "config.toml": "provider = \"opencode-go\"\nbase_url = \"http://127.0.0.1:{port}/v1/zen/go\"\nmodel = \"kimi-k3\"\nfallback_providers = [\"chatgpt\"]\n"
+    "config.toml": "provider = \"opencode-go\"\nbase_url = \"http://127.0.0.1:{port}/v1/zen/go\"\nmodel = \"kimi-k3\"\nfallback_providers = [\"chatgpt\"]\n[auto_continue]\nenabled = false\n"
   },
   "prompt": "Say hello.",
-  "global_args": ["-v"],
+  "global_args": [
+    "-v"
+  ],
   "script": [
-    { "status": 500, "error": "scripted primary outage" },
-    { "status": 500, "error": "scripted primary outage" },
-    { "status": 500, "error": "scripted primary outage" }
+    {
+      "status": 500,
+      "error": "scripted primary outage"
+    },
+    {
+      "status": 500,
+      "error": "scripted primary outage"
+    },
+    {
+      "status": 500,
+      "error": "scripted primary outage"
+    }
   ],
   "expect": {
     "exit_code": 4,
@@ -21,7 +32,9 @@
       "failover skipped",
       "failover_allow_paid"
     ],
-    "stderr_contains": ["scripted primary outage"],
+    "stderr_contains": [
+      "scripted primary outage"
+    ],
     "requests": 3
   }
 }

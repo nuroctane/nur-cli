@@ -1,5 +1,5 @@
 {
-  "total_skills": 1791,
+  "total_skills": 1792,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -11277,6 +11277,31 @@
         "user",
         "improve",
         "module"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "codebase-slop",
+      "description": "Audit a codebase for structural slop (implicit coupling, layer-first folders, duplication, illegal states, god files, shotgun surgery, layering violations, pass-through wrappers, unvalidated boundaries) and report ranked findings with file:line evidence. Use when asked to find slop, check code quali",
+      "path": "skills/codebase-slop/SKILL.md",
+      "triggers": [
+        "/codebase slop",
+        "/codebase-slop",
+        "audit codebase",
+        "codebase slop",
+        "codebase-slop"
+      ],
+      "keywords": [
+        "codebase",
+        "slop",
+        "audit",
+        "structural",
+        "implicit",
+        "coupling",
+        "layer",
+        "first",
+        "folders",
+        "duplication"
       ],
       "aliases": []
     },

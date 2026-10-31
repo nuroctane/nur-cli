@@ -115,7 +115,7 @@ pub async fn run_subagent(
                 ok,
                 ..
             } => {
-                swarm::tool_end_with(run_id, ok, &result);
+                swarm::tool_end_with(run_id, ok, &crate::secrets::redact(&result));
             }
             // A nested subagent asked for a provider with no creds — relay the
             // signal up so the top-level TUI can pop the pre-selected /login.

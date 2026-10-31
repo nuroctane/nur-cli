@@ -642,12 +642,14 @@ mod tests {
         )
         .unwrap();
         let ctx = ToolContext::default_for_test(&dir);
-        let out = execute_with(
-            None,
-            &serde_json::json!({"query": "retry with backoff logic"}),
-            &ctx,
-        )
-        .unwrap();
+        let args = serde_json::json!({"query": "retry with backoff logic"});
+        let mut out = execute_with(None, &args, &ctx).unwrap();
+        // A saturated test run (every test spawning processes) can stall the
+        // first rg launch past the search budget; that note is the budget
+        // working, not the fallback failing, so look once more.
+        if out.contains("ms budget") {
+            out = execute_with(None, &args, &ctx).unwrap();
+        }
         let _ = std::fs::remove_dir_all(&dir);
         assert!(out.starts_with("[sgrep not installed"), "{out}");
         assert!(out.contains("a.rs:1:"), "{out}");

@@ -7,7 +7,8 @@ system prompt, message order) as well as on what it did.
 A reply is {"text": "..."}, {"tool_calls": [{"name", "arguments"}]} (a string
 "arguments" is sent verbatim, so malformed JSON can be scripted), or
 {"status": 500, "error": "..."} for an HTTP failure ({"status": 404, "html": "..."}
-answers with a web page instead). A reply with
+answers with a web page instead; "body" replaces the JSON error body and
+"headers" adds response headers, such as a usage limit's reset). A reply with
 "drop": "before_response" resets the connection without answering, and
 "drop": "mid_stream" streams its text then resets: both are transport failures,
 not HTTP errors. "stream_delay": S streams the text one line every S seconds,
@@ -38,7 +39,11 @@ import sys
 import threading
 import time
 import socketserver
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# Where `serve_files` land (next to the script); set in main().
+RAW_DIR = Path(".")
 
 EXHAUSTED = "[fake provider: script exhausted]"
 
@@ -239,8 +244,24 @@ def make_handler(state, mcp=None):
             path = self.path.rstrip("/")
             if path.startswith("/console/"):
                 return self._console(path, {})
+            if path.startswith("/raw/"):
+                # Files a scenario serves (`serve_files`), e.g. a skill at a
+                # pinned commit standing in for raw.githubusercontent.com.
+                return self._raw(path[len("/raw/"):])
             # /v1/models probes: answer with the one scripted model.
             self._json(200, {"object": "list", "data": [{"id": "e2e-model", "object": "model"}]})
+
+        def _raw(self, rel):
+            target = (RAW_DIR / rel).resolve()
+            if RAW_DIR.resolve() not in target.parents or not target.is_file():
+                self._json(404, {"error": {"message": f"no served file {rel}"}})
+                return
+            data = target.read_bytes()
+            self.send_response(200)
+            self.send_header("content-type", "application/octet-stream")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
         def do_POST(self):
             length = int(self.headers.get("content-length", "0"))
@@ -277,7 +298,8 @@ def make_handler(state, mcp=None):
                 return
             if "status" in reply:
                 # Scripted HTTP failure: {"status": 500, "error": "..."}.
-                self._json(reply["status"], {"error": {"message": reply.get("error", "scripted failure")}})
+                payload = reply.get("body") or {"error": {"message": reply.get("error", "scripted failure")}}
+                self._json(reply["status"], payload, reply.get("headers"))
                 return
             if path.endswith("/responses"):
                 self._responses(body, reply, n)
@@ -444,7 +466,9 @@ def make_handler(state, mcp=None):
 
 
 def main():
+    global RAW_DIR
     script_path, log_path, port_file = sys.argv[1:4]
+    RAW_DIR = Path(script_path).parent / "raw"
     with open(script_path, encoding="utf-8") as f:
         script = json.load(f)
     mcp = None

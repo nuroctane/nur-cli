@@ -1,0 +1,8 @@
+{
+  "_comment": "Discovery sources for the skills market index (scripts/build_market_index.py). aidentity's registry is CC0 metadata; content always comes from each author's repository at the commit the release build pins. `repos` adds repositories directly: every SKILL.md directory in them becomes an entry with the license given here.",
+  "aidentity": {
+    "repo": "AkshatNaruka/aidentity",
+    "ref": "main"
+  },
+  "repos": []
+}

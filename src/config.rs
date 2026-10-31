@@ -268,6 +268,16 @@ pub struct Config {
     /// system prompt before the rest is spilled to the context store.
     #[serde(default)]
     pub instructions: InstructionsConfig,
+    /// `[auto_continue]`: pick a session back up once a usage limit lifts or
+    /// a provider outage passes (see `agent::resume`). On by default.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::agent::resume::AutoContinueConfig::is_default"
+    )]
+    pub auto_continue: crate::agent::resume::AutoContinueConfig,
+    /// `[secrets]`: how pasted credentials are handled (see `secrets`).
+    #[serde(default, skip_serializing_if = "SecretsConfig::is_default")]
+    pub secrets: SecretsConfig,
     /// Compaction remote summarization (OMP `compaction.remoteEndpoint` shape).
     /// Default off - local model summarization unchanged.
     #[serde(default)]
@@ -443,6 +453,27 @@ pub fn ecosystem_omp_enabled() -> bool {
         .ok()
         .and_then(|v| v.get("ecosystem_omp")?.as_bool())
         .unwrap_or(false)
+}
+
+/// `[secrets]` - credentials kept out of the conversation (`crate::secrets`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SecretsConfig {
+    /// A credential typed or pasted into the prompt opens the secret modal
+    /// instead of being sent.
+    #[serde(default = "default_true")]
+    pub catch_pasted: bool,
+}
+
+impl Default for SecretsConfig {
+    fn default() -> Self {
+        Self { catch_pasted: true }
+    }
+}
+
+impl SecretsConfig {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// `[instructions]` - the standing-instruction chain (`agent::instructions`).
@@ -924,6 +955,15 @@ pub struct ToolsConfig {
     /// `true` passes them through, for scripts that call a provider themselves.
     #[serde(default)]
     pub pass_provider_keys: bool,
+    /// `cargo` (default) | `blaze` | `auto`: run plain `cargo build|check|test|run`
+    /// through blaze, the incremental Rust compiler. `auto` routes only where
+    /// blaze ships (Linux x86-64/aarch64, macOS arm64) and it is installed;
+    /// a refusal falls back to cargo (`tools::rust_builder`).
+    #[serde(default = "default_rust_builder")]
+    pub rust_builder: String,
+}
+fn default_rust_builder() -> String {
+    "cargo".into()
 }
 fn default_tool_profile() -> String {
     "lean".into()
@@ -934,6 +974,7 @@ impl Default for ToolsConfig {
             profile: default_tool_profile(),
             sgrep_first: true,
             pass_provider_keys: false,
+            rust_builder: default_rust_builder(),
         }
     }
 }
@@ -1250,6 +1291,8 @@ impl Default for Config {
             route_pinned: false,
             prewalk: PrewalkConfig::default(),
             instructions: InstructionsConfig::default(),
+            auto_continue: Default::default(),
+            secrets: SecretsConfig::default(),
             compaction: CompactionConfig::default(),
             proposal_mode: false,
             quality_gate: String::new(),

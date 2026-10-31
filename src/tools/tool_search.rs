@@ -52,6 +52,7 @@ pub const LEAN_ALWAYS_ON: &[&str] = &[
     "skill",
     "memory",
     "question",
+    "secret",
     "todo_write",
     "submit_plan",
     "agent",

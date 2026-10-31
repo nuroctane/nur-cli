@@ -1,0 +1,44 @@
+{
+  "description": "With [tools] rust_builder = \"blaze\", a plain `cargo build` runs on blaze and the result reminds the agent that blaze's borrow checker is partial, so `cargo check` runs before the work is called done.",
+  "prompt": "Build the project.",
+  "env": {
+    "NUR_BLAZE_BIN": "python {workspace}/fake_blaze.py"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[tools]\nrust_builder = \"blaze\"\n"
+  },
+  "setup_files": {
+    "fake_blaze.py": "import sys\nprint('fake-blaze ' + ' '.join(sys.argv[1:]) + ' ok')\n"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "cargo build"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Built."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": [
+      "Built."
+    ],
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": [
+          "fake-blaze build ok",
+          "run `cargo check` once"
+        ]
+      }
+    ]
+  }
+}

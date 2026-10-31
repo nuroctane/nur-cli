@@ -7,6 +7,7 @@ pub mod failover;
 pub mod fusion;
 pub mod gemini;
 pub mod key_pool;
+pub mod limits;
 pub mod local;
 pub mod models;
 pub mod perplexity;

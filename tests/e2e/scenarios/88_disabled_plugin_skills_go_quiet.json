@@ -1,0 +1,30 @@
+{
+  "description": "Disabling a plugin takes its skills out of ~/.nur/skills too, including a copy mirrored before provenance stamps existed, while the user's own skill of another name stays readable.",
+  "prompt": "Read the demo and mine skills.",
+  "setup_home_files": {
+    "plugins/registry.json": "{\"plugins\": {\"demo\": {\"id\": \"demo\", \"source\": \"\", \"enabled\": true, \"installed_at\": \"\", \"path\": \"{home}/plugins/demo\"}}}\n",
+    "plugins/demo/skills/demo-skill/SKILL.md": "---\nname: demo-skill\ndescription: demo plugin skill for the end-to-end harness\n---\n\nDEMO-PLUGIN-BODY-MARKER\n",
+    "skills/demo-skill/SKILL.md": "---\nname: demo-skill\ndescription: demo plugin skill for the end-to-end harness\n---\n\nDEMO-PLUGIN-BODY-MARKER\n",
+    "skills/my-own-skill/SKILL.md": "---\nname: my-own-skill\ndescription: the user's own skill\n---\n\nUSER-OWN-SKILL-MARKER\n"
+  },
+  "setup_commands": [
+    ["plugins", "disable", "demo"]
+  ],
+  "script": [
+    {
+      "tool_calls": [
+        { "name": "skill", "arguments": { "action": "read", "name": "demo-skill" } },
+        { "name": "skill", "arguments": { "action": "read", "name": "my-own-skill" } }
+      ]
+    },
+    { "text": "Done." }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": ["Done."],
+    "request_contains": [
+      { "request": 2, "contains": ["USER-OWN-SKILL-MARKER"], "lacks": ["DEMO-PLUGIN-BODY-MARKER"] }
+    ]
+  }
+}

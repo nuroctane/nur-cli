@@ -1,13 +1,39 @@
 {
-  "description": "A provider that keeps failing makes the run exit with the provider exit code (4) and the provider's message on stderr, so a script can tell an outage from a bad key (3) or a bug (1).",
+  "description": "With auto-continue off, a provider that keeps failing makes the run exit with the provider exit code (4) and the provider's message on stderr, so a script can tell an outage from a bad key (3) or a bug (1). (With it on, the default, an outage is retried on a schedule: see 100.)",
   "prompt": "Say hello.",
   "script": [
-    {"status": 500, "error": "scripted upstream outage"},
-    {"status": 500, "error": "scripted upstream outage"},
-    {"status": 500, "error": "scripted upstream outage"},
-    {"status": 500, "error": "scripted upstream outage"},
-    {"status": 500, "error": "scripted upstream outage"},
-    {"status": 500, "error": "scripted upstream outage"}
+    {
+      "status": 500,
+      "error": "scripted upstream outage"
+    },
+    {
+      "status": 500,
+      "error": "scripted upstream outage"
+    },
+    {
+      "status": 500,
+      "error": "scripted upstream outage"
+    },
+    {
+      "status": 500,
+      "error": "scripted upstream outage"
+    },
+    {
+      "status": 500,
+      "error": "scripted upstream outage"
+    },
+    {
+      "status": 500,
+      "error": "scripted upstream outage"
+    }
   ],
-  "expect": {"exit_code": 4, "stderr_contains": ["scripted upstream outage"]}
+  "expect": {
+    "exit_code": 4,
+    "stderr_contains": [
+      "scripted upstream outage"
+    ]
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[auto_continue]\nenabled = false\n"
+  }
 }

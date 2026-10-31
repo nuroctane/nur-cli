@@ -36,6 +36,8 @@ mod pricing;
 mod process_tree;
 mod providers;
 mod sgrep;
+mod secrets;
+mod skills_market;
 mod startup;
 mod t3code;
 mod terminal_browser;
@@ -223,6 +225,40 @@ async fn real_main() -> Result<()> {
             run_permissions_cli(action.as_ref(), &cwd)?;
             return Ok(());
         }
+        Some(Commands::Secrets { action }) => {
+            match action.as_ref().unwrap_or(&cli::SecretsCmd::List) {
+                cli::SecretsCmd::List => {
+                    let names = secrets::names();
+                    if names.is_empty() {
+                        theme::print_info("no secrets saved (nur secrets set NAME)");
+                    }
+                    for (name, added) in names {
+                        println!("${name}  {}", added.get(..10).unwrap_or(&added));
+                    }
+                }
+                cli::SecretsCmd::Set { name } => {
+                    use std::io::IsTerminal;
+                    let name = secrets::normalize_name(name);
+                    let value = if std::io::stdin().is_terminal() {
+                        rpassword::prompt_password(format!("value for ${name} (hidden): "))?
+                    } else {
+                        let mut line = String::new();
+                        std::io::stdin().read_line(&mut line)?;
+                        line
+                    };
+                    secrets::set(&name, &value).map_err(error::NurError::Config)?;
+                    theme::print_ok(&format!("saved ${name} · set in every shell command"));
+                }
+                cli::SecretsCmd::Remove { name } => {
+                    let name = secrets::normalize_name(name);
+                    if !secrets::remove(&name).map_err(error::NurError::Config)? {
+                        return Err(error::NurError::Config(format!("no secret named ${name}")));
+                    }
+                    theme::print_ok(&format!("removed ${name}"));
+                }
+            }
+            return Ok(());
+        }
         Some(Commands::Skills { action }) => {
             let requested = cli
                 .cwd
@@ -246,6 +282,57 @@ async fn real_main() -> Result<()> {
                         agent::skill_cache::invalidate_cache();
                     } else {
                         theme::print_info("this project's skills were not trusted");
+                    }
+                }
+                // The market's HTTP client is blocking; inside this async main
+                // it must run on the blocking pool (dropping it here panics).
+                cli::SkillsCmd::Search { query, json } => {
+                    let index = tokio::task::spawn_blocking(skills_market::load_index)
+                        .await
+                        .map_err(|e| error::NurError::Other(e.to_string()))??;
+                    let hits = skills_market::search(&index, &query.join(" "), 30);
+                    if *json {
+                        println!("{}", serde_json::to_string_pretty(&hits)?);
+                    } else if hits.is_empty() {
+                        theme::print_info("no market skills match");
+                    } else {
+                        for hit in hits {
+                            println!("{}", skills_market::describe(hit, true));
+                        }
+                        if let Some(note) = &index.unsigned {
+                            theme::print_info(note);
+                        }
+                    }
+                }
+                cli::SkillsCmd::Add { id, as_name, replace } => {
+                    let (id, as_name, replace) = (id.clone(), as_name.clone(), *replace);
+                    let msg = tokio::task::spawn_blocking(move || {
+                        skills_market::install(&id, as_name.as_deref(), replace)
+                    })
+                    .await
+                    .map_err(|e| error::NurError::Other(e.to_string()))??;
+                    theme::print_ok(&msg);
+                    agent::skill_cache::warm_global();
+                }
+                cli::SkillsCmd::Remove { name } => {
+                    theme::print_ok(&skills_market::remove(name)?);
+                }
+                cli::SkillsCmd::Verify => {
+                    let (report, changed) = skills_market::verify();
+                    println!("{report}");
+                    if changed {
+                        return Err(error::NurError::Other(
+                            "a market skill changed since it was installed".into(),
+                        ));
+                    }
+                }
+                cli::SkillsCmd::Scan { dir } => {
+                    let (report, blocked) = skills_market::scan_report(dir)?;
+                    print!("{report}");
+                    if blocked {
+                        return Err(error::NurError::Other(
+                            "the scan blocks this skill".into(),
+                        ));
                     }
                 }
             }
@@ -827,6 +914,7 @@ async fn real_main() -> Result<()> {
         | Some(Commands::Usage)
         | Some(Commands::Permissions { .. })
         | Some(Commands::Skills { .. })
+        | Some(Commands::Secrets { .. })
         | Some(Commands::Sessions { .. })
         | Some(Commands::InstallHook)
         | Some(Commands::Install)
@@ -905,7 +993,12 @@ fn run_plugins_cli(action: Option<&cli::PluginsCmd>) -> Result<()> {
             theme::print_info("plugin marketplace");
             println!("{}", plugins::quick_status());
             for r in plugins::marketplace_rows() {
-                println!("  {:<16}  {:<14}  {}", r.id, r.status_badge(), r.name);
+                let at = if r.commit.is_empty() {
+                    String::new()
+                } else {
+                    format!("  @ {}", r.commit)
+                };
+                println!("  {:<16}  {:<14}  {}{at}", r.id, r.status_badge(), r.name);
             }
             println!("\n  nur plugins install <id>");
             println!("  /plugins  in the TUI for the full picker");
@@ -1535,6 +1628,8 @@ async fn run_headless(
         let _ = layers_tx.send(layers);
     });
     agent::prompt::prefetch_slow_sources(&cwd, &cfg);
+    let auto_continue = cfg.auto_continue.clone();
+    let mut resume_attempts = 0u32;
     let runner = Arc::new(AgentRunner {
         client,
         config: cfg,
@@ -1553,7 +1648,7 @@ async fn run_headless(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let cancel = tokio_util::sync::CancellationToken::new();
     agent::spawn_turn(
-        runner,
+        runner.clone(),
         session,
         usage,
         prompt.to_string(),
@@ -1586,7 +1681,7 @@ async fn run_headless(
             AgentEvent::ToolStart { name, args, .. } => out.tool_start(&name, &args),
             AgentEvent::ToolEnd {
                 name, result, ok, ..
-            } => out.tool_end(&name, ok, &result),
+            } => out.tool_end(&name, ok, &secrets::redact(&result)),
             AgentEvent::ApprovalRequest {
                 name,
                 args,
@@ -1682,12 +1777,50 @@ async fn run_headless(
                 ));
             }
             AgentEvent::PlanSubmitted(text) => out.status(&format!("plan\n{text}")),
+            // No masked prompt here: the request is answered "no user" when
+            // `respond` drops, and the user is told how to save it.
+            AgentEvent::SecretRequest { name, .. } => out.notice(&format!(
+                "the agent asked for ${name} - save it with `nur secrets set {name}`, then run again"
+            )),
             AgentEvent::Done {
+                session,
                 usage,
                 result,
                 exit_code,
                 ..
             } => {
+                // A limit or an outage: wait it out in place and continue the
+                // same session (`agent::resume`), unless Ctrl+C.
+                if let Err(error) = &result {
+                    resume_attempts += 1;
+                    let now = agent::resume::now_secs();
+                    if let Some(plan) =
+                        agent::resume::plan(error, resume_attempts, &auto_continue, now)
+                    {
+                        out.notice(&format!(
+                            "{} · Ctrl+C stops",
+                            agent::resume::describe(&plan, now)
+                        ));
+                        let wait = std::time::Duration::from_secs(plan.at.saturating_sub(now));
+                        let stopped = tokio::select! {
+                            _ = tokio::time::sleep(wait) => false,
+                            _ = tokio::signal::ctrl_c() => true,
+                        };
+                        if !stopped {
+                            let (next_tx, next_rx) = tokio::sync::mpsc::unbounded_channel();
+                            rx = next_rx;
+                            agent::spawn_turn(
+                                runner.clone(),
+                                *session,
+                                *usage,
+                                agent::resume::CONTINUE_PROMPT.to_string(),
+                                next_tx,
+                                cancel.clone(),
+                            );
+                            continue;
+                        }
+                    }
+                }
                 final_usage = Some(usage);
                 final_result = result;
                 final_code = exit_code;
@@ -1757,6 +1890,8 @@ async fn run_continuous(
     layers::announce(&cfg, |layers| eprintln!("{}", layers::status_line(&layers)));
     let quality_gate = cfg.quality_gate.clone();
     let ts_cfg = cfg.typesafe.clone();
+    let auto_continue = cfg.auto_continue.clone();
+    let mut resume_attempts = 0u32;
 
     let runner = Arc::new(AgentRunner {
         client,
@@ -1870,6 +2005,7 @@ async fn run_continuous(
                 AgentEvent::ToolEnd {
                     name, result, ok, ..
                 } => {
+                    let result = secrets::redact(&result);
                     if verbose {
                         let tag = if ok { "done" } else { "failed" };
                         theme::print_info(&format!(
@@ -1933,6 +2069,7 @@ async fn run_continuous(
         match result {
             Ok(text) => {
                 errors_in_a_row = 0;
+                resume_attempts = 0;
                 if interrupted {
                     theme::print_info("continuous · interrupted");
                     final_code = exit::CANCELLED;
@@ -2060,6 +2197,24 @@ async fn run_continuous(
                 }
             }
             Err(e) => {
+                // A usage limit or an outage is waited out (`agent::resume`):
+                // the step runs again once it lifts and is not counted as an
+                // error or against max steps.
+                resume_attempts += 1;
+                let now = agent::resume::now_secs();
+                if let Some(plan) = agent::resume::plan(&e, resume_attempts, &auto_continue, now) {
+                    theme::print_info(&format!(
+                        "continuous · {} · Ctrl+C stops",
+                        agent::resume::describe(&plan, now)
+                    ));
+                    let wait = std::time::Duration::from_secs(plan.at.saturating_sub(now));
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => {}
+                        _ = cancel.cancelled() => {}
+                    }
+                    iter -= 1;
+                    continue;
+                }
                 errors_in_a_row += 1;
                 theme::print_info(&format!("continuous · step error: {e}"));
                 if errors_in_a_row >= 3 {

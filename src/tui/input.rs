@@ -976,9 +976,10 @@ impl InputState {
     pub fn submit(&mut self) -> String {
         let text = self.text_expanded();
         self.clear();
-        let trimmed = text.trim();
-        if !trimmed.is_empty() && self.history.last().map(|h| h.as_str()) != Some(trimmed) {
-            self.history.push(trimmed.to_string());
+        // History is written to disk: a credential in the message never is.
+        let recorded = crate::secrets::scrub(text.trim());
+        if !recorded.is_empty() && self.history.last() != Some(&recorded) {
+            self.history.push(recorded);
             self.persist_history();
         }
         text

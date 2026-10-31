@@ -46,6 +46,8 @@ pub struct Advisor {
     pub model: String,
     pub provider: String,
     pub every_round: bool,
+    /// The project's `## Code Review Rules` section (AGENTS.md chain), if any.
+    review_rules: Option<String>,
 }
 
 const INSTRUCTIONS: &str = "You advise a coding agent. You see the user's request and the \
@@ -56,6 +58,18 @@ the agent, at most three sentences. If the work is on track, reply with exactly 
 
 /// How much of the turn the advisor reads, newest first.
 const TRACE_BUDGET: usize = 12_000;
+
+/// Longest project review-rules section the advisor carries.
+const REVIEW_RULES_BUDGET: usize = 4_000;
+
+/// The `## Code Review Rules` section of an instruction file, heading
+/// included, up to the next `## ` heading.
+fn review_rules_section(text: &str) -> Option<String> {
+    let start = text.find("## Code Review Rules")?;
+    let rest = &text[start..];
+    let end = rest[3..].find("\n## ").map(|i| i + 4).unwrap_or(rest.len());
+    Some(rest[..end].trim().to_string())
+}
 
 impl Advisor {
     /// The advisor for a session, `None` when none is configured. An error
@@ -73,6 +87,7 @@ impl Advisor {
                 model: model.to_string(),
                 provider: cfg.provider.clone(),
                 every_round: settings.every_round,
+                review_rules: None,
             }));
         }
         let provider = crate::providers::by_id(wanted)
@@ -94,7 +109,59 @@ impl Advisor {
             model: model.to_string(),
             provider: target.provider_id,
             every_round: settings.every_round,
+            review_rules: None,
         }))
+    }
+
+    /// Carry the project's own review rules: the `## Code Review Rules`
+    /// sections of the AGENTS.md chain for `cwd`, capped.
+    pub fn with_review_rules(mut self, cwd: &std::path::Path, max_chars: usize) -> Self {
+        let loaded = super::instructions::load(cwd, max_chars);
+        let rules: Vec<String> = loaded
+            .project
+            .iter()
+            // The whole file, spilled part included: review rules often sit
+            // at the end of a long AGENTS.md.
+            .filter_map(|section| {
+                let full = section.overflow.as_ref().map(|o| o.full.as_str());
+                review_rules_section(full.unwrap_or(&section.text))
+            })
+            .collect();
+        if !rules.is_empty() {
+            self.review_rules = Some(clip(&rules.join("\n\n"), REVIEW_RULES_BUDGET));
+        }
+        self
+    }
+
+    /// The advisor's instruction: the fixed brief, the project's review rules,
+    /// and the code-shape indicators when the turn changed code.
+    fn instructions(&self, items: &[Value]) -> String {
+        let mut text = INSTRUCTIONS.to_string();
+        if let Some(rules) = &self.review_rules {
+            text.push_str("\n\nThe project's review rules (hold the work to them):\n");
+            text.push_str(rules);
+        }
+        // This turn only: from the user's latest message (advisor notes join
+        // the conversation as user items too, so they do not count).
+        let turn_start = items
+            .iter()
+            .rposition(|item| {
+                item.get("role").and_then(Value::as_str) == Some("user")
+                    && !item_text(item).starts_with("[nur advisor")
+            })
+            .unwrap_or(0);
+        let edited = items[turn_start..].iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call")
+                && item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| crate::tools::EDIT_TOOLS.contains(&name))
+        });
+        if edited {
+            text.push_str("\n\nThe agent changed code this turn; check it against:");
+            text.push_str(super::prompt::CODE_SHAPE);
+        }
+        text
     }
 
     /// The review request: the request, the turn's trace, and the answer when
@@ -117,7 +184,7 @@ impl Advisor {
         ResponseRequest {
             model: self.model.clone(),
             input: json!([user_text_item(&body)]),
-            instructions: Some(INSTRUCTIONS.to_string()),
+            instructions: Some(self.instructions(items)),
             tools: None,
             tool_choice: None,
             store: Some(false),
@@ -170,17 +237,7 @@ fn trace(items: &[Value], budget: usize) -> String {
             ),
             _ => {
                 let role = item.get("role").and_then(Value::as_str).unwrap_or("");
-                let text = item
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .map(|parts| {
-                        parts
-                            .iter()
-                            .filter_map(|part| part.get("text").and_then(Value::as_str))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .unwrap_or_default();
+                let text = item_text(item);
                 if text.trim().is_empty() || !matches!(role, "user" | "assistant") {
                     continue;
                 }
@@ -195,6 +252,20 @@ fn trace(items: &[Value], budget: usize) -> String {
     }
     lines.reverse();
     lines.join("\n")
+}
+
+/// A message item's text parts, joined.
+fn item_text(item: &Value) -> String {
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
 }
 
 fn clip(text: &str, max: usize) -> String {

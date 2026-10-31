@@ -52,6 +52,7 @@ const DENIED: &[&str] = &[
     "codemode",
     "agent",
     "question",
+    "secret",
     "submit_plan",
     "message",
     "admission",

@@ -481,6 +481,13 @@
       ]
     },
     {
+      "name": "codebase-slop",
+      "source": "skills/codebase-slop",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
       "name": "web-access-treg",
       "source": "skills/web-access-treg",
       "files": [

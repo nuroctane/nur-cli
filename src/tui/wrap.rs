@@ -3,7 +3,8 @@
 //! Wrapping repeats each logical line's **continuation gutter**, so a wrapped
 //! paragraph stays under its own text instead of collapsing to column 0:
 //! leading whitespace is repeated verbatim, and a leading marker glyph
-//! (`•`, `◦`, `▪`, `▏`, `│`, `└`, `✓`, `☐`, `▎`) is replaced by spaces of the
+//! (`•`, `◦`, `▪`, `▏`, `│`, `└`, `✓`, `☐`, `▎`, and the resume card's `⏸` `↻`)
+//! is replaced by spaces of the
 //! same width. Without this, every wrapped prose row, list item, quote, and
 //! tool-output line snapped back to the left edge and the body read as a wall.
 
@@ -17,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 /// Block markers that open a line. Bars are a continuous rule, so they REPEAT
 /// on wrapped rows; item markers are one-shot, so they blank out instead.
 const GUTTER_BARS: &[char] = &['▏', '│', '└', '▎', '▍', '▌'];
-const GUTTER_ITEM_MARKERS: &[char] = &['•', '◦', '▪', '✓', '☐'];
+const GUTTER_ITEM_MARKERS: &[char] = &['•', '◦', '▪', '✓', '☐', '⏸', '↻'];
 
 /// Wrap styled lines to `width` columns, preserving span styles.
 /// Prefers breaking at spaces; falls back to hard breaks for long tokens.

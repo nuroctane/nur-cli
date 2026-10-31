@@ -82,6 +82,14 @@ pub enum AgentEvent {
     },
     /// Plan written via submit_plan.
     PlanSubmitted(String),
+    /// The model asked for a credential (`secret` action request). The TUI
+    /// shows the masked secret modal and answers with the saved name, or
+    /// `None` when the user declines; a dropped sender means no user.
+    SecretRequest {
+        name: String,
+        purpose: String,
+        respond: oneshot::Sender<Option<String>>,
+    },
     ApprovalRequest {
         name: String,
         args: String,
@@ -906,7 +914,8 @@ impl AgentRunner {
             None
         } else {
             match super::advisor::Advisor::for_session(&self.config, &self.client) {
-                Ok(advisor) => advisor,
+                Ok(advisor) => advisor
+                    .map(|a| a.with_review_rules(&self.cwd, self.config.instructions.max_chars)),
                 Err(error) => {
                     let _ = tx.send(AgentEvent::Status(format!(
                         "advisor off this turn · {error}"
@@ -2183,7 +2192,14 @@ impl AgentRunner {
             // dispatch: asking permission to ask is absurd, and it must never
             // ride the parallel batch (it is not parallel-safe, so it lands
             // here) or the Jev pre-gate (it is a meta tool).
-            if call.name == "question" {
+            // `secret` requests are the same: the user answers in a masked modal.
+            let secret_request = call.name == "secret"
+                && serde_json::from_str::<serde_json::Value>(&call.arguments)
+                    .ok()
+                    .and_then(|v| v.get("action").and_then(|a| a.as_str()).map(String::from))
+                    .as_deref()
+                    == Some("request");
+            if call.name == "question" || secret_request {
                 *tool_seq += 1;
                 let id = *tool_seq;
                 let _ = tx.send(AgentEvent::ToolStart {
@@ -2191,7 +2207,11 @@ impl AgentRunner {
                     name: call.name.clone(),
                     args: call.arguments.clone(),
                 });
-                let (body, ok) = self.run_question_call(call, session, tx, cancel).await?;
+                let (body, ok) = if secret_request {
+                    self.run_secret_request(call, tx, cancel).await?
+                } else {
+                    self.run_question_call(call, session, tx, cancel).await?
+                };
                 let _ = tx.send(AgentEvent::ToolEnd {
                     id,
                     name: call.name.clone(),
@@ -3354,6 +3374,44 @@ impl AgentRunner {
         ))
     }
 
+    /// A `secret` request: the TUI shows its masked modal and answers with the
+    /// saved name, never the value. Subagents and runs with no interactive
+    /// user (the sender is dropped) get the `nur secrets set` instruction.
+    async fn run_secret_request(
+        &self,
+        call: &FunctionCallRef,
+        tx: &mpsc::UnboundedSender<AgentEvent>,
+        cancel: &CancellationToken,
+    ) -> Result<(String, bool)> {
+        use crate::tools::secret_tool;
+        let args: serde_json::Value =
+            serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null);
+        let (name, purpose) = match secret_tool::parse_request(&args) {
+            Ok(parsed) => parsed,
+            Err(e) => return Ok((e.to_string(), false)),
+        };
+        if self.is_subagent {
+            return Ok((
+                format!("subagents cannot prompt the user; {}", secret_tool::NO_USER),
+                false,
+            ));
+        }
+        let (otx, orx) = oneshot::channel();
+        let _ = tx.send(AgentEvent::SecretRequest {
+            name,
+            purpose,
+            respond: otx,
+        });
+        let answer = tokio::select! {
+            _ = cancel.cancelled() => return Err(NurError::Interrupted),
+            r = orx => r,
+        };
+        Ok(match answer {
+            Ok(saved) => (secret_tool::answer(saved.as_deref()), true),
+            Err(_) => (secret_tool::NO_USER.to_string(), false),
+        })
+    }
+
     /// Does this question need the user? `Some(false)` only on a confident
     /// Jev "resolvable without interrupting" - `None` (no layer) and
     /// `Some(true)` both show the modal, since interrupting is the safe
@@ -3473,6 +3531,12 @@ impl AgentRunner {
                     return true;
                 }
             }
+        }
+
+        // Accepting security findings as noise is the user's call, never the
+        // agent's: `secscan baseline` asks in every mode, allow rules included.
+        if name == "secscan" && crate::tools::secscan::always_asks(args) {
+            return self.prompt_approval(name, args, tx, cancel).await;
         }
 
         // 3) Allow rule skips approval (manual) / short-circuits auto.
@@ -3630,6 +3694,11 @@ fn plan_gate_classify(name: &str, args: &str, read_only: bool) -> (PlanGate, Opt
     }
     if name == "terminal_browser" && crate::tools::terminal_browser::is_plan_safe_action(args) {
         return (PlanGate::Allow, None);
+    }
+    // Scanners only read the tree (their reports land in .nur/scratch), so a
+    // security review in plan mode asks; `baseline` writes and stays denied.
+    if name == "secscan" && !crate::tools::secscan::always_asks(args) {
+        return (PlanGate::Ask, None);
     }
     if name == "bash" {
         let cmd = serde_json::from_str::<Value>(args)
@@ -8258,7 +8327,7 @@ const MAX_SKILL_NUDGES: u8 = 2;
 /// and a todo update is not work. Skipping them saves Jev questions without
 /// touching the cases that matter (repeated reads, retried commands, long
 /// result bodies). Deduplication still applies to real tools.
-const TYPESAFE_META_TOOLS: &[&str] = &["typesafe", "skill", "todo_write", "question"];
+const TYPESAFE_META_TOOLS: &[&str] = &["typesafe", "skill", "todo_write", "question", "secret"];
 
 /// Should the gate/verdict judgment cover this tool?
 /// First sentence of a tool description, bounded, for a judge's option list.

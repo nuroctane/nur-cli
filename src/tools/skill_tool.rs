@@ -15,17 +15,19 @@ impl Tool for SkillTool {
 
     fn description(&self) -> &str {
         "Agent skills (SKILL.md packs). Skills are on-demand only (not pre-loaded). \
-         action=list shows installed skills; action=read loads a named skill's full \
-         instructions. Prefer when NL/slash did not already activate a skill."
+         action=list shows installed skills; action=search finds installed ones and those \
+         available in the skills market (only the user installs: suggest `nur skills add \
+         <id>`); action=read loads a named skill's full instructions. Prefer when NL/slash \
+         did not already activate a skill."
     }
 
     fn parameters_schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["list", "read"], "default": "list"},
+                "action": {"type": "string", "enum": ["list", "search", "read"], "default": "list"},
                 "name": {"type": "string", "description": "Skill name (for action=read)"},
-                "query": {"type": "string", "description": "Substring filter over name/description (for action=list), e.g. \"audit\" or \"fuzz\""}
+                "query": {"type": "string", "description": "Words to match: a filter for action=list, the search for action=search, e.g. \"audit\" or \"postgres\""}
             }
         })
     }
@@ -79,6 +81,54 @@ impl Tool for SkillTool {
                 }
                 Ok(out)
             }
+            // Installed skills plus the market index. The model can find a
+            // skill to suggest but never install one: new instructions in the
+            // next session must be the user's own action.
+            "search" => {
+                let query = arg_str(args, "query").unwrap_or_default();
+                let q = query.trim().to_ascii_lowercase();
+                if q.is_empty() {
+                    return Err(NurError::Tool("skill search needs `query`".into()));
+                }
+                let installed: Vec<&crate::agent::skills::Skill> = skills
+                    .iter()
+                    .filter(|s| {
+                        q.split_whitespace().all(|w| {
+                            s.name.to_ascii_lowercase().contains(w)
+                                || s.description.to_ascii_lowercase().contains(w)
+                        })
+                    })
+                    .take(15)
+                    .collect();
+                let mut out = format!("Installed ({}):\n", installed.len());
+                for sk in &installed {
+                    out.push_str(&format!("- **{}**: {}\n", sk.name, sk.description));
+                }
+                match crate::skills_market::load_index() {
+                    Ok(index) => {
+                        let available: Vec<String> = crate::skills_market::search(&index, &q, 15)
+                            .into_iter()
+                            .filter(|e| {
+                                !skills.iter().any(|s| s.name.eq_ignore_ascii_case(&e.name))
+                            })
+                            .map(|e| crate::skills_market::describe(e, false))
+                            .collect();
+                        out.push_str(&format!(
+                            "\nAvailable in the market ({}); only the user installs these, \
+                             with `/skills add <id>` - suggest one, never run it yourself:\n",
+                            available.len()
+                        ));
+                        if let Some(note) = &index.unsigned {
+                            out.push_str(&format!("({note})\n"));
+                        }
+                        for line in available {
+                            out.push_str(&format!("- {line}\n"));
+                        }
+                    }
+                    Err(e) => out.push_str(&format!("\nMarket index unavailable: {e}\n")),
+                }
+                Ok(out)
+            }
             "read" => {
                 let name = arg_str(args, "name")?;
                 let skill = skills
@@ -92,7 +142,7 @@ impl Tool for SkillTool {
                 read_skill_body(skill)
             }
             other => Err(NurError::Tool(format!(
-                "unknown action '{other}' — use list or read"
+                "unknown action '{other}' - use list, search or read"
             ))),
         }
     }
@@ -113,8 +163,15 @@ fn read_skill_body(skill: &crate::agent::skills::Skill) -> Result<String> {
         .map(|t| crate::agent::skills::strip_frontmatter(&t).unwrap_or(t))
         .unwrap_or_else(|_| skill.body.clone());
     let body: String = body.chars().take(80_000).collect();
+    // A market-installed skill is third-party text: say whose, at what commit.
+    let source = skill
+        .path
+        .parent()
+        .and_then(crate::skills_market::provenance_line)
+        .map(|line| format!("{line}\n"))
+        .unwrap_or_default();
     Ok(format!(
-        "# Skill: {} ({})\n\n{}",
+        "# Skill: {} ({})\n{source}\n{}",
         skill.name,
         skill.path.display(),
         body

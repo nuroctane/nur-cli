@@ -185,7 +185,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | **TUI** | Streaming · duration chips · thought/tool cards · **every transcript piece in a theme-coloured frame** · peek · drag-select · scrollbar · sessions · multi-provider `/login` · **`/model` picker** · **`/plugins` marketplace** · `/goal` `/bro` `/adhd` `/scan` `/btw` `/codesearch` `/mc` `/feedback` `/tips` · **every skill as `/name`** · **41 themes including 18 chromatic studies + transparency mode** · **the window title is the moon alone (phases while a turn runs)** · **every path in the transcript is a link that opens** · **block-structured markdown** with theme-role colours · **tables fit the window**, in answers and in tool output · **LaTeX rendering** (image-peek build) · **`/receipt` verifies the hash chain** and exports spans · budgets · doctor |
 | **Agent** | Manual / plan / auto · tools · subagents · todos · auto-compact · session $ / token budgets · Esc cancel · Shift+Tab mid-turn · **NL skill auto-activation** |
 | **Vision** | `look` · `extract_frames` · prompt auto-attach · **compact image attachments with on-demand previews** (Ctrl+V paste or `/image <path>`, F4 preview) |
-| **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **security agents** (`enclave`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message` `question`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |
+| **Tools** | read · edit · bash · web · **browser** (incl. **element picking**) · git · knowledge · agent · **judgments** (`typesafe`) · **security agents** (`enclave`) · **memory** (`optmem` `connectome` `mem`) · **diagrams** (`excalidraw` `tldraw` `penecho`) · **policy** (`dogwood`) · **background** (`bg`) · **async** (`admission` `goal` `proposal` `message` `question`) · **secrets** (`secret`) · **docs** (`anydoc`) · **python REPL** (`repl`) · **excalidraw** |
 | **Ecosystem** | Graphify · GraphJin · PLUR · Ruflo · Executor · **TypeSafe/Jev** (+ **keyless local engines**) · **Enclave** (security agents over native MCP) · **OptMem** · **Headroom** · **Connectome** · **dogwood** · omp · browser · AKM · 1,000+ skills · **`/sc-research` whitehat DeFi + X bounty intel + historical vuln library** · **plugin marketplace** (Fable, Superpowers, Vercel, …) |
 | **Hardening** | Approval modes · parsed bash denylist · per-domain fetch approval · SSRF blocks · atomic `~/.nur` IO · permissions/hooks · signed releases (minisign + SHA-256) · `nur doctor` |
 
@@ -247,10 +247,11 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | browser | real default browser via agent-browser-cli |
 | terminal_browser | in-terminal Chromium ([terminal-browser.com](https://terminal-browser.com/)); Windows host fallback |
 | git | `git_status` `git_diff` |
+| quality | `slop_scan` (structural slop candidates: god files, duplicated blocks, change coupling, pass-through wrappers) |
 | knowledge | `graphify` `graphjin` `plur` `ruflo` `executor` `skill` `memory` |
 | diagrams | `excalidraw` (hand-drawn `.excalidraw` via excalidraw-cli) · `tldraw` (offline desktop boards) · `penecho` (20k canvas: ink, MathJax, plots) |
 | judgments | `typesafe` (System One typed decisions: gate a call, judge a result, rank, route) |
-| security | `enclave` ([Enclave](https://enclave.ai) security agents over native MCP: pentests, code security review, findings) |
+| security | `enclave` ([Enclave](https://enclave.ai) security agents over native MCP: pentests, code security review, findings) · `secscan` (gitleaks, osv-scanner and semgrep when installed; secret values never shown) |
 | memory | `optmem` (permanent, `~/.optmem`) · `connectome` (hierarchical + chronicle) · `mem` (vector/graph router) · `memory` · `plur` `ruflo` |
 | policy | `dogwood` (Cedar + temporal policy over an agent event stream) |
 | context | `context` (RLM store: register/peek/slice/search) · `anydoc` (PDF/DOCX/XLSX → markdown) |

@@ -188,6 +188,77 @@ impl App {
                         }
                         Err(e) => self.push_error(format!("skills trust failed: {e}")),
                     }
+                } else if arg.trim() == "find" || arg.trim().starts_with("find ") {
+                    let query = arg.trim()["find".len()..].trim().to_string();
+                    if query.is_empty() {
+                        self.push_error("usage: /skills find <words>".into());
+                        return;
+                    }
+                    self.push_info(format!("searching the skills market for `{query}`..."));
+                    self.background_ui(
+                        move || {
+                            let index = crate::skills_market::load_index()?;
+                            let mut hits: Vec<String> =
+                                crate::skills_market::search(&index, &query, 30)
+                                    .into_iter()
+                                    .map(|e| crate::skills_market::describe(e, false))
+                                    .collect();
+                            if let (Some(note), false) = (&index.unsigned, hits.is_empty()) {
+                                hits.push(format!("({note})"));
+                            }
+                            Ok::<_, crate::error::NurError>(hits)
+                        },
+                        |app, result| match result {
+                            Ok(hits) if hits.is_empty() => {
+                                app.push_info("no market skills match".into())
+                            }
+                            Ok(hits) => app.push_note(
+                                Tone::Skill,
+                                format!("skills market\n  {}", hits.join("\n  ")),
+                            ),
+                            Err(error) => app.push_error(error.to_string()),
+                        },
+                    );
+                } else if arg.trim() == "add" || arg.trim().starts_with("add ") {
+                    // /skills add <id> [--as <name>] [--replace]
+                    let words: Vec<String> =
+                        arg.split_whitespace().skip(1).map(String::from).collect();
+                    let replace = words.iter().any(|w| w == "--replace");
+                    let alias = words
+                        .iter()
+                        .position(|w| w == "--as")
+                        .and_then(|i| words.get(i + 1).cloned());
+                    let id = words.first().filter(|w| !w.starts_with("--")).cloned();
+                    let Some(id) = id else {
+                        self.push_error("usage: /skills add <id> [--as <name>] [--replace]".into());
+                        return;
+                    };
+                    self.push_info(format!("installing {id}..."));
+                    self.background_ui(
+                        move || crate::skills_market::install(&id, alias.as_deref(), replace),
+                        |app, result| match result {
+                            Ok(msg) => {
+                                app.refresh_skill_palette_cache();
+                                app.push_info(msg)
+                            }
+                            Err(error) => app.push_error(error.to_string()),
+                        },
+                    );
+                } else if arg.trim() == "remove" || arg.trim().starts_with("remove ") {
+                    let name = arg.trim()["remove".len()..].trim();
+                    if name.is_empty() {
+                        self.push_error("usage: /skills remove <name>".into());
+                        return;
+                    }
+                    match crate::skills_market::remove(name) {
+                        Ok(msg) => {
+                            self.refresh_skill_palette_cache();
+                            self.push_info(msg)
+                        }
+                        Err(error) => self.push_error(error.to_string()),
+                    }
+                } else if arg.trim() == "verify" {
+                    self.push_note(Tone::Skill, crate::skills_market::verify().0);
                 } else {
                     self.startup.list_skills = true;
                     agent::skill_cache::invalidate_cache();
@@ -287,6 +358,8 @@ impl App {
             "/auth" => self.open_auth_manager(),
             "/logout" => self.cmd_logout(),
             "/goal" => self.cmd_goal(&arg),
+            "/secrets" | "/secret" => self.cmd_secrets(&arg),
+            "/autocontinue" => self.cmd_autocontinue(&arg),
             "/graph" => self.cmd_graph(),
             "/sidegraph" => self.cmd_sidegraph(&arg),
             "/swarm" | "/subagents" | "/agents" => self.cmd_swarm(&arg),
@@ -2489,8 +2562,13 @@ impl App {
                 let rows = crate::plugins::marketplace_rows();
                 let mut lines = String::from("catalog:\n");
                 for r in rows {
+                    let at = if r.commit.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  @ {}", r.commit)
+                    };
                     lines.push_str(&format!(
-                        "  {:<16}  {}  {}\n",
+                        "  {:<16}  {}  {}{at}\n",
                         r.id,
                         r.status_badge(),
                         r.name
@@ -2513,30 +2591,44 @@ impl App {
                     self.push_error("usage: /plugins enable <id>".into());
                     return;
                 }
-                match crate::plugins::set_enabled(&id, true) {
-                    Ok(()) => self.push_info(format!("enabled {id}")),
-                    Err(e) => self.push_error(e),
-                }
+                // Enabling copies skills and reads git: off the event thread.
+                self.background_ui(
+                    move || {
+                        crate::plugins::set_enabled(&id, true).map(|()| format!("enabled {id}"))
+                    },
+                    |app, result| match result {
+                        Ok(msg) => app.push_info(msg),
+                        Err(e) => app.push_error(e),
+                    },
+                );
             }
             "disable" => {
                 if id.is_empty() {
                     self.push_error("usage: /plugins disable <id>".into());
                     return;
                 }
-                match crate::plugins::set_enabled(&id, false) {
-                    Ok(()) => self.push_info(format!("disabled {id}")),
-                    Err(e) => self.push_error(e),
-                }
+                self.background_ui(
+                    move || {
+                        crate::plugins::set_enabled(&id, false).map(|()| format!("disabled {id}"))
+                    },
+                    |app, result| match result {
+                        Ok(msg) => app.push_info(msg),
+                        Err(e) => app.push_error(e),
+                    },
+                );
             }
             "uninstall" | "remove" => {
                 if id.is_empty() {
                     self.push_error("usage: /plugins uninstall <id>".into());
                     return;
                 }
-                match crate::plugins::uninstall_plugin(&id) {
-                    Ok(msg) => self.push_info(msg),
-                    Err(e) => self.push_error(e),
-                }
+                self.background_ui(
+                    move || crate::plugins::uninstall_plugin(&id),
+                    |app, result| match result {
+                        Ok(msg) => app.push_info(msg),
+                        Err(e) => app.push_error(e),
+                    },
+                );
             }
             other => {
                 // Treat bare id as install/open hint.

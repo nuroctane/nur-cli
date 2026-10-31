@@ -1,0 +1,56 @@
+{
+  "description": "A billing or quota-exhausted error is never auto-continued: waiting cannot fix it, so the run ends on the error instead of retrying on a schedule.",
+  "prompt": "Finish the migration.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[auto_continue]\ndelay_secs = 0\n"
+  },
+  "script": [
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "You exceeded your current quota, please check your plan and billing details.",
+          "type": "insufficient_quota"
+        }
+      }
+    },
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "You exceeded your current quota, please check your plan and billing details.",
+          "type": "insufficient_quota"
+        }
+      }
+    },
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "You exceeded your current quota, please check your plan and billing details.",
+          "type": "insufficient_quota"
+        }
+      }
+    },
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "You exceeded your current quota, please check your plan and billing details.",
+          "type": "insufficient_quota"
+        }
+      }
+    }
+  ],
+  "expect": {
+    "exit_code": 4,
+    "stdout_lacks": [
+      "continuing at",
+      "trying again at"
+    ],
+    "requests_lack": [
+      "Continue from where you left off"
+    ],
+    "requests": 4
+  }
+}

@@ -373,6 +373,9 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
     for needle in expect.get("requests_lack", []):
         if needle in sent:
             failures.append(f"a model request contains {needle!r}")
+    for needle in expect.get("requests_contain", []):
+        if needle not in sent:
+            failures.append(f"no model request contains {needle!r}")
     for n, request in enumerate(requests, 1):
         for field in expect.get("absent_request_fields", []):
             value = request
@@ -526,9 +529,21 @@ def run_scenario(binary, scenario_path):
             with (workspace / rel).open("w", encoding="utf-8", newline="") as fh:
                 fh.write(text)
         script = expand_workspace_paths(scenario["script"], workspace) if scenario.get("workspace_paths") else scenario["script"]
+        # `serve_files`: files the fake provider serves under /raw/ (a stand-in
+        # for raw.githubusercontent.com and other plain file hosts).
+        for rel, text in scenario.get("serve_files", {}).items():
+            served = tmp / "raw" / rel
+            served.parent.mkdir(parents=True, exist_ok=True)
+            with served.open("w", encoding="utf-8", newline="") as fh:
+                fh.write(text)
         provider, port, log = start_provider(script, tmp, scenario.get("mcp"))
         env = isolated_env(tmp / "home", port)
-        env.update({k: v.replace("{port}", str(port)) for k, v in scenario.get("env", {}).items()})
+        env.update({
+            k: v.replace("{port}", str(port))
+            .replace("{home}", Path(env["NUR_HOME"]).as_posix())
+            .replace("{workspace}", workspace.as_posix())
+            for k, v in scenario.get("env", {}).items()
+        })
         if scenario.get("provider"):
             provider_id = scenario["provider"]
             env["OPENAI_API_KEY"] = "e2e-isolated-key"
@@ -554,10 +569,18 @@ def run_scenario(binary, scenario_path):
         setup_failures = []
         for command in scenario.get("setup_commands", []):
             # CLI steps a user runs first, e.g. `nur auth login --provider ...`.
-            done = subprocess.run([str(binary), *command], env=env, cwd=workspace, stdin=subprocess.DEVNULL,
+            # An object form asserts an expected failure:
+            # {"args": [...], "exit_code": 1, "stderr_contains": ["..."]}.
+            spec = command if isinstance(command, dict) else {"args": command, "exit_code": 0}
+            args = spec["args"]
+            done = subprocess.run([str(binary), *args], env=env, cwd=workspace, stdin=subprocess.DEVNULL,
                                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
-            if done.returncode != 0:
-                setup_failures.append(f"setup `nur {' '.join(command)}` exited {done.returncode}: {done.stderr.strip()[:300]}")
+            want = spec.get("exit_code", 0)
+            if (done.returncode != 0) != (want != 0):
+                setup_failures.append(f"setup `nur {' '.join(args)}` exited {done.returncode}, expected {want}: {done.stderr.strip()[:300]}")
+            for needle in spec.get("stderr_contains", []):
+                if needle not in done.stderr + done.stdout:
+                    setup_failures.append(f"setup `nur {' '.join(args)}` output lacks {needle!r}")
         try:
             # `global_args` go before the subcommand (`-v`), `run_args` after
             # it (`--output-format json`).

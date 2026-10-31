@@ -1541,6 +1541,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
             };
 
             let status = res.status();
+            crate::api::limits::observe(status.as_u16(), res.headers());
             let headers = res.headers().clone();
             let body = res.text().await.unwrap_or_default();
 
@@ -1757,6 +1758,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
             };
 
             let status = res.status();
+            crate::api::limits::observe(status.as_u16(), res.headers());
             let content_type = res
                 .headers()
                 .get("content-type")
@@ -2143,6 +2145,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                 }
             };
             let status = res.status();
+            crate::api::limits::observe(status.as_u16(), res.headers());
             let text = res.text().await.unwrap_or_default();
             if !status.is_success() {
                 if status.as_u16() == 401 && !oauth_refreshed && self.refresh_after_unauthorized() {
@@ -2315,6 +2318,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
             };
 
             let status = res.status();
+            crate::api::limits::observe(status.as_u16(), res.headers());
             let content_type = res
                 .headers()
                 .get("content-type")
@@ -2553,6 +2557,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                 Err(e) => return Err(NurError::transport("request failed", &e)),
             };
             let status = res.status();
+            crate::api::limits::observe(status.as_u16(), res.headers());
             let text = res.text().await.unwrap_or_default();
             if !status.is_success() {
                 if status.as_u16() == 401 && !oauth_refreshed && self.refresh_after_unauthorized() {
@@ -2656,6 +2661,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
             };
 
             let status = res.status();
+            crate::api::limits::observe(status.as_u16(), res.headers());
             let code = status.as_u16();
             if !status.is_success() {
                 let retryable = (Self::is_retryable_status(code) || code == 529)
@@ -2899,6 +2905,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                 }
             };
             let status = response.status();
+            crate::api::limits::observe(status.as_u16(), response.headers());
             let text = response.text().await.unwrap_or_default();
             if !status.is_success() {
                 let message = parse_error_message(&text).unwrap_or(text);
@@ -2997,6 +3004,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                 }
             };
             let status = response.status();
+            crate::api::limits::observe(status.as_u16(), response.headers());
             if !status.is_success() {
                 let text = response.text().await.unwrap_or_default();
                 let message = parse_error_message(&text).unwrap_or(text);
@@ -3096,6 +3104,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
                 Err(e) => return Err(NurError::transport("request failed", &e)),
             };
             let status = res.status();
+            crate::api::limits::observe(status.as_u16(), res.headers());
             let text = res.text().await.unwrap_or_default();
             if !status.is_success() {
                 if status.as_u16() == 401 && !oauth_refreshed && self.refresh_after_unauthorized() {
@@ -3193,6 +3202,7 @@ OpenCode Go takes an API key, not the OpenCode Console sign-in                  
             };
 
             let status = res.status();
+            crate::api::limits::observe(status.as_u16(), res.headers());
             if !status.is_success() {
                 if status.as_u16() == 401 && !oauth_refreshed && self.refresh_after_unauthorized() {
                     oauth_refreshed = true;
@@ -3574,7 +3584,18 @@ fn parse_response_body(body: &str, status: u16) -> Result<ApiResponse> {
     Ok(parsed)
 }
 
+/// The provider's error message, with when its limit lifts when the body
+/// says (`resets_in_seconds`, `resets_at`, `RetryInfo`), so the reset reaches
+/// whoever reads the error (see `api::limits`).
 fn parse_error_message(body: &str) -> Option<String> {
+    let message = parse_error_text(body)?;
+    Some(match crate::api::limits::body_note(body) {
+        Some(note) if !message.contains("resets in") => format!("{message}{note}"),
+        _ => message,
+    })
+}
+
+fn parse_error_text(body: &str) -> Option<String> {
     // JSON error shapes first.
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
         if let Some(msg) = v
