@@ -506,12 +506,6 @@ fn call_tool(name: &str, args_json: &str) -> std::result::Result<String, String>
         .map_err(|e| format!("{name}: {e}"))
 }
 
-/// One entry of a `tools.parallel` batch, parsed on the calling thread.
-struct BatchCall {
-    name: String,
-    args_json: String,
-}
-
 /// Run a batch of read-only calls concurrently and return their results in
 /// batch order as a JSON string: `[{ok}|{error}, ...]`.
 ///

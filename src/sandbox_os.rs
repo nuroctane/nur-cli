@@ -64,21 +64,16 @@ impl Wrapped {
         }
     }
 
+    #[cfg(test)]
     pub fn is_wrapped(&self) -> bool {
         !self.argv.is_empty()
     }
 }
 
 /// Which shell command to run the user's command with, per host backend.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn shell_words() -> Vec<String> {
-    #[cfg(windows)]
-    {
-        vec!["cmd.exe".into(), "/C".into()]
-    }
-    #[cfg(not(windows))]
-    {
-        vec!["/bin/sh".into(), "-c".into()]
-    }
+    vec!["/bin/sh".into(), "-c".into()]
 }
 
 /// Wrap `command` for `mode` in `cwd`. `enabled` is `[sandbox] enabled`.
