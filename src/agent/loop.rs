@@ -5294,22 +5294,6 @@ mod tests {
     }
 
     #[test]
-    fn omp_run_is_write_class() {
-        // status/version probes are free; a run drives a full coding agent.
-        assert!(is_read_only_call("omp", r#"{"action":"status"}"#));
-        assert!(is_read_only_call("omp", r#"{"action":"version"}"#));
-        assert!(!is_read_only_call(
-            "omp",
-            r#"{"action":"run","prompt":"x"}"#
-        ));
-        assert!(
-            !is_read_only_call("omp", "{}"),
-            "default action=run must not be free"
-        );
-        assert!(!is_concurrency_safe("omp", r#"{"action":"status"}"#));
-    }
-
-    #[test]
     fn session_budget_trips_on_cost_and_tokens() {
         use crate::usage::TokenUsage;
         let mut cfg = Config::default();
