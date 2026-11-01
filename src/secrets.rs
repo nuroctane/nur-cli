@@ -110,7 +110,7 @@ pub fn names() -> Vec<(String, String)> {
 }
 
 pub fn exists(name: &str) -> bool {
-    load().secrets.contains_key(name)
+    current().iter().any(|(saved, _)| saved == name)
 }
 
 /// Save (or replace) a secret.
@@ -209,23 +209,59 @@ pub fn redact(text: &str) -> Cow<'_, str> {
     if pairs.is_empty() {
         return Cow::Borrowed(text);
     }
-    let mut out = Cow::Borrowed(text);
+    // Results can pass through more than one redaction boundary. Names in
+    // markers are public metadata, and must survive a second pass unchanged.
+    let markers: Vec<_> = pairs
+        .iter()
+        .flat_map(|(name, _)| {
+            let marker = format!("[secret:{name}]");
+            text.match_indices(&marker)
+                .map(|(start, found)| (start, start + found.len()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut matches = Vec::new();
     for (name, value) in pairs.iter() {
         if value.chars().count() < MIN_VALUE_CHARS {
             continue;
         }
-        let marker = format!("[secret:{name}]");
         let json = serde_json::to_string(value)
             .map(|q| q[1..q.len() - 1].to_string())
             .unwrap_or_default();
         let url: String = url_encode(value);
         for form in [value.as_str(), json.as_str(), url.as_str()] {
-            if !form.is_empty() && out.contains(form) {
-                out = Cow::Owned(out.replace(form, &marker));
+            if !form.is_empty() {
+                matches.extend(text.match_indices(form).filter_map(|(start, value)| {
+                    let end = start + value.len();
+                    (!markers.iter().any(|&(lo, hi)| start >= lo && end <= hi)).then_some((
+                        start,
+                        end,
+                        name.as_str(),
+                    ))
+                }));
             }
         }
     }
-    out
+    if matches.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    // Resolve overlaps against the original text, longest at each position.
+    // Never run a replacement over a marker produced by an earlier secret.
+    matches
+        .sort_unstable_by_key(|&(start, end, name)| (start, std::cmp::Reverse(end - start), name));
+    let mut out = String::with_capacity(text.len());
+    let mut consumed = 0;
+    for (start, end, name) in matches {
+        if start < consumed {
+            consumed = consumed.max(end);
+            continue;
+        }
+        out.push_str(&text[consumed..start]);
+        out.push_str(&format!("[secret:{name}]"));
+        consumed = end;
+    }
+    out.push_str(&text[consumed..]);
+    Cow::Owned(out)
 }
 
 fn url_encode(value: &str) -> String {
@@ -305,5 +341,18 @@ mod tests {
             "use [credential] to push"
         );
         assert_eq!(scrub("push with $GITHUB_TOKEN"), "push with $GITHUB_TOKEN");
+    }
+
+    // A short secret can be a prefix of another secret, or of its marker.
+    // Rewriting in name order leaks the suffix or corrupts the marker.
+    #[test]
+    fn overlapping_values_are_redacted_in_one_pass() {
+        let dir = use_test_store();
+        set("A_SHORT", "secret").unwrap();
+        set("Z_LONG", "secret-long-credential").unwrap();
+        let out = redact("secret-long-credential secret");
+        assert_eq!(out, "[secret:Z_LONG] [secret:A_SHORT]");
+        assert_eq!(redact(&out), out);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

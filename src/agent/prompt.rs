@@ -503,6 +503,8 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
                  git_status/git_diff for repository state. Prefer dedicated edit tools over \
                  shell rewrites. Never run interactive/watch commands. Keep paths inside the \
                  workspace. Read tool errors before changing approach.\n\n\
+                 When a task needs 3+ read-only calls in a row, codemode can batch them into \
+                 one round (read-only calls only; `tools.parallel` fans a batch out concurrently).\n\n\
                  Delegation tools are intentionally unavailable in child runs. Do not \
                  substitute another backend when a tool or provider fails. Return a clear \
                  failure with any useful partial findings so the parent can retry or recover.\n\n\

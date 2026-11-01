@@ -7,7 +7,11 @@ use std::path::Path;
 /// Write edited contents through the shared commit path (proposal staging,
 /// atomic write, read ledger). Empty string means "written".
 fn commit_edit(ctx: &ToolContext, path_arg: &str, full: &Path, updated: String) -> Result<String> {
-    Ok(super::commit_file_write(ctx, path_arg, full, &updated, "edit_file")?.unwrap_or_default())
+    let commit = super::commit_file_write(ctx, path_arg, full, &updated, "edit_file")?;
+    Ok(match commit.staged {
+        Some(staged) => staged,
+        None => super::with_lsp_note(String::new(), &commit),
+    })
 }
 
 /// The trimmed fallback matched `old.trim()`, so the whitespace that was
@@ -175,7 +179,47 @@ impl Tool for EditFile {
                     full.display()
                 ));
             }
+
         }
+        // Fallback 3: tolerant matching - Unicode folds (smart quotes, dashes,
+        // NBSP), per-line trailing-whitespace trim, then indent-flexible. The
+        // replacement text is spliced into the original bytes at the matched
+        // span, so line endings and surrounding text are preserved verbatim.
+        match super::fuzzy_edit::find_unique(&file_content, &old) {
+            Err(_) => {
+                return Err(NurError::Tool(format!(
+                    "old_string matched more than once in the file under tolerant matching; \
+                     make it unique (include more surrounding lines)"
+                )));
+            }
+            Ok(Some((hit, tier))) => {
+                let matched = &file_content[hit.start..hit.end];
+                let replacement = if tier == super::fuzzy_edit::FuzzyTier::Indent {
+                    // The file's indentation wins: shift the replacement onto
+                    // the matched span's indent.
+                    let delta = super::fuzzy_edit::indent_delta_for(&old, matched);
+                    super::fuzzy_edit::apply_indent_delta(&new.replace("\r\n", "\n"), delta)
+                } else {
+                    new.to_string()
+                };
+                let mut updated = String::with_capacity(file_content.len() + replacement.len());
+                updated.push_str(&file_content[..hit.start]);
+                updated.push_str(&replacement);
+                updated.push_str(&file_content[hit.end..]);
+                let staged = commit_edit(ctx, &path, &full, updated)?;
+                if !staged.is_empty() {
+                    return Ok(staged);
+                }
+                return Ok(format!(
+                    "edited {} (1 replacement - FUZZY: matched via {} matching; your old_string \
+                     needed whitespace or quote cleanup. Copy exact text next time)",
+                    full.display(),
+                    tier.label()
+                ));
+            }
+            Ok(None) => {}
+        }
+
 
         // Still not found — build a helpful diagnostic. Previous message
         // "old_string not found in file" left the model blind and the transcript

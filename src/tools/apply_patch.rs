@@ -46,16 +46,19 @@ impl Tool for ApplyPatch {
         };
 
         let updated = apply_unified_diff(&original, &patch)?;
-        if let Some(staged) = super::commit_file_write(ctx, &path, &full, &updated, "apply_patch")?
-        {
+        let commit = super::commit_file_write(ctx, &path, &full, &updated, "apply_patch")?;
+        if let Some(staged) = commit.staged {
             return Ok(staged);
         }
 
-        Ok(format!(
-            "patched {} ({} -> {} bytes)",
-            display_rel(&ctx.cwd, &full),
-            original.len(),
-            updated.len()
+        Ok(super::with_lsp_note(
+            format!(
+                "patched {} ({} -> {} bytes)",
+                display_rel(&ctx.cwd, &full),
+                original.len(),
+                updated.len()
+            ),
+            &commit,
         ))
     }
 }
@@ -73,6 +76,11 @@ fn display_rel(cwd: &Path, full: &Path) -> String {
 /// file had one. Hunk positions are interpreted against the *original*
 /// numbering, as in a real diff, so a cumulative offset tracks how earlier
 /// hunks grew or shrank the file.
+///
+/// Model-friendly fallbacks: a bare `@@` header (no positions - a common
+/// model output) applies the hunk at its unique context match; context lines
+/// that disagree only in trailing whitespace or Unicode punctuation still
+/// match. Ambiguous context always refuses.
 fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
     let mut lines: Vec<String> = if original.is_empty() {
         Vec::new()
@@ -110,7 +118,20 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
     while i < patch_lines.len() {
         let line = patch_lines[i];
         if line.starts_with("@@") {
-            let (old_start, old_count, new_count) = parse_hunk_header(line)?;
+            // A bare `@@` header (no positions) is a common model output. The
+            // hunk then has no anchor: read lines to the next header and let
+            // the unique-context search place it.
+            let bare = {
+                let inner = line.trim_start_matches('@').trim();
+                inner.is_empty() || (!inner.contains('-') && !inner.contains('+'))
+            };
+            let (old_start, old_count, new_count) = if bare {
+                // Counts that never satisfy `hunk_done`, so the whole body
+                // is read as one hunk.
+                (0usize, usize::MAX, usize::MAX)
+            } else {
+                parse_hunk_header(line)?
+            };
             i += 1;
             let mut old_lines_in_hunk: Vec<&str> = Vec::new();
             let mut new_lines_in_hunk: Vec<String> = Vec::new();
@@ -185,12 +206,24 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
             let delta = new_lines_in_hunk.len() as isize - old_lines_in_hunk.len() as isize;
 
             // Verify old lines match (fuzzy: allow if file empty and old is empty)
-            if !old_lines_in_hunk.is_empty() {
+            if bare {
+                // No position to trust: locate by the hunk's old lines, which
+                // must match uniquely (fuzzy on trailing whitespace / Unicode).
+                let found = find_slice_unique_fuzzy(&lines, &old_lines_in_hunk, old_start)?;
+                apply_at(
+                    &mut lines,
+                    &mut endings,
+                    eol,
+                    found,
+                    old_lines_in_hunk.len(),
+                    &new_lines_in_hunk,
+                );
+            } else if !old_lines_in_hunk.is_empty() {
                 if start + old_lines_in_hunk.len() > lines.len()
                     && !(lines.is_empty() && old_start <= 1)
                 {
                     // Fall back to a search — but only accept a UNIQUE match.
-                    let found = find_slice_unique(&lines, &old_lines_in_hunk, old_start)?;
+                    let found = find_slice_unique_fuzzy(&lines, &old_lines_in_hunk, old_start)?;
                     apply_at(
                         &mut lines,
                         &mut endings,
@@ -207,7 +240,7 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
                     // lines: both branches above decline, and indexing here would
                     // panic. Treat it as a mismatch and let the unique search
                     // report a clean error.
-                    let found = find_slice_unique(&lines, &old_lines_in_hunk, old_start)?;
+                    let found = find_slice_unique_fuzzy(&lines, &old_lines_in_hunk, old_start)?;
                     apply_at(
                         &mut lines,
                         &mut endings,
@@ -218,12 +251,9 @@ fn apply_unified_diff(original: &str, patch: &str) -> Result<String> {
                     );
                 } else {
                     let slice = &lines[start..start + old_lines_in_hunk.len()];
-                    let matches = slice
-                        .iter()
-                        .zip(old_lines_in_hunk.iter())
-                        .all(|(a, b)| a.as_str() == *b);
+                    let matches = lines_match_slice(slice, &old_lines_in_hunk);
                     if !matches {
-                        let found = find_slice_unique(&lines, &old_lines_in_hunk, old_start)?;
+                        let found = find_slice_unique_fuzzy(&lines, &old_lines_in_hunk, old_start)?;
                         apply_at(
                             &mut lines,
                             &mut endings,
@@ -319,25 +349,48 @@ fn parse_hunk_header(line: &str) -> Result<(usize, usize, usize)> {
     Ok((start, count, new_count))
 }
 
-/// Search for the hunk's old lines; refuse ambiguous (multi-site) matches so a
-/// fuzzy relocation can never edit the wrong copy of repeated code.
-fn find_slice_unique(lines: &[String], needle: &[&str], hunk_line: usize) -> Result<usize> {
+/// Line-key for fuzzy context matching: Unicode-folded, trailing whitespace
+/// stripped. Leading whitespace is significant here (an indent-fuzzed patch
+/// context would be dangerously loose for real diffs).
+fn context_key(line: &str) -> String {
+    super::fuzzy_edit::folded(line).trim_end().to_string()
+}
+
+/// `lines[start..start+needle.len()]` equals `needle` under `context_key`.
+fn lines_match_slice(slice: &[String], needle: &[&str]) -> bool {
+    slice.len() == needle.len()
+        && slice
+            .iter()
+            .zip(needle.iter())
+            .all(|(a, b)| a.as_str() == *b || context_key(a) == context_key(b))
+}
+
+/// Tolerant unique-context search: trailing whitespace and Unicode
+/// punctuation folds do not hide a unique context match, while a genuinely
+/// changed or ambiguous context still refuses.
+fn find_slice_unique_fuzzy(lines: &[String], needle: &[&str], hunk_line: usize) -> Result<usize> {
     if needle.is_empty() {
         return Ok(0);
     }
+    let needle_keys: Vec<String> = needle.iter().map(|l| context_key(l)).collect();
     let hits: Vec<usize> = lines
         .windows(needle.len())
         .enumerate()
-        .filter(|(_, w)| w.iter().zip(needle.iter()).all(|(a, b)| a.as_str() == *b))
+        .filter(|(_, w)| {
+            w.iter()
+                .zip(needle_keys.iter())
+                .all(|(a, k)| context_key(a) == *k)
+        })
         .map(|(i, _)| i)
         .collect();
     match hits.len() {
         1 => Ok(hits[0]),
         0 => Err(NurError::Tool(format!(
-            "hunk context mismatch at line {hunk_line} — file may have changed; re-read and retry"
+            "hunk context mismatch at line {hunk_line} (even allowing whitespace and \
+             quote differences) - file may have changed; re-read and retry"
         ))),
         n => Err(NurError::Tool(format!(
-            "hunk context at line {hunk_line} is ambiguous ({n} matches) — \
+            "hunk context at line {hunk_line} is ambiguous ({n} matches) - \
              include more surrounding context lines in the diff"
         ))),
     }
@@ -494,5 +547,55 @@ mod tests {
             apply_unified_diff("", "@@ -0,0 +1,2 @@\n+a\n+b\n").unwrap(),
             "a\nb\n"
         );
+    }
+
+    /// A bare `@@` header (no positions) is a common model output: the hunk
+    /// applies at its unique context match instead of erroring.
+    #[test]
+    fn bare_at_hunk_locates_by_unique_context() {
+        let original = "fn a() {}\n\nfn b() {}\n";
+        let patch = "@@\n-fn b() {}\n+fn b() -> u32 { 1 }\n";
+        assert_eq!(
+            apply_unified_diff(original, patch).unwrap(),
+            "fn a() {}\n\nfn b() -> u32 { 1 }\n"
+        );
+    }
+
+    /// A bare `@@` with ambiguous context refuses rather than guessing.
+    #[test]
+    fn bare_at_hunk_with_ambiguous_context_is_refused() {
+        let original = "x\ny\nx\ny\n";
+        let err = apply_unified_diff(original, "@@\n-x\n+X\n").unwrap_err();
+        assert!(err.to_string().contains("ambiguous"), "{err}");
+    }
+
+    /// Context whose only difference is trailing whitespace or Unicode
+    /// punctuation still matches at the named position.
+    #[test]
+    fn context_with_trailing_whitespace_drift_still_matches() {
+        let original = "fn a() {   \n    body\n}\n";
+        let patch = "@@ -2,1 +2,1 @@\n-    body\n+    BODY\n";
+        assert_eq!(
+            apply_unified_diff(original, patch).unwrap(),
+            "fn a() {   \n    BODY\n}\n"
+        );
+    }
+
+    #[test]
+    fn context_with_smart_quotes_still_matches() {
+        let original = "let s = \u{201C}hi\u{201D};\nnext\n";
+        let patch = "@@ -1,1 +1,1 @@\n-let s = \"hi\";\n+let s = \"bye\";\n";
+        assert_eq!(
+            apply_unified_diff(original, patch).unwrap(),
+            "let s = \"bye\";\nnext\n"
+        );
+    }
+
+    /// Genuinely changed context still refuses under the fuzzy comparison.
+    #[test]
+    fn changed_context_still_refuses() {
+        let original = "a\nb\nc\n";
+        let err = apply_unified_diff(original, "@@ -2,1 +2,1 @@\n-zzz\n+B\n").unwrap_err();
+        assert!(err.to_string().contains("context mismatch"), "{err}");
     }
 }

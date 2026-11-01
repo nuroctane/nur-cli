@@ -12,7 +12,8 @@ impl Tool for WebSearch {
     }
 
     fn description(&self) -> &str {
-        "Search the web (treg when TREG_TOKEN is set, else DuckDuckGo). Returns top results \
+        "Search the web (treg when TREG_TOKEN is set, Exa with EXA_API_KEY, Brave with \
+         BRAVE_API_KEY, else DuckDuckGo - no key needed). Returns top results \
          as title, url, snippet. Use for docs, error messages, APIs; follow up with web_fetch \
          on a result url."
     }
@@ -52,7 +53,31 @@ impl Tool for WebSearch {
             }
         }
 
+        // Exa (neural search, best for technical queries) when a key is set;
+        // any failure falls through rather than failing the call.
+        if let Some(key) = search_key("EXA_API_KEY") {
+            match search_exa(&key, &query, max) {
+                Ok(rows) if !rows.is_empty() => {
+                    return Ok(render_results(&query, "exa", &rows));
+                }
+                Ok(_) => {}
+                Err(e) => tracing::debug!("exa search: {e}"),
+            }
+        }
+
+        // Brave Search API when a key is set.
+        if let Some(key) = search_key("BRAVE_API_KEY") {
+            match search_brave(&key, &query, max) {
+                Ok(rows) if !rows.is_empty() => {
+                    return Ok(render_results(&query, "brave", &rows));
+                }
+                Ok(_) => {}
+                Err(e) => tracing::debug!("brave search: {e}"),
+            }
+        }
+
         let client = reqwest::blocking::Client::builder()
+
             .timeout(std::time::Duration::from_secs(20))
             .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
             .build()
@@ -99,6 +124,142 @@ struct SearchResult {
     title: String,
     url: String,
     snippet: String,
+}
+
+/// A saved search-provider key, from the environment (same shape as
+/// TREG_TOKEN). The secrets store has no raw getter by design - a credential
+/// never enters the conversation - so these keys ride the environment.
+fn search_key(env_name: &str) -> Option<String> {
+    std::env::var(env_name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Shared renderer for the API-backed providers.
+fn render_results(query: &str, via: &str, rows: &[SearchResult]) -> String {
+    if rows.is_empty() {
+        return format!("no results for: {query}");
+    }
+    let mut out = format!("results for: {query} (via {via})\n\n");
+    for (i, r) in rows.iter().enumerate() {
+        out.push_str(&format!("{}. {}\n   {}\n", i + 1, r.title, r.url));
+        if !r.snippet.is_empty() {
+            out.push_str(&format!("   {}\n", r.snippet));
+        }
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
+/// Exa neural search (`POST /search`), best for technical/natural-language
+/// queries. Key: EXA_API_KEY (https://exa.ai).
+fn search_exa(key: &str, query: &str, max: usize) -> std::result::Result<Vec<SearchResult>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({
+        "query": query,
+        "numResults": max,
+        "contents": { "text": { "maxCharacters": 300 } },
+    });
+    let resp = client
+        .post("https://api.exa.ai/search")
+        .header("x-api-key", key)
+        .json(&body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {status}"));
+    }
+    let v: Value = resp.json().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in v
+        .get("results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let title = row
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let url = row
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let snippet = row
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|s| clean_text(s))
+            .unwrap_or_default();
+        if url.is_empty() {
+            continue;
+        }
+        out.push(SearchResult { title, url, snippet });
+        if out.len() >= max {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Brave Search API (`GET /res/search`), 1 query/sec free tier.
+/// Key: BRAVE_API_KEY (https://brave.com/search/api).
+fn search_brave(key: &str, query: &str, max: usize) -> std::result::Result<Vec<SearchResult>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get("https://api.search.brave.com/res/v1/web/search")
+        .header("X-Subscription-Token", key)
+        .header("Accept", "application/json")
+        .query(&[("q", query), ("count", &max.to_string())])
+        .send()
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {status}"));
+    }
+    let v: Value = resp.json().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in v
+        .pointer("/web/results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let title = row
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let url = row
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let snippet = row
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if url.is_empty() {
+            continue;
+        }
+        out.push(SearchResult { title, url, snippet });
+        if out.len() >= max {
+            break;
+        }
+    }
+    Ok(out)
 }
 
 /// Parse DuckDuckGo html endpoint results (`result__a` links, `result__snippet`).

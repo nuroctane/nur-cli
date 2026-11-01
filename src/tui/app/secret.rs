@@ -37,6 +37,7 @@ pub struct SecretHit {
     pub close: ratatui::layout::Rect,
     pub name_row: ratatui::layout::Rect,
     pub value_row: ratatui::layout::Rect,
+    pub save: ratatui::layout::Rect,
 }
 
 pub struct SecretModal {
@@ -164,6 +165,7 @@ impl App {
         let Some(m) = &mut self.secret else { return };
         match key.code {
             KeyCode::Esc => self.close_secret(false),
+            KeyCode::Char('c') if ctrl => self.close_secret(false),
             KeyCode::Enter => {
                 if m.field == SecretField::Name && m.value.is_empty() {
                     m.field = SecretField::Value;
@@ -208,6 +210,8 @@ impl App {
         let hit = modal.hit.clone();
         if rect_contains(hit.close, m.column, m.row) || !rect_contains(hit.frame, m.column, m.row) {
             self.close_secret(false);
+        } else if rect_contains(hit.save, m.column, m.row) {
+            self.save_secret();
         } else if rect_contains(hit.name_row, m.column, m.row) {
             modal.field = SecretField::Name;
         } else if rect_contains(hit.value_row, m.column, m.row) {
@@ -219,6 +223,11 @@ impl App {
         let Some(m) = &mut self.secret else { return };
         let name = m.name.clone();
         if let Err(error) = crate::secrets::set(&name, &m.value) {
+            m.field = if crate::secrets::valid_name(&name) {
+                SecretField::Value
+            } else {
+                SecretField::Name
+            };
             m.error = Some(error);
             return;
         }
@@ -251,8 +260,9 @@ impl App {
             }
             SecretOrigin::Pasted { prompt, range, .. } => {
                 if saved {
-                    let mut sent = prompt.clone();
-                    sent.replace_range(range.clone(), &format!("${name}"));
+                    // One credential can occur more than once in a message.
+                    // Replace every occurrence before checking the next value.
+                    let sent = prompt.replace(&prompt[range.clone()], &format!("${name}"));
                     self.push_note(
                         Tone::Session,
                         format!("saved ${name} · your message carries the name, not the value"),

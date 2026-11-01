@@ -36,6 +36,7 @@ impl Tool for WriteFile {
                 .map_err(|e| NurError::Tool(format!("mkdir {}: {e}", parent.display())))?;
         }
         if let Some(staged) = super::commit_file_write(ctx, &path, &full, &contents, "write_file")?
+            .staged
         {
             return Ok(staged);
         }

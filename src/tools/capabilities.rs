@@ -55,6 +55,9 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "read_file" | "list_dir" | "sgrep" | "grep" | "glob" | "web_fetch" | "web_search"
         | "look" | "git_status" | "git_diff" | "skill" | "todo_write" | "submit_plan"
         | "tool_search" | "slop_scan" => true,
+        // Every `lsp` op reads: diagnostics/hover/definition/references/symbols
+        // query the server, `stop` only kills a server this session spawned.
+        "lsp" => true,
         // `status` only looks; `run` executes scanners, `baseline` writes.
         "secscan" => action_is(args, &["status"]),
         // A script is as read-only as the calls it makes, and its bridge admits

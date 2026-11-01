@@ -120,7 +120,24 @@ pub fn body_note(body: &str) -> Option<String> {
                 .find_map(|d| d.get("retryDelay").and_then(|r| r.as_str()))
                 .and_then(parse_go_duration)
         })?;
-    Some(format!(" (resets in {})", format_wait(secs)))
+    // This note is parsed back into the retry schedule. Display rounding
+    // here would retry early, especially for waits longer than a day.
+    let units = [
+        (secs / 86400, "d"),
+        (secs % 86400 / 3600, "h"),
+        (secs % 3600 / 60, "m"),
+        (secs % 60, "s"),
+    ];
+    let exact = units
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, unit)| format!("{n}{unit}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(format!(
+        " (resets in {})",
+        if exact.is_empty() { "0s" } else { &exact }
+    ))
 }
 
 /// `3h 25m`, `14m`, `40s`, `2d 3h`.
@@ -267,5 +284,15 @@ mod tests {
         );
         assert_eq!(body_note(r#"{"error":{"message":"bad request"}}"#), None);
         assert_eq!(format_wait(90_000), "1d 1h");
+    }
+
+    // Display rounding must not move the actual scheduled retry before reset.
+    #[test]
+    fn body_reset_preserves_seconds_across_day_boundaries() {
+        for seconds in [61, 3661, 86459, 89999] {
+            let body = format!(r#"{{"error":{{"resets_in_seconds":{seconds}}}}}"#);
+            let note = body_note(&body).unwrap();
+            assert_eq!(message_reset(&note, 1_000_000), Some(1_000_000 + seconds));
+        }
     }
 }

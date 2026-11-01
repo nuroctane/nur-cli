@@ -52,13 +52,17 @@ impl Tool for MultiEdit {
         let original = fs::read_to_string(&full)
             .map_err(|e| NurError::Tool(format!("read {}: {e}", full.display())))?;
         let (content, total) = apply_edits(&original, edits)?;
-        if let Some(staged) = super::commit_file_write(ctx, &path, &full, &content, "multi_edit")? {
+        let commit = super::commit_file_write(ctx, &path, &full, &content, "multi_edit")?;
+        if let Some(staged) = commit.staged {
             return Ok(staged);
         }
-        Ok(format!(
-            "multi_edit {} - {total} replacement(s) in {} edit(s)",
-            full.display(),
-            edits.len()
+        Ok(super::with_lsp_note(
+            format!(
+                "multi_edit {} - {total} replacement(s) in {} edit(s)",
+                full.display(),
+                edits.len()
+            ),
+            &commit,
         ))
     }
 }

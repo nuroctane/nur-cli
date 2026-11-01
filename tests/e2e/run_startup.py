@@ -73,14 +73,14 @@ class BuilderLease:
 
 
 class Terminal:
-    def __init__(self, binary, cwd, env, args=()):
+    def __init__(self, binary, cwd, env, args=(), columns=120, rows=32):
         self.output = ''
-        self.screen = pyte.Screen(120, 32)
+        self.screen = pyte.Screen(columns, rows)
         self.stream = pyte.Stream(self.screen)
         self.chunks = queue.Queue()
         if os.name == 'nt':
             from conpty import ConPtyProcess
-            self.proc = ConPtyProcess(binary, cwd, env, args=args)
+            self.proc = ConPtyProcess(binary, cwd, env, args=args, columns=columns, rows=rows)
             self.read = self.proc.read
             self.write = self.proc.write
         else:
@@ -89,7 +89,7 @@ class Terminal:
             import termios
             import struct
             master, slave = pty.openpty()
-            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 32, 120, 0, 0))
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
             self.fd = master
             # The slave must be the child's *controlling* terminal: crossterm
             # sizes the screen from /dev/tty before it looks at stdout, so a

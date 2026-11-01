@@ -1699,8 +1699,8 @@ fn draw_secret(f: &mut Frame, app: &mut App, area: Rect) {
     };
     draw_modal_frame(f, rect, phase, theme::INDIGO(), &title, None, footer);
     let inner = modal_inner(rect);
-    let label_w = 7usize;
-    let field_w = (inner.width as usize).saturating_sub(4 + label_w).max(8);
+    let label_w = 7usize.min(inner.width as usize / 3);
+    let field_w = (inner.width as usize).saturating_sub(4 + label_w).max(1);
     let cursor = theme::blink_on(app.spinner_epoch.elapsed());
     let field_style = |focused: bool| {
         if focused {
@@ -1726,25 +1726,52 @@ fn draw_secret(f: &mut Frame, app: &mut App, area: Rect) {
         ])
     };
     let dots = "•".repeat(m.value.chars().count().min(field_w.saturating_sub(1)));
-    let mut meta = format!("{} chars  ·  stored only in ~/.nur/secrets.json", m.value.chars().count());
+    let mut meta = format!(
+        "{} chars  ·  stored only in ~/.nur/secrets.json",
+        m.value.chars().count()
+    );
     if m.replaces() {
-        meta = format!("{} chars  ·  replaces the saved ${}", m.value.chars().count(), m.name);
+        meta = format!(
+            "{} chars  ·  replaces the saved ${}",
+            m.value.chars().count(),
+            m.name
+        );
     }
-    let mut lines: Vec<Line> = vec![
-        Line::from(Span::styled(
-            format!("  {}", truncate(&hint, inner.width.saturating_sub(4) as usize)),
+    // Keep both fields reachable when a terminal is short. Decorative rows
+    // yield space before fields or validation errors are allowed to clip.
+    let compact = inner.height < 7;
+    let name_row = if compact { 0 } else { 2 };
+    let value_row = if compact { 1 } else { 4 };
+    let mut lines: Vec<Line> = Vec::new();
+    if !compact {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                truncate(&hint, inner.width.saturating_sub(4) as usize)
+            ),
             theme::style_faint(),
-        )),
-        Line::default(),
-        field_line("name", m.name.clone(), m.field == SecretField::Name),
-        Line::default(),
-        field_line("value", dots, m.field == SecretField::Value),
-        Line::default(),
-        Line::from(Span::styled(
-            format!("  {}", truncate(&meta, inner.width.saturating_sub(4) as usize)),
+        )));
+        lines.push(Line::default());
+    }
+    lines.push(field_line(
+        "name",
+        m.name.clone(),
+        m.field == SecretField::Name,
+    ));
+    if !compact {
+        lines.push(Line::default());
+    }
+    lines.push(field_line("value", dots, m.field == SecretField::Value));
+    if !compact {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                truncate(&meta, inner.width.saturating_sub(4) as usize)
+            ),
             theme::style_faint(),
-        )),
-    ];
+        )));
+    }
     if let Some(e) = &m.error {
         lines.push(Line::default());
         lines.push(Line::from(vec![
@@ -1757,8 +1784,10 @@ fn draw_secret(f: &mut Frame, app: &mut App, area: Rect) {
         m.hit = super::app::SecretHit {
             frame: rect,
             close: Rect::new(rect.right().saturating_sub(5), rect.y, 3, 1),
-            name_row: row(2),
-            value_row: row(4),
+            name_row: row(name_row),
+            value_row: row(value_row),
+            // The footer's save label is an action, just like Enter.
+            save: Rect::new(rect.x + 5, rect.bottom().saturating_sub(1), 4, 1),
         };
     }
     f.render_widget(
@@ -7891,8 +7920,7 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
         } => {
             9u8.hash(&mut h);
             // The headline carries the countdown, so it is the key.
-            super::app::resume::resume_headline(plan, *armed, settled.as_deref())
-                .hash(&mut h);
+            super::app::resume::resume_headline(plan, *armed, settled.as_deref()).hash(&mut h);
             plan.reason.hash(&mut h);
         }
     }
@@ -9127,7 +9155,8 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
         use crate::agent::resume::{Plan, Stop};
         use ratatui::{backend::TestBackend, Terminal};
         let home = std::env::var_os("NUR_HOME").expect("preview requires an isolated NUR_HOME");
-        let dump = std::env::var_os("NUR_SECRET_DUMP").expect("set NUR_SECRET_DUMP to the dump dir");
+        let dump =
+            std::env::var_os("NUR_SECRET_DUMP").expect("set NUR_SECRET_DUMP to the dump dir");
         let cwd = std::path::PathBuf::from(home).join("secret-workspace");
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(&dump).unwrap();
@@ -9166,10 +9195,12 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
             at: now + wait,
             known_reset,
             attempt: 1,
-            reason: "API error (429): You've hit your usage limit. Try again in 2 hours 13 minutes."
-                .into(),
+            reason:
+                "API error (429): You've hit your usage limit. Try again in 2 hours 13 minutes."
+                    .into(),
         };
-        app.cells.push(Cell::User("keep going on the migration".into()));
+        app.cells
+            .push(Cell::User("keep going on the migration".into()));
         app.cells.push(Cell::Resume {
             plan: plan(Stop::Limit, 7980, true),
             armed: false,
@@ -9228,7 +9259,12 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
         for (width, height, origin, error) in [
             (100u16, 30u16, "pasted", None),
             (64, 20, "command", None),
-            (46, 16, "request", Some("a secret needs at least 6 characters")),
+            (
+                46,
+                16,
+                "request",
+                Some("a secret needs at least 6 characters"),
+            ),
         ] {
             let origin = match origin {
                 "pasted" => SecretOrigin::Pasted {
@@ -9256,12 +9292,19 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
                 &text,
             )
             .unwrap();
-            assert!(!text.contains("aB3dE5"), "the value is never drawn:\n{text}");
+            assert!(
+                !text.contains("aB3dE5"),
+                "the value is never drawn:\n{text}"
+            );
             let hit = app.secret.as_ref().unwrap().hit.clone();
             let at = |r: Rect| buffer[(r.x + 2, r.y)].symbol().to_string();
             assert_eq!(at(hit.name_row), "n", "{width}x{height}:\n{text}");
             assert_eq!(at(hit.value_row), "v", "{width}x{height}:\n{text}");
-            assert_eq!(buffer[(hit.close.x + 1, hit.close.y)].symbol(), "✕", "{text}");
+            assert_eq!(
+                buffer[(hit.close.x + 1, hit.close.y)].symbol(),
+                "✕",
+                "{text}"
+            );
             if let Some(error) = error {
                 assert!(text.contains(error), "{text}");
             }

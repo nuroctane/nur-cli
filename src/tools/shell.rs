@@ -369,6 +369,9 @@ pub struct ShellOptions {
     pub background: bool,
     /// Byte budget for stdout kept in the result; stderr gets half.
     pub max_output_bytes: usize,
+    /// Sandbox wrapper argv (see `crate::sandbox_os`), already ending in the
+    /// shell words + the user command. Empty means "run the backend directly".
+    pub sandbox: Vec<String>,
 }
 
 impl Default for ShellOptions {
@@ -378,6 +381,7 @@ impl Default for ShellOptions {
             handoff_on_timeout: false,
             background: false,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+            sandbox: Vec::new(),
         }
     }
 }
@@ -499,7 +503,15 @@ pub fn run_in_shell_with(
     };
     let handoff = opts.handoff_on_timeout || opts.background;
 
-    let mut cmd = Command::new(&backend.program);
+    let mut cmd = if !opts.sandbox.is_empty() {
+        // Sandboxed: the wrapper argv already ends in the shell words and the
+        // user's command, so it replaces the backend program entirely.
+        let mut cmd = Command::new(&opts.sandbox[0]);
+        cmd.args(&opts.sandbox[1..]);
+        cmd
+    } else {
+        Command::new(&backend.program)
+    };
     cmd.current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

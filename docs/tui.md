@@ -456,7 +456,8 @@ yourself settles the card. Billing, sign-in and bad-request errors never
 continue, since waiting cannot fix them, and eight resumes in a row hand back.
 
 A credential never goes out in a message. `/secrets add [NAME]` opens a masked
-modal (name, value; Tab switches, Ctrl+V pastes, Esc cancels). A live-looking
+modal (name, value; Tab switches, Ctrl+V pastes, Enter or clicking save saves,
+Esc or Ctrl+C cancels). Both fields remain visible in short terminals. A live-looking
 key typed or pasted into the prompt (OpenAI, Anthropic, GitHub, GitLab, Slack,
 AWS, Google, Stripe, Hugging Face, npm, xAI, OpenRouter) opens the same modal
 before anything is sent: saving it sends your message with `$NAME` in its place,

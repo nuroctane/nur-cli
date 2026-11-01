@@ -38,6 +38,13 @@ const MAX_PRINTED_CHARS: usize = 1_000_000;
 /// A script that calls hundreds of tools has stopped being a round-trip saving
 /// and become an unsupervised agent. The cap keeps it the former.
 const MAX_NESTED_CALLS: usize = 64;
+/// One `tools.parallel` batch. Read-only fan-outs (read a directory of files,
+/// grep several patterns) overlap on a small worker pool instead of paying
+/// serial latency; ordered results keep the batch deterministic.
+const MAX_PARALLEL_BATCH: usize = 16;
+/// Worker threads for a parallel batch. Read tools are cheap; more workers
+/// than this buys nothing and stresses the filesystem.
+const PARALLEL_WORKERS: usize = 8;
 const MAX_STORE_VALUE_CHARS: usize = 256 * 1024;
 const MAX_STORE_TOTAL_CHARS: usize = 1024 * 1024;
 /// Bounds a runaway `while (true)`. Boa has no wall-clock interrupt, so this
@@ -116,7 +123,9 @@ impl Tool for CodeMode {
          round instead of one each. Use it when you would otherwise make 3+ read-only calls in a \
          row and only care about part of the output: loop, fan out, filter, then print the answer. \
          Only what the script prints or returns reaches you. \
-         Globals: `tools.<name>(args)` (returns the tool's text result), `ALL_TOOLS`, \
+         Globals: `tools.<name>(args)` (returns the tool's text result), \
+         `tools.parallel([{tool, args}, ...])` (read-only batch on a worker pool, \
+         results in batch order), `ALL_TOOLS`, \
          `searchTools(q)`, `describeTool(name)`, `CWD`, `text(...)`/`console.log(...)`, \
          `store(k,v)`/`load(k)` (persist across scripts in this session), `exit(value)`. \
          Top-level `await` and `return` work. \
@@ -155,18 +164,24 @@ impl Tool for CodeMode {
         let cwd = ctx.cwd.clone();
         let cancel = ctx.cancel.clone();
         let session_id = ctx.session_id.clone();
+        // A child of the caller's token plus the script's own lifetime: the
+        // timeout path cancels it so an in-flight nested call stops at its
+        // next budget check instead of running to completion unheard.
+        let script_cancel = cancel.child_token();
 
         // A Boa `Context` is not `Send`, so the script owns a thread for its
         // whole life. The thread is joined on the happy path; on a timeout it
-        // is left to unwind, which `MAX_LOOP_ITERATIONS` guarantees it will.
+        // is left to unwind, which `MAX_LOOP_ITERATIONS` guarantees it will
+        // and the cancel token accelerates.
         let (tx, rx) = std::sync::mpsc::channel();
+        let worker_cancel = script_cancel.clone();
         let worker = std::thread::Builder::new()
             .name("nur-codemode".into())
             .stack_size(4 * 1024 * 1024)
             .spawn(move || {
                 let outcome = run_script(
                     &code,
-                    ToolContext::new(cwd, cancel, &session_id),
+                    ToolContext::new(cwd, worker_cancel, &session_id),
                     Instant::now() + timeout,
                 );
                 let _ = tx.send(outcome);
@@ -178,11 +193,16 @@ impl Tool for CodeMode {
                 let _ = worker.join();
                 outcome
             }
-            Err(_) => Err(NurError::Tool(format!(
-                "codemode: script did not finish within {} ms. Shorten it, raise timeout_ms \
-                 (max {MAX_TIMEOUT_MS}), or split the work across turns.",
-                timeout.as_millis()
-            ))),
+            Err(_) => {
+                // The detached worker cannot be killed, but its nested calls
+                // can: every dispatch and budget check looks at this token.
+                script_cancel.cancel();
+                Err(NurError::Tool(format!(
+                    "codemode: script did not finish within {} ms. Shorten it, raise timeout_ms \
+                     (max {MAX_TIMEOUT_MS}), or split the work across turns.",
+                    timeout.as_millis()
+                )))
+            }
         }
     }
 }
@@ -356,6 +376,20 @@ fn install_bridge(context: &mut Context) -> std::result::Result<(), String> {
     )?;
 
     register(
+        "__nur_parallel",
+        1,
+        NativeFunction::from_copy_closure(|_this, args, context| {
+            let payload = string_arg(args.first(), context);
+            match call_parallel(&payload) {
+                Ok(result) => Ok(JsValue::from(js_string!(result.as_str()))),
+                Err(message) => Err(boa_engine::JsNativeError::typ()
+                    .with_message(message)
+                    .into()),
+            }
+        }),
+    )?;
+
+    register(
         "__nur_tools",
         0,
         NativeFunction::from_copy_closure(|_this, _args, _context| {
@@ -470,6 +504,134 @@ fn call_tool(name: &str, args_json: &str) -> std::result::Result<String, String>
     let host = ToolHost::default();
     host.dispatch(name, args_json, &ctx)
         .map_err(|e| format!("{name}: {e}"))
+}
+
+/// One entry of a `tools.parallel` batch, parsed on the calling thread.
+struct BatchCall {
+    name: String,
+    args_json: String,
+}
+
+/// Run a batch of read-only calls concurrently and return their results in
+/// batch order as a JSON string: `[{ok}|{error}, ...]`.
+///
+/// Policy (read-only classification, permissions.toml, the deny list, the
+/// per-script call budget) is enforced HERE on the calling thread, before any
+/// worker starts: a batch can never smuggle in a call the direct path would
+/// refuse. Workers only dispatch what already passed, on threads that cannot
+/// see the thread-local bridge, so they get a prebuilt context instead.
+fn call_parallel(batch_json: &str) -> std::result::Result<String, String> {
+    let entries: Vec<Value> = serde_json::from_str(batch_json)
+        .map_err(|e| format!("tools.parallel: batch must be a JSON array: {e}"))?;
+    if entries.is_empty() {
+        return Ok("[]".into());
+    }
+    if entries.len() > MAX_PARALLEL_BATCH {
+        return Err(format!(
+            "tools.parallel: {0} entries exceeds the batch cap of {MAX_PARALLEL_BATCH}; \
+             split the batch",
+            entries.len()
+        ));
+    }
+
+    // Everything the workers need, captured from the bridge once.
+    let (ctx, names, payloads) = BRIDGE.with(|b| {
+        let mut borrowed = b.borrow_mut();
+        let bridge = borrowed.as_mut().ok_or("codemode: no sandbox")?;
+        bridge.check_budget()?;
+        if bridge.calls + entries.len() > MAX_NESTED_CALLS {
+            return Err(format!(
+                "tools.parallel: {} more calls would pass the per-script cap of \
+                 {MAX_NESTED_CALLS}; split the batch",
+                entries.len()
+            ));
+        }
+        let mut names = Vec::with_capacity(entries.len());
+        let mut payloads = Vec::with_capacity(entries.len());
+        for (i, entry) in entries.iter().enumerate() {
+            let name = entry
+                .get("tool")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("tools.parallel[{i}].tool must be a tool name"))?
+                .to_string();
+            let payload = match entry.get("args") {
+                Some(v) => serde_json::to_string(v)
+                    .map_err(|e| format!("tools.parallel[{i}].args: {e}"))?,
+                None => "{}".to_string(),
+            };
+            let args: Value =
+                serde_json::from_str(&payload).unwrap_or_else(|_| serde_json::json!({}));
+            // Same wall as the direct path, checked per entry before dispatch.
+            script_may_call(&name, &args).map_err(|e| format!("tools.parallel[{i}]: {e}"))?;
+            rules_allow(&name, bridge.rules.decide(&name, &payload))
+                .map_err(|e| format!("tools.parallel[{i}]: {e}"))?;
+            bridge.calls += 1;
+            bridge.call_log.push(name.clone());
+            names.push(name);
+            payloads.push(payload);
+        }
+        Ok::<_, String>((
+            ToolContext::new(
+                bridge.ctx.cwd.clone(),
+                bridge.ctx.cancel.clone(),
+                &bridge.ctx.session_id,
+            ),
+            names,
+            payloads,
+        ))
+    })?;
+
+    // Scoped fan-out: a small pool pulls indices off an atomic counter, so
+    // slow entries do not hold a fixed slice of the batch. The results Mutex
+    // outlives the scope; workers only borrow it.
+    let slots: Mutex<Vec<Option<std::result::Result<String, String>>>> =
+        Mutex::new((0..names.len()).map(|_| None).collect());
+    {
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..names.len().min(PARALLEL_WORKERS) {
+                let next = &next;
+                let slots = &slots;
+                let ctx = &ctx;
+                let names = &names;
+                let payloads = &payloads;
+                scope.spawn(move || loop {
+                    if ctx.cancel.is_cancelled() {
+                        break;
+                    }
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if i >= names.len() {
+                        break;
+                    }
+                    let host = ToolHost::default();
+                    let outcome = host
+                        .dispatch(&names[i], &payloads[i], ctx)
+                        .map_err(|e| format!("{}: {e}", names[i]));
+                    if let Ok(mut guard) = slots.lock() {
+                        if let Some(slot) = guard.get_mut(i) {
+                            *slot = Some(outcome);
+                        }
+                    }
+                });
+            }
+        });
+    }
+    let poisoned = "tools.parallel: a worker panicked before writing its result".to_string();
+    let results: Vec<std::result::Result<String, String>> = slots
+        .into_inner()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|slot| slot.unwrap_or_else(|| Err(poisoned.clone())))
+        .collect();
+
+    let out: Vec<Value> = results
+        .into_iter()
+        .map(|r| match r {
+            Ok(text) => serde_json::json!({ "ok": text }),
+            Err(e) => serde_json::json!({ "error": e }),
+        })
+        .collect();
+    serde_json::to_string(&out).map_err(|e| format!("tools.parallel: {e}"))
 }
 
 /// The sandbox's whole policy, in one place.
@@ -632,6 +794,13 @@ globalThis.tools = {};
 for (const entry of ALL_TOOLS) {
   globalThis.tools[entry.name] = (args) => __nur_call(entry.name, JSON.stringify(args ?? {}));
 }
+globalThis.tools.parallel = (batch) => {
+  const rows = (batch ?? []).map((entry) => ({
+    tool: String(entry.tool),
+    args: entry.args ?? {},
+  }));
+  return JSON.parse(__nur_parallel(JSON.stringify(rows)));
+};
 globalThis.searchTools = (query) => {
   const q = String(query ?? "").toLowerCase();
   return ALL_TOOLS.filter((t) =>
@@ -687,6 +856,76 @@ mod tests {
         CodeMode
             .execute(&serde_json::json!({ "code": code }), &ctx)
             .unwrap_or_else(|e| format!("TOOL ERROR: {e}"))
+    }
+
+    /// The parallel batch overlaps read-only calls and returns results in
+    /// batch order. Sequential dispatch of the same reads would give the same
+    /// answers, so order is the assertion that matters here.
+    #[test]
+    fn parallel_batch_returns_ordered_results() {
+        let dir = workspace("parallel");
+        std::fs::write(dir.join("a.txt"), "A\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "B\n").unwrap();
+        let out = run(
+            &dir,
+            r#"
+            const rows = tools.parallel([
+              {tool: "read_file", args: {path: "a.txt"}},
+              {tool: "read_file", args: {path: "b.txt"}},
+              {tool: "list_dir", args: {}},
+            ]);
+            const flat = rows.map(r => JSON.stringify(r)).join("|");
+            text(flat);
+            return rows.length;
+            "#,
+        );
+        // a.txt's content precedes b.txt's and both precede list_dir's count:
+        // batch order, not completion order.
+        let a = out.find('A').expect("a.txt content in results");
+        let b = out.find('B').expect("b.txt content in results");
+        let c = out.find("entries").expect("list_dir summary in results");
+        assert!(a < b && b < c, "ordered batch results: {out}");
+        assert!(out.contains("[returned]"), "{out}");
+    }
+
+    /// The parallel path enforces the same policy as the direct path: a
+    /// write-shaped entry is refused for the whole batch, nothing dispatches.
+    #[test]
+    fn parallel_batch_refuses_non_read_only_entries() {
+        let dir = workspace("parallel-deny");
+        let out = run(
+            &dir,
+            r#"
+            try {
+              tools.parallel([
+                {tool: "read_file", args: {path: "note.txt"}},
+                {tool: "write_file", args: {path: "pwned.txt", contents: "x"}},
+              ]);
+              return "allowed";
+            } catch (e) {
+              return "refused: " + e.message;
+            }
+            "#,
+        );
+        assert!(out.contains("refused"), "{out}");
+        assert!(
+            !dir.join("pwned.txt").exists(),
+            "a refused batch must not dispatch its readable entries either"
+        );
+    }
+
+    /// An oversized batch is refused before any dispatch.
+    #[test]
+    fn parallel_batch_is_capped() {
+        let dir = workspace("parallel-cap");
+        let entries: Vec<String> = (0..MAX_PARALLEL_BATCH + 1)
+            .map(|_| r#"{tool: "read_file", args: {path: "note.txt"}}"#.to_string())
+            .collect();
+        let out = run(
+            &dir,
+            &format!("try {{ tools.parallel([{}]); return \"ok\"; }} catch (e) {{ return e.message; }}", entries.join(",")),
+        );
+        assert!(out.contains("batch cap"), "{out}");
     }
 
     /// The headline case: several reads and a filter, one model round.

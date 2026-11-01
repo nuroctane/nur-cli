@@ -120,6 +120,7 @@ impl Tool for Bash {
             handoff_on_timeout,
             background,
             max_output_bytes,
+            sandbox: Vec::new(),
         };
 
         if let Some(reason) = check_destructive(&command, &ctx.cwd) {
@@ -172,9 +173,34 @@ impl Tool for Bash {
             }
         }
 
-        match run_in_shell_with(shell_backend(), &command, &ctx.cwd, &opts, &ctx.cancel) {
+        // OS sandbox tier: a wrapping argv for the plain command path. Blaze
+        // routing and `background` handoffs stay direct - a compiler under a
+        // read-only bind cannot write its target tree.
+        let sandbox_mode = config
+            .as_ref()
+            .map(|c| crate::sandbox_os::Mode::parse(&c.sandbox.mode))
+            .unwrap_or(crate::sandbox_os::Mode::Off);
+        let sandbox_enabled = config.as_ref().map(|c| c.sandbox.enabled).unwrap_or(false);
+        let wrapped = crate::sandbox_os::wrap(&command, &ctx.cwd, sandbox_mode, sandbox_enabled);
+        let opts_sandboxed = ShellOptions {
+            timeout_ms,
+            handoff_on_timeout,
+            background,
+            max_output_bytes,
+            sandbox: wrapped.argv.clone(),
+        };
+        match run_in_shell_with(
+            shell_backend(),
+            &command,
+            &ctx.cwd,
+            &opts_sandboxed,
+            &ctx.cancel,
+        ) {
             // A bg handoff comes back as Ok and is not a failure to lock out.
-            Ok(out) => Ok(out),
+            Ok(out) => Ok(match wrapped.note {
+                Some(note) => format!("{note}\n{out}"),
+                None => out,
+            }),
             Err(e) => {
                 // Only lock out hang/timeout/cancel — not ordinary tool refusals
                 // from this Err path that are already terminal.

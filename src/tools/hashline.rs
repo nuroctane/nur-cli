@@ -631,7 +631,7 @@ impl Tool for HashlineEdit {
             ));
         }
         if let Some(staged) =
-            super::commit_file_write(ctx, &path, &full, &updated, "hashline_edit")?
+            super::commit_file_write(ctx, &path, &full, &updated, "hashline_edit")?.staged
         {
             return Ok(staged);
         }

@@ -239,6 +239,15 @@ pub struct Config {
     /// [tools] - which tools the model is offered this session.
     #[serde(default)]
     pub tools: ToolsConfig,
+    /// [lsp] - native language-server integration. `servers` maps a file
+    /// extension to the command that serves it (`{ "rs": "rust-analyzer" }`);
+    /// empty means the built-in detection list (PATH lookup for
+    /// rust-analyzer, typescript-language-server, pyright, gopls).
+    #[serde(default)]
+    pub lsp: LspConfig,
+    /// `[sandbox]` - OS-level jail for the `bash` tool.
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
     /// `[[stream_rules]]`: patterns that stop an answer mid-stream and send it
     /// again with the rule in the conversation (see `agent::stream_rules`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -968,6 +977,56 @@ fn default_rust_builder() -> String {
 fn default_tool_profile() -> String {
     "lean".into()
 }
+
+/// `[lsp]` - native language-server integration.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LspConfig {
+    /// Extension -> command override, e.g. `{ "rs": "rust-analyzer" }` or
+    /// `{ "py": "basedpyright-langserver --stdio" }`. An extension absent
+    /// here (and from the built-in list) has no server: the `lsp` tool says
+    /// so instead of spawning anything.
+    #[serde(default)]
+    pub servers: std::collections::HashMap<String, String>,
+}
+impl Default for LspConfig {
+    fn default() -> Self {
+        LspConfig {
+            servers: Default::default(),
+        }
+    }
+}
+
+/// `[sandbox]` - OS-level jail for the `bash` tool (bwrap on Linux,
+/// Seatbelt on macOS). Approval still gates *whether* a command runs; this
+/// decides what it can reach when it does. A missing sandbox binary degrades
+/// to an unsandboxed run with a note, never an error.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SandboxConfig {
+    /// `true` (default on Linux/macOS): wrap shell commands in the OS sandbox.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// `read-only` (default) | `workspace-write` | `off`. `read-only` makes the
+    /// filesystem read-only outside a private /tmp and turns the network off;
+    /// `workspace-write` adds a writable workspace. Windows has no jail this
+    /// cycle: `enabled` degrades to an unsandboxed run with a note.
+    #[serde(default = "default_sandbox_mode")]
+    pub mode: String,
+}
+fn default_sandbox_mode() -> String {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        "read-only".into()
+    } else {
+        "off".into()
+    }
+}
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        SandboxConfig {
+            enabled: true,
+            mode: default_sandbox_mode(),
+        }
+    }
+}
 impl Default for ToolsConfig {
     fn default() -> Self {
         ToolsConfig {
@@ -1284,6 +1343,8 @@ impl Default for Config {
             theme_setup: ThemeConfig::default(),
             skills: SkillsConfig::default(),
             tools: ToolsConfig::default(),
+            lsp: LspConfig::default(),
+            sandbox: SandboxConfig::default(),
             stream_rules: Vec::new(),
             advisor: Default::default(),
             path_models: Vec::new(),
@@ -1623,6 +1684,9 @@ pub fn load_config() -> Result<Config> {
         let _ = save_config(&cfg);
     }
     canonicalize_provider_ids(&mut cfg)?;
+    // LSP server overrides feed the client through one static; set it here so
+    // every entry point (TUI, headless, subagents) sees the same table.
+    crate::tools::lsp_tool::init_from_config(&cfg.lsp);
     // Always normalize a stray `opencode-go/` prefix that might have been
     // persisted by an older picker or manual edit — the canonical stored id is
     // bare, with the base URL carrying the route. Free models (including Go's

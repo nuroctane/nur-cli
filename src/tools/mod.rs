@@ -33,6 +33,7 @@ pub mod capabilities;
 #[cfg(feature = "codemode")]
 pub mod codemode;
 mod edit_file;
+pub(crate) mod fuzzy_edit;
 pub mod executor_tool;
 mod git_diff;
 mod git_status;
@@ -44,6 +45,7 @@ pub mod graphify;
 pub mod graphjin;
 mod grep;
 mod list_dir;
+pub mod lsp_tool;
 pub mod media;
 mod memory_tool;
 mod multi_edit;
@@ -148,6 +150,12 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     // playbooks). Order matches tool_defs().
     "optmem",
     "skill",
+    // codemode is read-only by construction (the bridge enforces
+    // capabilities::is_read_only per nested call), so it is safe for every
+    // child kind including explore, and it collapses the multi-read fan-outs
+    // that dominate explore work into one round each.
+    #[cfg(feature = "codemode")]
+    "codemode",
 ];
 
 /// The root tools that are never withdrawn from a request. The opt-in TypeSafe
@@ -328,6 +336,7 @@ impl ToolHost {
             Box::new(git_diff::GitDiff),
             Box::new(slop_scan::SlopScan),
             Box::new(secscan::SecScan),
+            Box::new(lsp_tool::Lsp),
             Box::new(context_tool::ContextTool),
             Box::new(anydoc_tool::AnydocTool),
             Box::new(goal_tool::GoalTool),
@@ -531,6 +540,7 @@ impl ToolHost {
             "hashline_edit" => hashline::HashlineEdit.execute(&args, ctx),
             "bash" => bash::Bash.execute(&args, ctx),
             "sgrep" => sgrep::Sgrep.execute(&args, ctx),
+            "lsp" => lsp_tool::Lsp.execute(&args, ctx),
             "grep" => grep::Grep.execute(&args, ctx),
             "glob" => glob::GlobTool.execute(&args, ctx),
             "web_fetch" => web_fetch::WebFetch.execute(&args, ctx),
@@ -728,33 +738,58 @@ pub(crate) fn arg_u64(args: &Value, key: &str) -> Option<u64> {
     })
 }
 
+/// Outcome of the shared commit path: `staged` carries the proposal-mode
+/// message (the write did NOT happen), `lsp_note` carries post-edit
+/// diagnostics when a language server for the file was already running.
+pub(crate) struct CommitOutcome {
+    pub staged: Option<String>,
+    pub lsp_note: String,
+}
+
 /// Shared commit path of every file-writing tool: refuse when the file moved
 /// since the model last read it, stage instead of writing in proposal mode,
 /// otherwise write atomically (temp file + rename, so a crash or a concurrent
 /// reader never sees a half-written file) and record the new bytes so the
-/// next edit chains without a re-read. Returns `Some(message)` when the write
-/// was staged rather than performed.
+/// next edit chains without a re-read.
 pub(crate) fn commit_file_write(
     ctx: &ToolContext,
     path_arg: &str,
     full: &Path,
     updated: &str,
     tool: &str,
-) -> Result<Option<String>> {
+) -> Result<CommitOutcome> {
     if crate::config::proposal_mode_on() {
         let entry =
             crate::agent::proposal::stage_write(&ctx.session_id, &ctx.cwd, path_arg, updated, tool)
                 .map_err(NurError::Tool)?;
-        return Ok(Some(format!(
-            "proposal staged `{}` ({} bytes) - not written to workspace. \
-             Use tool `proposal` action=list|apply|discard.",
-            entry.rel_path, entry.bytes
-        )));
+        return Ok(CommitOutcome {
+            staged: Some(format!(
+                "proposal staged `{}` ({} bytes) - not written to workspace. \
+                 Use tool `proposal` action=list|apply|discard.",
+                entry.rel_path, entry.bytes
+            )),
+            lsp_note: String::new(),
+        });
     }
     crate::config::atomic_write(full, updated.as_bytes())
         .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
     file_ledger::note_written(full, updated.as_bytes());
-    Ok(None)
+    // Post-edit diagnostics: only when a language server for this file's
+    // language is ALREADY running (never a cold spawn inside an edit), so an
+    // edit that introduces a type error surfaces immediately.
+    Ok(CommitOutcome {
+        staged: None,
+        lsp_note: lsp_tool::post_edit_hook(full),
+    })
+}
+
+/// Append the commit's LSP note to a success message.
+pub(crate) fn with_lsp_note(message: String, commit: &CommitOutcome) -> String {
+    if commit.lsp_note.is_empty() {
+        message
+    } else {
+        format!("{message}{}", commit.lsp_note)
+    }
 }
 
 /// The guard half of [`commit_file_write`], run before a tool reads the file
@@ -840,6 +875,7 @@ mod tests {
             "git_diff",
             "slop_scan",
             "secscan",
+            "lsp",
             "context",
             "anydoc",
             "goal",

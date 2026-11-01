@@ -46,6 +46,7 @@ jobs:
       - run: cargo build --bin nur --locked
       - run: python tests/e2e/run_e2e.py --bin target/debug/nur${{ runner.os == 'Windows' && '.exe' || '' }}
       - run: python tests/e2e/run_startup.py --bin target/debug/nur${{ runner.os == 'Windows' && '.exe' || '' }}
+      - run: python tests/e2e/run_release_ui.py --bin target/debug/nur${{ runner.os == 'Windows' && '.exe' || '' }}
       - run: python tests/e2e/run_regressions.py --bin target/debug/nur${{ runner.os == 'Windows' && '.exe' || '' }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
