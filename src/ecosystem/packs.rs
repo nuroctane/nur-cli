@@ -300,142 +300,28 @@ database:
 log_level: info
 "#;
 
-/// Oh My Pi (omp.sh) - the coding-agent backend the `omp` tool delegates to.
-/// (headless `omp -p` runs; we deliberately skip its IDE/ACP surface).
-/// Ships as `@oh-my-pi/pi-coding-agent` (Bun) and as a native installer under
-/// `%LOCALAPPDATA%\omp\`. Auto-upgrades when below the feature floor.
-/// `managed` is `ecosystem_omp`: only then does ensure install or upgrade omp
-/// (which runs its installer). Otherwise an omp already present is reported
-/// and used as found, and nothing is downloaded.
-pub fn ensure_omp(managed: bool) -> ComponentStatus {
+/// OMP is detected, never installed: nur's own `agent` tool delegates natively,
+/// so this only reports whether an omp binary already exists on the machine.
+pub fn ensure_omp() -> ComponentStatus {
     let mut c = ComponentStatus {
         name: "omp".into(),
         ..Default::default()
     };
-
-    let current = best_omp();
-    let needs_upgrade = match &current {
-        None => true,
-        Some((_, ver)) => super::ecosystem_force_pub() || !omp_meets_feature_floor(ver),
-    };
-    if !managed {
-        match current {
-            Some((bin, version)) => {
-                c.available = omp_meets_feature_floor(&version);
-                c.detail = format!("omp {version} found; not managed (ecosystem_omp = false)");
-                c.path = Some(bin);
-                c.version = Some(version);
-            }
-            None => c.detail = "off (ecosystem_omp = false)".into(),
-        }
-        return c;
-    }
-    if needs_upgrade {
-        upgrade_omp(&mut c);
-    }
-
     match best_omp() {
         Some((bin, version)) => {
+            c.available = omp_meets_feature_floor(&version);
+            c.detail = format!("omp {version} found (external; nur does not manage it)");
             c.path = Some(bin);
-            c.version = Some(version.clone());
-            if omp_meets_feature_floor(&version) {
-                c.available = true;
-                c.detail = format!(
-                    "coding-agent backend ready (omp {version}; economy routing + metered delegation)"
-                );
-            } else {
-                c.detail = format!(
-                    "omp {version} is too old; need >= {}.{}.{} - bun i -g @oh-my-pi/pi-coding-agent@latest \
-                     (Windows: irm https://omp.sh/install.ps1 | iex)",
-                    OMP_FEATURE_FLOOR.0, OMP_FEATURE_FLOOR.1, OMP_FEATURE_FLOOR.2
-                );
-            }
+            c.version = Some(version);
         }
-        None => {
-            if c.detail.is_empty() {
-                c.detail =
-                    "not found after install - try: bun i -g @oh-my-pi/pi-coding-agent@latest \
-                     (or irm https://omp.sh/install.ps1 | iex)"
-                        .into();
-            }
-        }
+        None => c.detail = "not installed (nur delegates natively)".into(),
     }
     c
 }
 
-// omp 18 (can1357/oh-my-pi): session-resume corruption fix (18.0.8), OMP_APP_NAME
-// usage attribution (18.0.7), Claude subscription OAuth fixes. The CLI surface nur
-// delegates with (`-p`, `--mode json`, `--no-session`, `--tools`) is unchanged.
+// omp 18 (can1357/oh-my-pi) feature floor, kept for the availability check.
 const OMP_FEATURE_FLOOR: (u64, u64, u64) = (18, 4, 4);
 const BUN_OMP_FLOOR: (u64, u64, u64) = (1, 3, 14);
-
-fn upgrade_omp(c: &mut ComponentStatus) {
-    if let Some(bun) = find_bin("bun") {
-        let bun_version = super::cmd_version_pub(&bun, &["--version"]);
-        if bun_version.as_deref().is_some_and(bun_meets_omp_floor) {
-            let spec = super::lock::npm_spec("@oh-my-pi/pi-coding-agent");
-            if let Err(e) = run_capture(&bun, &["install", "-g", &spec], None, 300_000) {
-                c.detail = format!(
-                    "bun install failed: {}",
-                    e.chars().take(160).collect::<String>()
-                );
-            }
-        } else if c.detail.is_empty() {
-            c.detail = format!(
-                "needs Bun >= 1.3.14; found {}",
-                bun_version.as_deref().unwrap_or("an unreadable version")
-            );
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        // Official installer refreshes installers; often lands via Bun now.
-        let ps = "irm https://omp.sh/install.ps1 | iex";
-        let _ = run_capture(
-            "powershell",
-            &["-NoProfile", "-NonInteractive", "-Command", ps],
-            None,
-            300_000,
-        );
-        // Stale native `%LOCALAPPDATA%\omp\omp.exe` can still win PATH over Bun.
-        // Self-update it when below the feature floor.
-        if let Some(home) = crate::config::home_dir() {
-            let local = home
-                .join("AppData")
-                .join("Local")
-                .join("omp")
-                .join("omp.exe");
-            if local.is_file() {
-                let path = local.to_string_lossy().into_owned();
-                let ver = super::cmd_version_pub(&path, &["--version"]).unwrap_or_default();
-                if !omp_meets_feature_floor(&ver) {
-                    let _ = run_capture(&path, &["update", "--force"], None, 300_000);
-                }
-            }
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        if best_omp()
-            .as_ref()
-            .is_none_or(|(_, v)| !omp_meets_feature_floor(v))
-        {
-            let _ = run_capture(
-                "bash",
-                &["-lc", "curl -fsSL https://omp.sh/install.sh | bash"],
-                None,
-                300_000,
-            );
-        }
-    }
-
-    if find_bin("bun").is_none() && best_omp().is_none() && c.detail.is_empty() {
-        c.detail =
-            "needs Bun >= 1.3.14 (bun.sh), or run: irm https://omp.sh/install.ps1 | iex".into();
-    }
-}
 
 /// Prefer the newest omp among Bun global, official Local install, and PATH.
 pub(crate) fn best_omp() -> Option<(String, String)> {

@@ -174,6 +174,45 @@ pub(crate) enum Semantic {
     Unavailable(String),
 }
 
+/// A tree big enough that whole-repo semantic ranking costs 10-20s.
+const LARGE_REPO_FILES: usize = 3000;
+
+/// Cheap bounded file count: enough to tell "large repo" from "small" without
+/// walking everything.
+fn is_large_repo(target: &Path) -> bool {
+    let mut count = 0usize;
+    for entry in ignore::WalkBuilder::new(target)
+        .hidden(false)
+        .git_ignore(true)
+        .build()
+        .flatten()
+    {
+        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        count += 1;
+        if count >= LARGE_REPO_FILES {
+            return true;
+        }
+    }
+    false
+}
+
+/// A keyword pre-filter derived from the query. Longest word wins: it is the
+/// most specific and least likely to be a stopword.
+fn auto_pattern(query: &str) -> Option<String> {
+    const STOP: &[&str] = &[
+        "where", "what", "which", "with", "that", "this", "from", "have", "does", "into", "when",
+        "like", "code", "find", "show", "work", "works", "search", "function", "functions", "call",
+        "called", "used", "uses", "them", "they", "there", "here", "file", "files",
+    ];
+    query
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
+        .filter(|w| w.len() >= 4 && !STOP.contains(&w.to_ascii_lowercase().as_str()))
+        .max_by_key(|w| w.len())
+        .map(str::to_string)
+}
+
 pub(crate) fn semantic(bin: &str, req: &SemanticRequest<'_>, ctx: &ToolContext) -> Semantic {
     let (dir, target) = search_target(req.root);
     let prefix = display_prefix(&ctx.cwd, &dir);
@@ -184,6 +223,21 @@ pub(crate) fn semantic(bin: &str, req: &SemanticRequest<'_>, ctx: &ToolContext) 
             Ok(None) => return Semantic::NoMatches,
             Err(e) if e == "search cancelled" => return Semantic::Cancelled,
             Err(e) => return Semantic::RgError(e),
+        },
+        None if is_large_repo(&target) => match auto_pattern(req.query) {
+            Some(pat) => match rg_json(ctx, &dir, &target, &pat, req) {
+                Ok(Some(feed)) => (
+                    Some(feed.bytes),
+                    Some(format!(
+                        "auto-scoped: on a large repo the whole-tree query was pre-filtered by \
+                         `{pat}` from your words; pass `pattern` or `path` to choose yourself"
+                    )),
+                ),
+                Ok(None) => return Semantic::NoMatches,
+                Err(e) if e == "search cancelled" => return Semantic::Cancelled,
+                Err(e) => return Semantic::RgError(e),
+            },
+            None => (None, None),
         },
         None => (None, None),
     };

@@ -148,12 +148,6 @@ pub struct Config {
     /// Set false for a pure binary + chat experience until `nur ecosystem ensure`.
     #[serde(default = "default_true")]
     pub ecosystem_auto_ensure: bool,
-    /// Let `nur ecosystem ensure` install and upgrade Oh My Pi (`omp`, the
-    /// backend of the `omp` tool). Default **false**: nur's own `agent` tool
-    /// delegates natively, and installing omp downloads and runs its
-    /// installer. An omp already on PATH is still found and used either way.
-    #[serde(default)]
-    pub ecosystem_omp: bool,
     /// The cheap model for `agent` calls with `cost_mode: economy` on this
     /// provider, and for prewalk when `[prewalk] into` is unset. Empty → an
     /// economy child runs on the cheapest tool-capable model the account
@@ -248,6 +242,12 @@ pub struct Config {
     /// `[sandbox]` - OS-level jail for the `bash` tool.
     #[serde(default)]
     pub sandbox: SandboxConfig,
+    /// `[notifications]` - end-of-turn chime (BEL, or a configured command).
+    #[serde(default)]
+    pub notifications: crate::notifications::NotificationsConfig,
+    /// `[mcp]` - local MCP servers over stdio (`[mcp.servers.<name>]`).
+    #[serde(default)]
+    pub mcp: crate::mcp_stdio::McpConfig,
     /// `[[stream_rules]]`: patterns that stop an answer mid-stream and send it
     /// again with the rule in the conversation (see `agent::stream_rules`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -445,22 +445,6 @@ pub fn import_fallback_enabled() -> bool {
     ["import_fallback", "fallback_import"]
         .iter()
         .find_map(|key| auth?.get(*key)?.as_bool())
-        .unwrap_or(false)
-}
-
-/// `ecosystem_omp` as the running process sees it, read from the config file
-/// (ecosystem ensure runs without a `Config` in hand). `NUR_ECOSYSTEM_OMP=1|0`
-/// overrides for one run.
-pub fn ecosystem_omp_enabled() -> bool {
-    if let Ok(v) = std::env::var("NUR_ECOSYSTEM_OMP") {
-        return matches!(v.trim(), "1" | "true" | "yes" | "on");
-    }
-    let Ok(text) = read_replaced_string(&config_path()) else {
-        return false;
-    };
-    toml::from_str::<toml::Value>(&text)
-        .ok()
-        .and_then(|v| v.get("ecosystem_omp")?.as_bool())
         .unwrap_or(false)
 }
 
@@ -1324,7 +1308,6 @@ impl Default for Config {
             compact_tool_body_max_chars: default_compact_tool_body_max(),
             poor_mode: false,
             ecosystem_auto_ensure: true,
-            ecosystem_omp: false,
             economy_model: String::new(),
             auto_update: true,
             fallback_providers: Vec::new(),
@@ -1345,6 +1328,8 @@ impl Default for Config {
             tools: ToolsConfig::default(),
             lsp: LspConfig::default(),
             sandbox: SandboxConfig::default(),
+            notifications: crate::notifications::NotificationsConfig::default(),
+            mcp: crate::mcp_stdio::McpConfig::default(),
             stream_rules: Vec::new(),
             advisor: Default::default(),
             path_models: Vec::new(),
@@ -1687,6 +1672,7 @@ pub fn load_config() -> Result<Config> {
     // LSP server overrides feed the client through one static; set it here so
     // every entry point (TUI, headless, subagents) sees the same table.
     crate::tools::lsp_tool::init_from_config(&cfg.lsp);
+    crate::mcp_stdio::set_servers(cfg.mcp.servers.clone());
     // Always normalize a stray `opencode-go/` prefix that might have been
     // persisted by an older picker or manual edit — the canonical stored id is
     // bare, with the base URL carrying the route. Free models (including Go's

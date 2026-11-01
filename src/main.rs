@@ -28,6 +28,9 @@ mod ledger;
 mod local;
 mod lsp;
 mod mcp_http;
+mod mcp_oauth;
+mod mcp_stdio;
+mod notifications;
 mod oauth;
 mod open_uri;
 mod optmem;
@@ -836,6 +839,9 @@ async fn real_main() -> Result<()> {
             if *yes {
                 permission_mode.set(PermissionMode::Auto);
             }
+            // End-of-turn chime for the headless path (the TUI signals from
+            // push_turn_done). Captured before `cfg` moves into the runner.
+            let notify = (cfg.notifications.chime, cfg.notifications.command.clone());
             let code = run_headless(
                 client,
                 cfg,
@@ -848,6 +854,7 @@ async fn real_main() -> Result<()> {
                 *output_format,
             )
             .await?;
+            crate::notifications::chime(notify.0, &notify.1);
             if code != error::exit::OK {
                 std::process::exit(code);
             }
@@ -865,6 +872,7 @@ async fn real_main() -> Result<()> {
                         .into(),
                 ));
             };
+            let notify = (cfg.notifications.chime, cfg.notifications.command.clone());
             let code = run_continuous(
                 client,
                 cfg,
@@ -878,6 +886,7 @@ async fn real_main() -> Result<()> {
                 cli.yes,
             )
             .await?;
+            crate::notifications::chime(notify.0, &notify.1);
             if code != error::exit::OK {
                 std::process::exit(code);
             }

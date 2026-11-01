@@ -2409,17 +2409,6 @@ impl AgentRunner {
                 (body, ok)
             };
 
-            if ok && call.name == "omp" {
-                if let Some(spent) = crate::tools::omp::delegated_usage(&body) {
-                    usage.add_external(&spent);
-                    session.usage.add(&spent);
-                    let _ = tx.send(AgentEvent::Usage {
-                        session: usage.session_usage().clone(),
-                        last: spent,
-                    });
-                }
-            }
-
             let body = if ok {
                 let hr = self.config.headroom.clone();
                 let sid = session.id.clone();

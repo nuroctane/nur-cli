@@ -10,7 +10,7 @@ The harness supersedes stale duplicate reads, spills large tool results, preserv
 
 Tool-result previews include their spill path in the size budget, including long paths and tiny limits.
 
-[TypeSafe · Jev](https://docs.typesafe.ai) judgments run inside the harness rather than beside it: one batched request decides which tool calls are still worth their tokens, whether a result actually worked, and what a fresh context can drop - so compaction writes no summary, survivors stay verbatim, and the frontier model is never paid to answer an if-statement. Provider-agnostic (one key lifts every model), and keyless on this machine through three supported local engines - openJev-verdict-2.0, Bespoke-Nimble-9B, and Laya Core ML ([docs/jev-local.md](./docs/jev-local.md)). Native failover, cross-provider subagents, and delegated OMP work all report their actual token and cost impact in Nur's session budgets and `/usage` totals.
+[TypeSafe · Jev](https://docs.typesafe.ai) judgments run inside the harness rather than beside it: one batched request decides which tool calls are still worth their tokens, whether a result actually worked, and what a fresh context can drop - so compaction writes no summary, survivors stay verbatim, and the frontier model is never paid to answer an if-statement. Provider-agnostic (one key lifts every model), and keyless on this machine through three supported local engines - openJev-verdict-2.0, Bespoke-Nimble-9B, and Laya Core ML ([docs/jev-local.md](./docs/jev-local.md)). Native failover and cross-provider subagents report their actual token and cost impact in Nur's session budgets and `/usage` totals.
 
 </div>
 
@@ -142,7 +142,7 @@ Everything is **local**. Secrets never go into the git repo.
 | **Rust / cargo** | Builds the CLI (one-liner / cargo only; `npx` path needs none) |
 | **Git** | Clone / update |
 | **Node.js 20+** | PLUR · Ruflo · Executor · skills · browser · AKM (the `npx` shim itself needs only Node 18+) |
-| **Bun** | AKM runtime (and **omp** when `ecosystem_omp = true`) |
+| **Bun** | AKM runtime |
 | **uv** | **Graphify** |
 | **ripgrep (`rg`)** | Fast `grep` / `glob`, and the file walk behind `sgrep` |
 | **sgrep** | Semantic code search (`sgrep` tool); built with `cargo install --git https://github.com/context-dot-dev/sgrep --locked`, model (32 MB) downloaded once |

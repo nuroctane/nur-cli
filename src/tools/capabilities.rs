@@ -58,6 +58,19 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         // Every `lsp` op reads: diagnostics/hover/definition/references/symbols
         // query the server, `stop` only kills a server this session spawned.
         "lsp" => true,
+        // Pure read: walks the tree and prints signatures.
+        "repo_map" => true,
+        // `list` spawns configured servers and reads their catalogs; `call` is
+        // read-only only when the server is configured `read_only = true`.
+        "mcp" => match args.get("action").and_then(|a| a.as_str()) {
+            Some("list") => true,
+            Some("call") => args
+                .get("server")
+                .and_then(|s| s.as_str())
+                .map(crate::mcp_stdio::is_read_only_server)
+                .unwrap_or(false),
+            _ => false,
+        },
         // `status` only looks; `run` executes scanners, `baseline` writes.
         "secscan" => action_is(args, &["status"]),
         // A script is as read-only as the calls it makes, and its bridge admits
@@ -149,7 +162,6 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "egaki" => crate::tools::egaki_tool::is_read_only_action(&args.to_string()),
         "executor" => crate::tools::executor_is_read_only(&args.to_string()),
         "enclave" => crate::tools::enclave_tool::is_read_only_action(&args.to_string()),
-        "omp" => crate::tools::omp::is_read_only_value(args),
         "browser" => crate::tools::browser_is_read_only(&args.to_string()),
         "terminal_browser" => crate::tools::terminal_browser_is_read_only(&args.to_string()),
         "agent" | "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit"
@@ -209,11 +221,11 @@ pub fn is_destructive(name: &str, args: &Value) -> bool {
         "optmem" => !is_read_only("optmem", args),
         "dogwood" => !is_read_only("dogwood", args),
         "egaki" => !is_read_only("egaki", args),
-        "omp" => !is_read_only("omp", args),
         "browser" => !is_read_only("browser", args),
         "terminal_browser" => !is_read_only("terminal_browser", args),
         "executor" => !is_read_only("executor", args),
         "enclave" => !is_read_only("enclave", args),
+        "mcp" => !is_read_only("mcp", args),
         "secscan" => !is_read_only("secscan", args),
         _ => false,
     }
@@ -324,7 +336,6 @@ mod tests {
             "todo_write",
             "submit_plan",
             "browser",
-            "omp",
             "graphify",
             "graphjin",
             "plur",

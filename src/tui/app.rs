@@ -10963,6 +10963,12 @@ impl App {
     }
 
     fn push_turn_done(&mut self, duration: Duration, interrupted: bool) {
+        // End-of-turn signal: BEL (forwarded by tmux/screen/zellij) or the
+        // user's `[notifications] command`. Never blocks the next prompt.
+        crate::notifications::chime(
+            self.cfg.notifications.chime,
+            &self.cfg.notifications.command,
+        );
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         // Ensure any still-open thought is closed and counted.
         self.finish_thinking();

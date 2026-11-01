@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 /// projects, so `bin` is deliberately absent.
 pub const HARD_EXCLUDES: &[&str] = &[
     "node_modules",
+    "vendor",
     "target",
     ".git",
     "dist",

@@ -28,7 +28,9 @@ pub use plur_context::{plur_context, plur_prefetch};
 
 pub use skills::{bundled_skill_names, install_bundled_skills};
 
-/// Absolute path to the newest available `omp` binary (Bun / native / PATH).
+/// Absolute path to an existing `omp` binary (Bun / native / PATH). OMP is no
+/// longer installed or orchestrated by nur; this only locates an already
+/// installed CLI for credential import (`nur auth import --from omp`).
 pub fn find_omp() -> Option<String> {
     packs::best_omp()
         .map(|(path, _)| path)
@@ -153,11 +155,7 @@ impl EcosystemStatus {
             bit(self.plur.available, "plur"),
             bit(self.ruflo.available, "ruflo"),
             bit(self.executor.available, "executor"),
-            if self.omp.available || crate::config::ecosystem_omp_enabled() {
-                bit(self.omp.available, "omp")
-            } else {
-                "omp off".into()
-            },
+            bit(self.omp.available, "omp"),
             bit(self.graphjin.available, "graphjin"),
             bit(self.browser.available, "browser"),
             bit(self.terminal_browser.available, "tb"),
@@ -360,9 +358,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
             let h_akm = s.spawn(move || std::panic::catch_unwind(|| packs::ensure_akm(node_ok)));
             let h_executor =
                 s.spawn(move || std::panic::catch_unwind(|| packs::ensure_executor(node_ok)));
-            let omp_managed = crate::config::ecosystem_omp_enabled();
-            let h_omp =
-                s.spawn(move || std::panic::catch_unwind(|| packs::ensure_omp(omp_managed)));
+            let h_omp = s.spawn(|| std::panic::catch_unwind(packs::ensure_omp));
             let h_graphjin = s.spawn(|| std::panic::catch_unwind(packs::ensure_graphjin));
             let h_browser =
                 s.spawn(move || std::panic::catch_unwind(|| packs::ensure_browser_cli(node_ok)));
@@ -496,8 +492,6 @@ fn load_marker_if_fresh() -> Option<EcosystemStatus> {
         && st.ruflo.available
         && st.skills_cli.available
         && st.excalidraw.available
-        // omp is opt-in: its absence only means a re-run when ensure manages it.
-        && (st.omp.available || !crate::config::ecosystem_omp_enabled())
     {
         Some(st)
     } else {

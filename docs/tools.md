@@ -498,43 +498,6 @@ surface is the agent-browser-compatible `terminal-browser action` CLI.
 
 Slash: `/tb` · `/terminal-browser`. Skill: `terminal-browser`.
 
-### `omp`
-
-Delegate a focused coding task to the [Oh My Pi](https://omp.sh) agent backend
-(headless one-shot `omp -p` run in the workspace; the IDE/ACP surface is not
-used). nur does not install omp unless `ecosystem_omp = true`; an omp already
-on PATH is used. The `agent` tool with `cost_mode: economy` does the same kind
-of delegation natively. Strong at LSP-backed refactors, debugger-driven diagnosis (DAP), and AST
-rewrites.
-
-Focused delegation defaults to `cost_mode=economy`. Nur first honors
-`OMP_SMOL_MODEL` / `PI_SMOL_MODEL` or OMP's configured `modelRoles.smol`; when
-none exists, it inspects OMP's authenticated accounts and live model catalog and
-selects a small, low-cost text model. The route is cached briefly, but every OMP
-run still reports the provider and model it actually used. No authenticated
-route means a clear login error, never a silent fallback to an unrelated model.
-
-Economy runs use low thinking and a reduced coding tool surface. All delegated
-runs disable ambient OMP extensions, skills, and rules because Nur already supplies the
-bounded handoff and owns skill activation. This keeps unrelated local plugin
-state out of the run and avoids duplicating large prompt catalogs. Use
-`cost_mode=balanced` or an explicit `model` only when the task needs more
-capability. Runs use bounded time, ephemeral sessions, and compact result
-contracts. OMP's JSON events supply the concrete provider, model, token counts,
-and cost, which Nur folds into `/usage`, session status, and `/budget` totals.
-Invalid cost, thinking, tool-profile, and timeout options fail closed rather than
-silently widening the delegated tool surface.
-
-`run` is write-class: it needs approval in manual mode and is blocked in plan
-mode. Once Nur approves the delegation, the headless OMP child receives an
-explicit approval policy. Esc kills the whole OMP process tree so it cannot keep
-editing or spending after cancellation. OMP JSON error events remain failures
-even when the OMP process exits with code 0. `status` reports version,
-authenticated providers, model roles, the resolved economy route, and warnings;
-`version` is the lightweight version-only check. Both remain free.
-Provisioning requires **omp >= 18.4.4** (feature floor; `nur ecosystem ensure`
-auto-upgrades). Bun installs require version 1.3.14 or newer.
-
 ### `skill`
 
 List or load a skill pack (`SKILL.md`) into context.

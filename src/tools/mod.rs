@@ -46,12 +46,13 @@ pub mod graphjin;
 mod grep;
 mod list_dir;
 pub mod lsp_tool;
+pub mod mcp_tool;
 pub mod media;
 mod memory_tool;
 mod multi_edit;
-pub mod omp;
 pub mod plur;
 mod read_file;
+pub mod repo_map;
 pub mod ruflo;
 mod rust_builder;
 mod sandbox;
@@ -337,6 +338,8 @@ impl ToolHost {
             Box::new(slop_scan::SlopScan),
             Box::new(secscan::SecScan),
             Box::new(lsp_tool::Lsp),
+            Box::new(mcp_tool::McpTool),
+            Box::new(repo_map::RepoMap),
             Box::new(context_tool::ContextTool),
             Box::new(anydoc_tool::AnydocTool),
             Box::new(goal_tool::GoalTool),
@@ -367,7 +370,6 @@ impl ToolHost {
             Box::new(egaki_tool::Egaki),
             Box::new(executor_tool::ExecutorTool),
             Box::new(enclave_tool::Enclave),
-            Box::new(omp::OmpTool),
             Box::new(skill_tool::SkillTool),
             Box::new(memory_tool::MemoryTool),
             Box::new(todo_write::TodoWrite {
@@ -541,6 +543,8 @@ impl ToolHost {
             "bash" => bash::Bash.execute(&args, ctx),
             "sgrep" => sgrep::Sgrep.execute(&args, ctx),
             "lsp" => lsp_tool::Lsp.execute(&args, ctx),
+            "mcp" => mcp_tool::McpTool.execute(&args, ctx),
+            "repo_map" => repo_map::RepoMap.execute(&args, ctx),
             "grep" => grep::Grep.execute(&args, ctx),
             "glob" => glob::GlobTool.execute(&args, ctx),
             "web_fetch" => web_fetch::WebFetch.execute(&args, ctx),
@@ -583,7 +587,6 @@ impl ToolHost {
             "egaki" => egaki_tool::Egaki.execute(&args, ctx),
             "executor" => executor_tool::ExecutorTool.execute(&args, ctx),
             "enclave" => enclave_tool::Enclave.execute(&args, ctx),
-            "omp" => omp::OmpTool.execute(&args, ctx),
             "skill" => skill_tool::SkillTool.execute(&args, ctx),
             "memory" => memory_tool::MemoryTool.execute(&args, ctx),
             "tool_search" => tool_search::ToolSearch.execute(&args, ctx),
@@ -876,6 +879,8 @@ mod tests {
             "slop_scan",
             "secscan",
             "lsp",
+            "mcp",
+            "repo_map",
             "context",
             "anydoc",
             "goal",
@@ -906,7 +911,6 @@ mod tests {
             "egaki",
             "executor",
             "enclave",
-            "omp",
             "skill",
             "memory",
             "todo_write",
@@ -934,7 +938,6 @@ mod tests {
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"write_file"));
         assert!(!names.contains(&"agent"));
-        assert!(!names.contains(&"omp"));
         assert!(defs.len() < host.tool_defs().len());
     }
 
