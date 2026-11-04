@@ -66,11 +66,11 @@ pub fn wrap(shell: &[OsString], cwd: &Path, mode: Mode, enabled: bool) -> Wrappe
     }
     #[cfg(target_os = "linux")]
     {
-        return wrap_linux(shell, cwd, mode);
+        wrap_linux(shell, cwd, mode)
     }
     #[cfg(target_os = "macos")]
     {
-        return wrap_macos(shell, cwd, mode);
+        wrap_macos(shell, cwd, mode)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
