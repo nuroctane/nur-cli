@@ -123,11 +123,6 @@ fn plan_install(name: &str) -> Result<(InstallPlan, Action), String> {
         ),
         "skills" => npm_plan("skills", "skills", "open agent skills CLI"),
         "akm" => npm_plan("akm", "akm-cli", "agent knowledge manager"),
-        "omp" => npm_plan(
-            "omp",
-            "@oh-my-pi/pi-coding-agent",
-            "delegated coding agent (bun or npm)",
-        ),
         "agent-browser" | "browser-cli" => npm_plan(
             "agent-browser-cli",
             "@sleepinsummer/agent-browser-cli",
@@ -195,7 +190,7 @@ fn plan_install(name: &str) -> Result<(InstallPlan, Action), String> {
             } else {
                 return Err(format!(
                     "unknown ecosystem component '{name}'. Known: penecho, egaki, akarso, executor, \
-                     graphjin, ruflo, plur, skills, akm, omp, agent-browser, excalidraw, headroom, \
+                     graphjin, ruflo, plur, skills, akm, agent-browser, excalidraw, headroom, \
                      fractal, graphify, dogwood, sgrep, skill packs ({}), plugins in /plugins",
                     crate::ecosystem::packs::pack_labels().join(", ")
                 ));

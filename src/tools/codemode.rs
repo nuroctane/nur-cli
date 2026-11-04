@@ -13,10 +13,13 @@
 //! rule shared with the rest of the harness rather than a second allowlist
 //! that would drift away from it.
 //!
-//! The nested calls are synchronous. `await` and `Promise.all` still work
+//! Direct nested calls are synchronous. `await` and `Promise.all` still work
 //! (awaiting a plain value is a no-op in JS), so model-written code behaves as
-//! written; it just does not overlap. Collapsing round trips is where the
-//! saving is, and a sandbox with no concurrency has far less to get wrong.
+//! written; it just does not overlap. The concurrent path is explicit:
+//! `tools.parallel([{tool, args}, ...])` fans a read-only batch out on a
+//! worker pool and returns results in batch order. Collapsing round trips is
+//! where the saving is, and a sandbox with no implicit concurrency has far
+//! less to get wrong.
 
 use super::{arg_str, capabilities, Tool, ToolContext, ToolHost};
 use crate::error::{NurError, Result};
@@ -54,7 +57,10 @@ const MAX_LOOP_ITERATIONS: u64 = 10_000_000;
 
 /// Tools a script may never call whatever the classifier says: each one either
 /// starts another unit of work, speaks to the user, or ends the turn, and none
-/// of those belong inside a script the model wrote mid-thought.
+/// of those belong inside a script the model wrote mid-thought. `omp` stays
+/// listed defensively even though the `omp` tool was removed: a script
+/// cannot call a tool that does not exist, and the deny entry keeps the
+/// error message explicit if a rule or prompt ever names it again.
 const DENIED: &[&str] = &[
     "codemode",
     "agent",

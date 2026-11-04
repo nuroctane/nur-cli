@@ -11,8 +11,8 @@ The template ships with two `dispatch` implementations - pick per task:
 
 - **native** - `nur run -y <prompt>`: one headless native agent turn per child
   (inherits your configured provider/model).
-- **omp** - `omp --mode json ... -p <prompt>`: Oh My Pi, LSP-wired edits,
-  explicit model. Same CLI shape `src/tools/omp.rs` builds.
+- **omp** - `omp --mode json ... -p <prompt>`: the external Oh My Pi CLI, LSP-wired edits,
+  explicit model. There is no nur `omp` tool in this repo; the `omp` tool was removed, and this backend runs the external CLI directly, only when it is already installed.
 
 Switch by setting `backend: "native" | "omp"` on each task, or set a default at
 the top.
@@ -42,9 +42,9 @@ Edit the `tasks` array to describe each child (`name`, `prompt`, optional
 
 ## Notes
 
-- Verify with `nur run -y "hello"` and `omp --version` before orchestrating.
+- Verify with `nur run -y "hello"` before orchestrating, and with `omp --version` before using the omp backend (skip that backend if the external CLI is not installed).
 - OMP writes to the workspace; keep `--approval-mode yolo` to disposable
-  worktrees only. Prefer the nur `omp` tool when already inside a session.
+  worktrees only. Inside a nur session, use the native `agent` tool instead of spawning an external omp process.
 - `maxBuffer` is already capped at 10 MB; raise it for very chatty children.
 
 ---

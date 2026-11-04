@@ -19,7 +19,13 @@ within that budget. If the path cannot fit, the result is truncated without a sp
 | **browser** | `browser` `terminal_browser` | teal |
 | **knowledge** | `graphify` `graphjin` `plur` `ruflo` `akarso` `executor` `skill` `memory` | indigo / orange |
 | **agent** | `todo_write` `submit_plan` `agent` `harness` `codemode` `tool_search` | - |
-| **memory** | `optmem` `connectome` `mem` `memory` `plur` `ruflo` | indigo |
+| **memory** | `optmem` `connectome` `mem` `memory` | indigo |
+| **desktop** | `desktop` | cyan |
+| **debug** | `debug` | violet |
+| **mcp** | `mcp` | teal |
+| **worktree** | `worktree` | cyan |
+| **media** | `egaki` `t3code` | pink |
+| **maintenance** | `headroom` | sky |
 | **judgments** | `typesafe` | violet |
 | **security** | `enclave` `secscan` | teal |
 | **context** | `context` `anydoc` | sky |
@@ -48,7 +54,7 @@ Capability flags (read-only / concurrency-safe / destructive) drive parallel bat
 ### `lsp`
 
 Queries a configured or detected language server for diagnostics, hover,
-definitions, references, and document symbols. Nur prewarms detected servers
+definitions, references, and document symbols. For a definition, reference list, or symbol list in a typed language, reach for `lsp` before regex search; it answers from the language server, not from text matches. Nur prewarms detected servers
 in the background and includes available diagnostics after edits. A first edit
 may wait for a cold server. Set `[lsp] prewarm = false` to start servers only
 through the `lsp` tool; configure command overrides under `[lsp.servers]`.
@@ -56,7 +62,7 @@ through the `lsp` tool; configure command overrides under `[lsp.servers]`.
 ### `repo_map`
 
 Lists source files ranked by declaration count with a bounded selection of
-signatures. Use it to choose files to inspect; it does not replace reading them.
+signatures. Use it to choose files to inspect; it does not replace reading them. It is a cheap fallback sketch when `sgrep` and `lsp` are both unavailable, not a peer of either: it ranks by declaration count with a line-regex heuristic, no index and no semantics.
 
 ### `read_file`
 
@@ -76,6 +82,8 @@ Two modes:
 - **rerank** - `query` + `pattern`: ripgrep finds every line matching the regex (three lines of context, optional `glob`), sgrep ranks only those passages by the query. A broad grep comes back as the few blocks that matter.
 
 Arguments: `query` (required), `path`, `pattern`, `glob`, `count`, `model` (`auto` | `code` | `text`; `text` for prose corpora). Chunks longer than 4000 bytes are cut with a `[... N more bytes - read_file for the rest]` marker. One run is bounded at 120 s and killed on cancel; the first run on a repository embeds it, later runs hit the index.
+
+Scope is the `path` argument (default cwd); there is no separate auto-scope mode. The automatic behaviour is the grep-to-sgrep routing above, plus the grep fallback below.
 
 When the binary is missing the tool answers through `grep` (the regex, or the query's identifiers as alternatives) and leads with `[sgrep not installed - searched with grep instead. Install: …]`, so a model that leads with `sgrep` never wastes the call. The system prompt tells every model to lead with `sgrep` for intent queries and unfamiliar code, `grep` for an exact identifier or regex, `glob` for file names.
 
@@ -103,11 +111,13 @@ Find files by name or glob. Uses `rg --files` when available, with the same excl
 
 ## Edit tools
 
-All four share one commit path: the new contents are written to a temp file and renamed into place (never a half-written file), the file's line endings are kept (a CRLF file stays CRLF), and the bytes written are remembered so the next edit chains without a re-read. If a file the model has read was changed since (formatter, shell command, user, subagent), the edit is refused with `changed since you last read it` until the model reads it again; files the session never read are not checked, so creating files and editing on instruction keep working. `/undo` restores the pre-edit snapshot only while the file still holds that edit; once something else changed it, undo refuses rather than discard the later work.
+All five share one commit path: the new contents are written to a temp file and renamed into place (never a half-written file), the file's line endings are kept (a CRLF file stays CRLF), and the bytes written are remembered so the next edit chains without a re-read. If a file the model has read was changed since (formatter, shell command, user, subagent), the edit is refused with `changed since you last read it` until the model reads it again; files the session never read are not checked, so creating files and editing on instruction keep working. `/undo` restores the pre-edit snapshot only while the file still holds that edit; once something else changed it, undo refuses rather than discard the later work.
 
 ### `write_file`
 
 Write content to a file. Creates the file if it doesn't exist, overwrites if it does.
+
+Rank the edit tools by job: `edit_file` for one exact replacement, `multi_edit` for several replacements in one file, `apply_patch` for multi-hunk or multi-file changes, `hashline_edit` for line-number changes after a read.
 
 ### `edit_file`
 
@@ -352,7 +362,7 @@ Search vector memory.
 ### `mem`
 
 One intent-routed entry point over native hierarchical memory, the local vector
-index, the knowledge graph, and optional HelixDB acceleration. Use `read` and
+index, the knowledge graph, and optional HelixDB acceleration. This is the first memory tool to reach for: use `mem` for recall or writes across systems, and use `plur`, `ruflo`, `optmem`, and `connectome` directly only for store maintenance or when `mem` names a specific backend. Use `read` and
 `write` for normal recall/storage, `vector` or `graph` for direct inspection,
 and `helix_status` / `helix_sync` to diagnose or reconcile a configured Helix
 resident. Helix mirroring is local-first and never replaces the native archive.
@@ -650,13 +660,14 @@ no filesystem, network, timer or process bindings, so the tool bridge is the
 only way out. The bridge admits a nested call only when the permission layer
 classifies it as read-only (the same `is_read_only` rule the approval gate and
 the parallel batch use, not a second allowlist), and never `codemode`, `agent`,
-`question`, `submit_plan`, `message`, `admission`, `bg` or `fractal`. A
+`question`, `secret`, `submit_plan`, `message`, `admission`, `bg`, `fractal` or `omp`. A
 script therefore cannot write a file, run a shell command or spawn a subagent;
 `codemode` itself is classified read-only, so it is free in plan mode and needs
 no approval in manual mode. Limits: 64 nested calls per script, 1 MB of printed
 output, 256 KB per stored value (1 MB per session), ten million loop iterations
 and a 400-deep call stack. Use `tools.parallel([{tool, args}, ...])` to run a
-read-only batch concurrently and receive results in order. Subagents can use
+read-only batch concurrently and receive results in order. Plain `tools.<name>()`
+calls inside a script run one after another; `Promise.all` does not overlap them. Subagents can use
 the same read-only bridge.
 Cargo feature `codemode` (default on). E2E scenario 32.
 

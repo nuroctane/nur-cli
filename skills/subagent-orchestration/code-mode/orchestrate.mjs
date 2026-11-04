@@ -7,7 +7,8 @@
 //
 // Two backends:
 //   native -> `nur run -y <prompt>`  (one headless native agent turn)
-//   omp    -> `omp --mode json ... -p <prompt>`  (Oh My Pi, LSP-wired edits)
+//   omp    -> `omp --mode json ... -p <prompt>`  (external Oh My Pi CLI, LSP-wired edits;
+//             no nur omp tool exists, so this backend requires the CLI on PATH)
 //
 // Run:  bun orchestrate.mjs   (or: node orchestrate.mjs)
 // Edit the TASKS array and the phase wiring below for your job.

@@ -2133,7 +2133,8 @@ impl AgentRunner {
             // wall time that made the model ask for several in the first
             // place. Approval is still collected up front, one prompt at a
             // time, so the user is never raced by parallel children.
-            if calls[idx].name == "agent" && !self.is_subagent {
+            if calls[idx].name == "agent" && self.subagent_depth < self.config.subagent_depth.max(1)
+            {
                 let mut batch_end = idx + 1;
                 while batch_end < calls.len() && calls[batch_end].name == "agent" {
                     batch_end += 1;
@@ -2283,9 +2284,13 @@ impl AgentRunner {
                 // not dispatched. Reported as the tool's own output.
                 (reason.clone(), true)
             } else if call.name == "agent" {
-                if self.is_subagent {
+                if self.subagent_depth >= self.config.subagent_depth.max(1) {
                     (
-                        "error: nested subagents are not allowed (depth limit)".into(),
+                        format!(
+                            "error: nested subagents are not allowed (depth {} >= max {}) - raise config.subagent_depth to allow deeper recursion",
+                            self.subagent_depth,
+                            self.config.subagent_depth.max(1)
+                        ),
                         false,
                     )
                 } else {
@@ -6784,6 +6789,15 @@ impl ChildSpawn {
         parent_session: &str,
         call: &FunctionCallRef,
     ) -> Result<Self> {
+        // The `agent` tool never reaches ToolHost::dispatch (the loop
+        // intercepts it), so the core-profile dispatch refusal cannot catch
+        // it. Refuse it here, in the one place both the sequential and
+        // fan-out paths pass through, with the same message dispatch uses.
+        if runner.config.tools.is_core() {
+            return Err(NurError::Tool(
+                "tool 'agent' is not part of the core tool profile ([tools] profile = \"full\" enables it)".into(),
+            ));
+        }
         let args: Value = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
         let worktree = match args.get("worktree") {
             None => None,

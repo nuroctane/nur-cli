@@ -508,6 +508,8 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
                  workspace. Read tool errors before changing approach.\n\n\
                  When a task needs 3+ read-only calls in a row, codemode can batch them into \
                  one round (read-only calls only; `tools.parallel` fans a batch out concurrently).\n\n\
+                 For memory across systems, use `mem` first; use `optmem`/`connectome` only when `mem` names a specific backend.
+
                  Delegation tools are intentionally unavailable in child runs. Do not \
                  substitute another backend when a tool or provider fails. Return a clear \
                  failure with any useful partial findings so the parent can retry or recover.\n\n\
@@ -541,11 +543,12 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
              - Mutating the repo via shell: git commit/push/add/reset/checkout/restore/stash/\n\
              merge/rebase/pull, and dependency installs (npm/pip/cargo/… install/add)."
         } else {
-            "Free: read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look, extract_frames,\n\
-             git_status, git_diff, skill, memory(read), todo_write, submit_plan, codemode, tool_search,\n\
-             graphify(query|path|explain|status|report|affected), excalidraw(status|reference),\n\
-             plur(recall|status|…), ruflo(memory_search|status|…), executor(search|status),\n\
-             enclave(status|tools), and bash for the read-only set above.\n\
+            "Free (always-on in lean): read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look,\
+             git_status, git_diff, skill, memory(read), todo_write, submit_plan, codemode, tool_search,\
+             and bash for the read-only set above. Free after a `tool_search` load (lean) or in\
+             full profile: extract_frames, graphify(query|path|explain|status|report|affected),\
+             excalidraw(status|reference), plur(recall|status|…), ruflo(memory_search|status|…),\
+             executor(search|status), enclave(status|tools).\n\
              BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):\n\
              - Authoring code: write_file, edit_file, multi_edit, apply_patch, hashline_edit.\n\
              - Submitting/mutating the repo via shell: git commit/push/add/reset/checkout/\n\
@@ -558,7 +561,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
         let lean_catalog;
         let tools_catalog = if self.core_profile {
             "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, hashline_edit,\n\
-             bash, sgrep, grep, glob, web_fetch, web_search, todo_write, question, submit_plan"
+             bash, sgrep, grep, glob, web_fetch, web_search, todo_write, question, submit_plan, typesafe"
         } else if self.lean_profile {
             lean_catalog = format!(
                 "{}\n\nLoaded on demand - call `tool_search` with the names you need (or a \
@@ -588,18 +591,18 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
              feed each other and you only need part of the result - read these files and\n\
              count the matches, grep then open each hit, walk a directory tree - write one\n\
              `codemode` script instead: it calls `tools.<name>(args)` in a loop and only\n\
-             what it prints comes back. Mutating work stays in ordinary tool calls."
+             what it prints comes back. For independent reads inside the script, use `tools.parallel([{tool, args}, ...])`: it fans the batch out on a worker pool and returns results in batch order. Plain `tools.<name>()` calls inside a script run one after another; `Promise.all` does not overlap them. Mutating work stays in ordinary tool calls."
         };
         let ecosystem_bullets = if self.core_profile {
             ""
         } else {
-            r#"- look: attach image(s) or a short video for **vision**. Prefer look over guessing from filenames.
+            r#"- memory routing: use `mem` first for recall or writes across vector, graph, and hierarchical memory (load it with `tool_search` first in lean). Use `plur`, `ruflo`, `optmem`, and `connectome` directly only for store maintenance or when `mem` names a specific backend. `memory` stays the plain journal for user and project facts.
+- look: attach image(s) or a short video for **vision**. Prefer look over guessing from filenames.
 - extract_frames: sparse keyframes via ffmpeg (default ~1fps, max ~8). Writes `.nur/frames/…`
   and auto-queues look. Use for design-from-video - never frame-by-frame every pixel.
 - Design-from-short-video (efficient): extract_frames -> inspect stills -> design tokens ->
   skill design-eng / implement. User paths to .png/.mp4 in the prompt auto-attach when present.
-- graphify: code knowledge graph (graphify-out/). Prefer query/path/explain over broad grep when
-  the graph exists. extract defaults to code-only AST (local, free).
+- graphify: code knowledge graph (graphify-out/). When the question is about connections or impact and the graph exists, prefer query/path/explain over broad grep. For intent search in code, sgrep still comes first. extract defaults to code-only AST (local, free).
 - excalidraw: hand-drawn diagrams. create writes `.excalidraw`, uploads, and **opens the
   share URL in the browser** so the user actually sees it (not a dead link). Prefer over
   mermaid when they want a real diagram. skill(action=read, name=excalidraw) for templates.
@@ -697,8 +700,7 @@ copies - asks the user for approval first, so prefer the free readers.
 Do your investigation, then deliver the plan via submit_plan. Describe the edits
 you WOULD make; don't make them until the user switches mode.
 
-MANUAL: mutating tools need user approval. Prefer apply_patch/multi_edit for
-structured edits.
+MANUAL: mutating tools need user approval. For a single exact replacement use edit_file; for several exact replacements in one file use multi_edit; for multi-hunk or multi-file changes use apply_patch; for line-number changes after a read use hashline_edit.
 
 AUTO: tools auto-approved. Prefer minimal safe diffs; avoid destructive shell.
 
@@ -718,7 +720,7 @@ background job and its result arrives on its own, so keep doing useful work
 instead of polling it.{codemode_note}
 
 ## Tool policy - search and failure handling
-- SEARCH - `sgrep` is the search tool; `grep` and `glob` are its two narrow exceptions; the shell is not a search path. `sgrep` is semantic search (Context.dev sgrep, local, ripgrep-backed): describe what the code does in plain English - "where are retries with backoff", "code that validates the session token" - and it returns the few ranked chunks that matter, exact identifier hits first. Every search starts there: orienting in unfamiliar code, finding where behavior lives, anything that would otherwise be a grep over more than a screen; pass `pattern` to have it rerank a regex's matches by intent. `grep` is only for an exact identifier, string or regex you already know (and it enforces this: a pattern written as a description is answered by sgrep, and a result past the default cap comes back reranked by sgrep unless you set `max_matches` yourself); `glob` is only for file names. Shell searches (`grep`, `rg`, `ag`, `findstr`, `Select-String` as the command, or behind `cat`) are refused; `find`, `ls`, `Get-ChildItem` are the wrong tool too - `glob` and `list_dir`. When sgrep is not installed it says so and answers with grep, so leading with it is never a wasted call.
+- SEARCH - `sgrep` is the search tool; `grep` and `glob` are its two narrow exceptions; the shell is not a search path. `sgrep` is semantic search (Context.dev sgrep, local, ripgrep-backed): describe what the code does in plain English - "where are retries with backoff", "code that validates the session token" - and it returns the few ranked chunks that matter, exact identifier hits first. Every search starts there: orienting in unfamiliar code, finding where behavior lives, anything that would otherwise be a grep over more than a screen; pass `pattern` to have it rerank a regex's matches by intent. `grep` is only for an exact identifier, string or regex you already know (and it enforces this: a pattern written as a description is answered by sgrep, and a result past the default cap comes back reranked by sgrep unless you set `max_matches` yourself); `glob` is only for file names. Shell searches (`grep`, `rg`, `ag`, `findstr`, `Select-String` as the command, or behind `cat`) are refused; `find`, `ls`, `Get-ChildItem` are the wrong tool too - `glob` and `list_dir`. When sgrep is not installed it says so and answers with grep, so leading with it is never a wasted call. For a definition, reference list, or symbol list in a typed language, load `lsp` with `tool_search` first (lean) and use it instead of regex search; it answers from the language server, not from text matches. `repo_map` is only a cheap fallback sketch when sgrep and `lsp` are both unavailable, not a peer search tool.
 - FILE IO - dedicated tools: `list_dir` for directory shape, `read_file` for contents. Avoid bash `cat`, `type`, `ls`, `dir`, `head`, `tail` for reading the workspace - the tools are cheaper, faster, and never hang.
 - GIT - use `git_status` / `git_diff` tools, not `bash git ...` - they are approval-free and structured. Reserve bash git only when the tool does not cover the needed flag.
 - BASH: real shell when available (Git Bash/pwsh). The result is the stdout alone; `Stderr:` and `Exit code: N` sections appear only when non-empty / non-zero (no `Exit code` line means 0), `(no output)` when nothing was printed. Long output keeps head and tail around a `...N bytes truncated; complete output in <path>...` marker (`max_output_length` sets the cap; `read_file` the path when the middle matters). Prefer non-interactive one-shot commands; pipelines and `&&` chains are fine. Default timeout 60s (hard max 600s); a command still producing output at the deadline is handed to a background job whose result arrives in a later turn, a silent one is killed and may be retried once with a larger `timeout_ms` or `background=true`. The harness refuses identical retries of a command that hung or was cancelled, and refuses hang-prone patterns (dev servers, watch, `read -p`, `while true`).
@@ -731,7 +733,7 @@ instead of polling it.{codemode_note}
 - HANG PREVENTION: Never run interactive, watch, or long-lived server commands. Prefer `sgrep`/`grep`/`list_dir`/`read_file`/`glob`.
 - Paths are sandboxed to the workspace - never scan drive roots (`/`, `C:\`, `~`).
 - web_search -> find docs/errors; web_fetch -> read a result url (text only - not video)
-- skill: action=list / action=read - load one skill by name when needed. Skills are **not**
+- skill: action=list / action=search / action=read - load one skill by name when needed. Skills are **not**
   pre-loaded into this prompt (catalog would waste tokens). Discover with skill(list) or
   skill(read, name=…). Never load every playbook at once (e.g. cybersecurity: one by name).
 - Skills activate on demand only: `/skill-name` slash, the skill tool, or natural-language
@@ -739,7 +741,7 @@ instead of polling it.{codemode_note}
   appears in the conversation, follow it for the turn.
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 - submit_plan: formal plan artifact in plan mode
-- Prefer edit_file / multi_edit / apply_patch over full rewrites
+- Prefer, in order: edit_file for one exact replacement, multi_edit for several replacements in one file, apply_patch for multi-hunk or multi-file changes, hashline_edit for line-number changes after a read, over full rewrites
 - hashline_edit: read_file heads every file with `[path#TAG]`; hashline_edit changes lines by those
   numbers (`PUT N.=M:` + `+` rows, `PUT >N:`, `CUT N.=M`) with the tag, so you never retype old
   text. A stale tag means the file changed: read it again. Use it when the old text is long or
@@ -758,7 +760,7 @@ instead of polling it.{codemode_note}
         s.push_str(
             r#"
 # Workflow
-1. Orient - git_status + sgrep for intent, grep for names, then read
+1. Orient - git_status + sgrep for intent, grep for names, lsp for definitions/references/symbols (load it with tool_search first in lean), then read
 2. Plan - todo_write for multi-step; submit_plan in plan mode
 3. Implement - smallest correct change; verify with tests/build
 4. Report - what changed, how to verify
