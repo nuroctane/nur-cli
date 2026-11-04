@@ -520,6 +520,92 @@
       "files": [
         "SKILL.md"
       ]
+    },
+    {
+      "name": "skill-authoring",
+      "source": "skills/skill-authoring",
+      "files": [
+        "SKILL.md",
+        "scripts/lint_skill.py"
+      ]
+    },
+    {
+      "name": "show-me-the-bug",
+      "source": "skills/show-me-the-bug",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "security-audit",
+      "source": "skills/security-audit",
+      "files": [
+        "SKILL.md",
+        "scripts/validate_findings.py"
+      ]
+    },
+    {
+      "name": "debug",
+      "source": "skills/debug",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "regression-guard",
+      "source": "skills/regression-guard",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "research-spike",
+      "source": "skills/research-spike",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "setup-repo",
+      "source": "skills/setup-repo",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "deploy-check",
+      "source": "skills/deploy-check",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "walk-the-issues",
+      "source": "skills/walk-the-issues",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "ux-flow",
+      "source": "skills/ux-flow",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "desloppify",
+      "source": "skills/desloppify",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "lightpanda",
+      "source": "skills/lightpanda",
+      "files": [
+        "SKILL.md"
+      ]
     }
   ]
 }

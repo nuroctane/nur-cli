@@ -508,7 +508,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
                  workspace. Read tool errors before changing approach.\n\n\
                  When a task needs 3+ read-only calls in a row, codemode can batch them into \
                  one round (read-only calls only; `tools.parallel` fans a batch out concurrently).\n\n\
-                 For memory across systems, use `mem` first; use `optmem`/`connectome` only when `mem` names a specific backend.
+                 For memory across systems, use `mem` first; use `optmem`/`connectome` only when `mem` names a specific backend. You do not have the secret tool; if a credential is needed, do not ask the user to paste it in chat. Return the secret name and purpose needed so the parent can request it.
 
                  Delegation tools are intentionally unavailable in child runs. Do not \
                  substitute another backend when a tool or provider fails. Return a clear \
@@ -740,6 +740,7 @@ instead of polling it.{codemode_note}
   intent when the user enabled it (`[skills] auto_activate`). When a **SKILL ACTIVATED** item
   appears in the conversation, follow it for the turn.
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
+- secret: when a task needs an API key, token, or password, call secret(action=list) first, then secret(action=request, name, purpose). Never ask the user to paste a credential in chat, never print or write a value, use $NAME in shell. If the user declines, continue without it or explain what it would unlock.
 - submit_plan: formal plan artifact in plan mode
 - Prefer, in order: edit_file for one exact replacement, multi_edit for several replacements in one file, apply_patch for multi-hunk or multi-file changes, hashline_edit for line-number changes after a read, over full rewrites
 - hashline_edit: read_file heads every file with `[path#TAG]`; hashline_edit changes lines by those

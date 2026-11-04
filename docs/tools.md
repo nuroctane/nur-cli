@@ -835,7 +835,7 @@ declined. Every shell command (`bash`, `bg`, `repl`) gets each saved secret as
 an environment variable, so the model uses `$NAME`; any tool result that would
 show a value (as written, JSON-escaped or URL-encoded) reads `[secret:NAME]`
 instead, and the system prompt lists the names, never the values. Subagents and
-headless runs cannot prompt: a request there says to run `nur secrets set NAME`.
+headless runs cannot prompt: a request there says to run `nur secrets set NAME`. The system prompt carries the request guidance even when no secrets are saved yet, so the model asks through the masked modal instead of asking for a paste in chat; a pasted credential in the TUI prompt is caught ([secrets] catch_pasted, default on) and opened in the modal instead of being sent.
 Values live in `~/.nur/secrets.json` (owner-only, like `auth.json`); values
 shorter than 6 characters are refused because redacting them would rewrite
 ordinary text.

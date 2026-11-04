@@ -321,11 +321,23 @@ pub fn scrub(text: &str) -> String {
     out
 }
 
-/// The line the system prompt carries: secret names only.
+/// The line the system prompt carries: secret names only when any are saved,
+/// and the request guidance always, so a model with no secrets saved yet
+/// still knows to ask through the masked modal instead of asking the user
+/// to paste a credential in chat.
 pub fn prompt_note() -> Option<String> {
     let pairs = current();
     if pairs.is_empty() {
-        return None;
+        return Some(
+            "No secrets saved yet. When a task needs an API key, token, or password, call the \
+             `secret` tool (action list first, then action request with a name like GITHUB_TOKEN \
+             and a one-line purpose) instead of asking the user to paste it in chat. Never print, \
+             echo, or write a value into a file; use it by name ($NAME) in shell commands. If the \
+             user declines, continue without it or explain what it would unlock. Subagents cannot \
+             request secrets: a child that needs one must return the name and purpose so the \
+             parent can request it."
+                .into(),
+        );
     }
     let names: Vec<String> = pairs.iter().map(|(name, _)| format!("${name}")).collect();
     Some(format!(

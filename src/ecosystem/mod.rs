@@ -128,6 +128,12 @@ pub struct EcosystemStatus {
     /// penecho - canvas beyond the chat box (npm AGPL sidecar).
     #[serde(default)]
     pub penecho: ComponentStatus,
+    /// lightpanda - headless browser for AI agents (detect-only; AGPL).
+    #[serde(default)]
+    pub lightpanda: ComponentStatus,
+    /// desloppify - codebase health scanner with a persistent queue (detect-only).
+    #[serde(default)]
+    pub desloppify: ComponentStatus,
     /// terminal-browser - in-terminal Chromium (native/WSL) or Windows-host fallback.
     #[serde(default)]
     pub terminal_browser: ComponentStatus,
@@ -149,7 +155,7 @@ impl EcosystemStatus {
             }
         };
         format!(
-            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
+            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
             bit(self.sgrep.available, "sgrep"),
             bit(self.graphify.available, "graphify"),
             bit(self.plur.available, "plur"),
@@ -169,6 +175,8 @@ impl EcosystemStatus {
             bit(self.egaki.available, "egaki"),
             bit(self.fractal.available, "fractal"),
             bit(self.penecho.available, "penecho"),
+            bit(self.lightpanda.available, "lightpanda"),
+            bit(self.desloppify.available, "desloppify"),
             if self.packs_installed.is_empty() {
                 "…".into()
             } else {
@@ -180,7 +188,7 @@ impl EcosystemStatus {
     pub fn report(&self) -> String {
         let mut s = String::from("Nur ecosystem (auto-provisioned on install / open)\n");
         // Fixed names so older ecosystem.json markers (pre-field) still list every slot.
-        let comps: [(&str, &ComponentStatus); 20] = [
+        let comps: [(&str, &ComponentStatus); 22] = [
             ("sgrep", &self.sgrep),
             ("graphify", &self.graphify),
             ("plur", &self.plur),
@@ -201,6 +209,8 @@ impl EcosystemStatus {
             ("egaki", &self.egaki),
             ("fractal", &self.fractal),
             ("penecho", &self.penecho),
+            ("lightpanda", &self.lightpanda),
+            ("desloppify", &self.desloppify),
         ];
         for (fallback_name, c) in comps {
             let name = if c.name.is_empty() {
@@ -375,6 +385,8 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
             let h_fractal = s.spawn(|| std::panic::catch_unwind(ensure_fractal));
             let h_cua = s.spawn(|| std::panic::catch_unwind(ensure_cua));
             let h_akarso = s.spawn(move || std::panic::catch_unwind(|| ensure_akarso(node_ok)));
+            let h_lightpanda = s.spawn(|| std::panic::catch_unwind(packs::ensure_lightpanda));
+            let h_desloppify = s.spawn(|| std::panic::catch_unwind(packs::ensure_desloppify));
 
             (
                 h_graphify.join(),
@@ -397,6 +409,8 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
                 h_fractal.join(),
                 h_cua.join(),
                 h_akarso.join(),
+                h_lightpanda.join(),
+                h_desloppify.join(),
             )
         });
 
@@ -414,7 +428,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
                 }
             };
         }
-        let (g, p, r, sc, ak, ex, om, gj, br, tb, ed, pe, hr, op, dg, sg, eg, fr, cu, akr) = res;
+        let (g, p, r, sc, ak, ex, om, gj, br, tb, ed, pe, hr, op, dg, sg, eg, fr, cu, akr, lp, ds) = res;
         set_component!(status.graphify, g, "graphify");
         set_component!(status.plur, p, "plur");
         set_component!(status.ruflo, r, "ruflo");
@@ -435,6 +449,8 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
         set_component!(status.fractal, fr, "fractal");
         set_component!(status.cua, cu, "cua");
         set_component!(status.akarso, akr, "akarso");
+        set_component!(status.lightpanda, lp, "lightpanda");
+        set_component!(status.desloppify, ds, "desloppify");
     }
 
     // tldraw offline desktop app (official) - best-effort auto-install so `/draw`

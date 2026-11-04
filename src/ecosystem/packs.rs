@@ -319,6 +319,48 @@ pub fn ensure_omp() -> ComponentStatus {
     c
 }
 
+/// Lightpanda is detected, never installed or embedded: nur-cli's own
+/// `browser` tool drives the user's real Chrome session, so this only
+/// reports whether a lightpanda binary already exists on the machine
+/// (AGPL; clean-room browser via MCP/CDP/fetch; no native Windows binary).
+pub fn ensure_lightpanda() -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "lightpanda".into(),
+        ..Default::default()
+    };
+    match find_bin("lightpanda") {
+        Some(bin) => {
+            c.available = true;
+            c.version = super::cmd_version_pub(&bin, &["--version"]);
+            c.path = Some(bin);
+            c.detail = "found (external, AGPL; clean-room browser via MCP/CDP/fetch; telemetry on by default)".into();
+        }
+        None => c.detail = "not installed (brew install lightpanda-io/browser/lightpanda, or inside WSL on Windows)".into(),
+    }
+    c
+}
+
+/// Desloppify is detected, never installed: nur-cli's own `slop_scan`
+/// tool covers the overlapping signals natively, so this only reports
+/// whether a desloppify binary already exists on the machine, for the
+/// persistent cleanup queue and the signals slop_scan lacks.
+pub fn ensure_desloppify() -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "desloppify".into(),
+        ..Default::default()
+    };
+    match find_bin("desloppify") {
+        Some(bin) => {
+            c.available = true;
+            c.version = super::cmd_version_pub(&bin, &["--version"]);
+            c.path = Some(bin);
+            c.detail = "found (external; persistent cleanup queue; state in .desloppify/)".into();
+        }
+        None => c.detail = "not installed (pip install \"desloppify[full]\")".into(),
+    }
+    c
+}
+
 // omp 18 (can1357/oh-my-pi) feature floor, kept for the availability check.
 const OMP_FEATURE_FLOOR: (u64, u64, u64) = (18, 4, 4);
 
