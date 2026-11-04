@@ -13,7 +13,8 @@
   "expect": {
     "exit_code": 0,
     "requests": 5,
-    "tool_results": [{"request": 2, "contains": ["writer1", "branch"]}, {"request": 4, "contains": ["writer1", "note.txt"]}],
+    "tool_results": [{"request": 2, "contains": ["writer1", "branch"]}, {"request": 4, "contains": ["note.txt"]}],
+    "worktree_files": [{"worktree": "writer1", "path": "note.txt", "contents": "changed\n"}],
     "files": {"note.txt": "original\n"},
     "stdout_contains": ["The isolated edit is ready."]
   }

@@ -718,6 +718,12 @@ def run_scenario(binary, scenario_path):
         mcp_log = tmp / "mcp.jsonl"
         mcp_requests = [json.loads(line) for line in mcp_log.read_text(encoding="utf-8").splitlines() if line] if mcp_log.exists() else []
         failures = setup_failures + check(scenario, result, workspace, requests, mcp_requests)
+        for item in scenario.get("expect", {}).get("worktree_files", []):
+            matches = list((nur_home / "worktrees").glob(f"*/{item['worktree']}/{item['path']}"))
+            if len(matches) != 1:
+                failures.append(f"expected one isolated worktree file {item['worktree']}/{item['path']}, found {len(matches)}")
+            elif matches[0].read_text(encoding="utf-8") != item["contents"]:
+                failures.append(f"unexpected contents in isolated worktree file {item['worktree']}/{item['path']}")
         if host_socket:
             try:
                 connection, _ = host_socket.accept()
