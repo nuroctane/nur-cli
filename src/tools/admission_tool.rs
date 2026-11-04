@@ -8,13 +8,6 @@ use serde_json::Value;
 
 pub struct AdmissionTool;
 
-fn session_id() -> String {
-    std::env::var("NUR_SESSION_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "default".into())
-}
-
 impl Tool for AdmissionTool {
     fn name(&self) -> &str {
         "admission"
@@ -39,12 +32,12 @@ impl Tool for AdmissionTool {
         })
     }
 
-    fn execute(&self, args: &Value, _ctx: &ToolContext) -> Result<String> {
+    fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let action = arg_str(args, "action")?;
-        let sid = session_id();
+        let sid = &ctx.session_id;
         match action.as_str() {
             "list" => {
-                let list = admission::list(&sid);
+                let list = admission::list(sid);
                 if list.is_empty() {
                     return Ok("no admitted subagents in this session".into());
                 }
@@ -62,7 +55,7 @@ impl Tool for AdmissionTool {
             "get" => {
                 let id = arg_u64(args, "id")
                     .ok_or_else(|| NurError::Tool("id required for get".into()))?;
-                match admission::get(&sid, id) {
+                match admission::get(sid, id) {
                     Some(a) => Ok(admission::render(&a)),
                     None => Err(NurError::Tool(format!(
                         "no admission #{id} in this session (list to see handles)"
@@ -74,7 +67,7 @@ impl Tool for AdmissionTool {
                 // get/list existed, so a model that followed either got an
                 // unknown-action error. Rendered in full, oldest first, so a fan-out
                 // can be read in one call instead of polling every handle.
-                let mut list = admission::list(&sid);
+                let mut list = admission::list(sid);
                 if list.is_empty() {
                     return Ok("no admitted subagents in this session".into());
                 }
@@ -89,5 +82,37 @@ impl Tool for AdmissionTool {
                 "unknown admission action `{other}`; use get, list or all"
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admission_lookup_uses_the_calling_session() {
+        if admission::isolated_test(
+            "tools::admission_tool::tests::admission_lookup_uses_the_calling_session",
+        ) {
+            return;
+        }
+        let session_id = format!("test-{}", uuid::Uuid::new_v4());
+        let id = admission::admit(&session_id, "isolated child");
+        let ctx = ToolContext {
+            cwd: std::path::PathBuf::from("."),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            session_id,
+        };
+        let result = AdmissionTool
+            .execute(&serde_json::json!({"action":"get", "id":id}), &ctx)
+            .unwrap();
+        assert!(result.contains("isolated child"), "{result}");
+        let other = ToolContext {
+            session_id: format!("other-{}", uuid::Uuid::new_v4()),
+            ..ctx
+        };
+        assert!(AdmissionTool
+            .execute(&serde_json::json!({"action":"get", "id":id}), &other)
+            .is_err());
     }
 }

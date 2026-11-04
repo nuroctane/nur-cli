@@ -1,0 +1,20 @@
+{
+  "description": "A native worktree isolates a writer from the parent checkout.",
+  "setup_git": true,
+  "setup_files": {"note.txt": "original\n"},
+  "prompt": "Create an isolated worktree named writer1 and have a child edit note.txt there.",
+  "script": [
+    {"tool_calls": [{"name": "worktree", "arguments": {"action": "create", "name": "writer1"}}]},
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Edit in isolation", "prompt": "Write changed into note.txt.", "subagent_type": "general", "worktree": "writer1"}}]},
+    {"tool_calls": [{"name": "write_file", "arguments": {"path": "note.txt", "contents": "changed\n"}}]},
+    {"text": "Child edited the isolated worktree."},
+    {"text": "The isolated edit is ready."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 5,
+    "tool_results": [{"request": 2, "contains": ["writer1", "branch"]}, {"request": 4, "contains": ["writer1", "note.txt"]}],
+    "files": {"note.txt": "original\n"},
+    "stdout_contains": ["The isolated edit is ready."]
+  }
+}

@@ -841,6 +841,10 @@ impl ApiClient {
             && self.style == ApiStyle::Responses
     }
 
+    pub(crate) fn uses_oauth_session(&self) -> bool {
+        self.oauth.is_some()
+    }
+
     /// Whether this exact credential-backed route accepts an output ceiling.
     ///
     /// The public OpenAI Responses API supports `max_output_tokens`, but the

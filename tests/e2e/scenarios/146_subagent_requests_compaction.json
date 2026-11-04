@@ -1,0 +1,19 @@
+{
+  "description": "A child model requests compaction and resumes its own turn.",
+  "prompt": "Have a child compact its session and report back.",
+  "setup_home_files": {"config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[typesafe]\nenabled = false\n"},
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Compact child session", "prompt": "Compact your session then report the result.", "subagent_type": "general"}}]},
+    {"tool_calls": [{"name": "typesafe", "arguments": {"action": "compact"}}]},
+    {"text": "Child session summary."},
+    {"text": "Child resumed after compaction."},
+    {"text": "The child completed compaction."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 5,
+    "request_contains": [{"request": 3, "contains": ["Summarize this conversation"]}, {"request": 4, "contains": ["Child session summary", "[compact:"]}],
+    "tool_results": [{"request": 5, "contains": ["Child resumed after compaction."]}],
+    "stdout_contains": ["The child completed compaction."]
+  }
+}

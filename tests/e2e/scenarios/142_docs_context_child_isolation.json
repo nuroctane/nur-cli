@@ -1,0 +1,20 @@
+{
+  "description": "A child cannot pack a parent context variable that was not handed over.",
+  "prompt": "Register two documents and ask a child to pack them, sharing only one.",
+  "script": [
+    {"tool_calls": [
+      {"name": "context", "arguments": {"action": "register", "name": "shared_guide", "content": "Shared document."}},
+      {"name": "context", "arguments": {"action": "register", "name": "private_guide", "content": "PRIVATE_DOCUMENT_42"}}
+    ]},
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Pack docs", "prompt": "Pack shared_guide and private_guide.", "subagent_type": "explore", "context_vars": ["shared_guide"]}}]},
+    {"tool_calls": [{"name": "context", "arguments": {"action": "pack", "names": ["shared_guide", "private_guide"], "token_budget": 240}}]},
+    {"text": "The private document is unavailable."},
+    {"text": "The child could not access the private document."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 5,
+    "tool_results": [{"request": 4, "contains": ["unknown context var `private_guide`"], "lacks": ["PRIVATE_DOCUMENT_42"]}],
+    "stdout_contains": ["The child could not access the private document."]
+  }
+}

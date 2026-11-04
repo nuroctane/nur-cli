@@ -321,7 +321,6 @@ pub fn ensure_omp() -> ComponentStatus {
 
 // omp 18 (can1357/oh-my-pi) feature floor, kept for the availability check.
 const OMP_FEATURE_FLOOR: (u64, u64, u64) = (18, 4, 4);
-const BUN_OMP_FLOOR: (u64, u64, u64) = (1, 3, 14);
 
 /// Prefer the newest omp among Bun global, official Local install, and PATH.
 pub(crate) fn best_omp() -> Option<(String, String)> {
@@ -387,10 +386,6 @@ pub(crate) fn best_omp() -> Option<(String, String)> {
     }
 
     best.map(|(path, ver, _)| (path, ver))
-}
-
-fn bun_meets_omp_floor(version: &str) -> bool {
-    version_meets_floor(version, BUN_OMP_FLOOR)
 }
 
 fn omp_meets_feature_floor(version: &str) -> bool {
@@ -1098,15 +1093,7 @@ akm install <package>
 
 #[cfg(test)]
 mod tests {
-    use super::{bun_meets_omp_floor, mirror_missing_tree, omp_meets_feature_floor, SKILL_PACKS};
-
-    #[test]
-    fn omp_bun_floor_is_enforced() {
-        assert!(!bun_meets_omp_floor("1.3.13"));
-        assert!(bun_meets_omp_floor("1.3.14"));
-        assert!(bun_meets_omp_floor("2.0.0"));
-        assert!(!bun_meets_omp_floor("unknown"));
-    }
+    use super::{mirror_missing_tree, omp_meets_feature_floor, SKILL_PACKS};
 
     #[test]
     fn omp_feature_floor_is_enforced() {

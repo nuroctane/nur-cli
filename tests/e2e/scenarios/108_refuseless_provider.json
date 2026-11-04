@@ -1,0 +1,39 @@
+{
+  "description": "Refuseless authenticates by its own key and uses OpenAI chat completions through a custom base.",
+  "provider": "refuseless",
+  "model": "glm-5.3-abliterated",
+  "env": {
+    "REFUSELESS_API_KEY": "e2e-refuseless-key"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"refuseless\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"glm-5.3-abliterated\"\nreasoning_effort = \"medium\"\n"
+  },
+  "prompt": "Reply with PROVIDER_OK.",
+  "script": [
+    {
+      "text": "PROVIDER_OK"
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "stdout_contains": [
+      "PROVIDER_OK"
+    ],
+    "protocol": "chat/completions",
+    "headers": {
+      "present": [
+        "authorization"
+      ]
+    },
+    "requests": 1,
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "glm-5.3-abliterated",
+          "\"reasoning_effort\": \"high\""
+        ]
+      }
+    ]
+  }
+}

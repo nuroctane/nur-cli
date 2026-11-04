@@ -53,6 +53,7 @@ impl Tool for Lsp {
 
 /// Register `[lsp] servers` from config at startup (called once from main).
 pub fn init_from_config(cfg: &crate::config::LspConfig) {
+    crate::lsp::set_prewarm(cfg.prewarm);
     let mut map = std::collections::HashMap::new();
     for (ext, command) in &cfg.servers {
         // Simple whitespace split: LSP server commands are plain argv

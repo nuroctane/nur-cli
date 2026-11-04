@@ -1,0 +1,20 @@
+{
+  "description": "Native desktop snapshots and actions reach the executable without a shell or leaked provider key.",
+  "prompt": "Inspect Editor and type the given text into the selected field.",
+  "setup_native_desktop": true,
+  "env": {"NUR_AGENT_DESKTOP_BIN": "{workspace}/desktop_fixture.exe", "OPENAI_API_KEY": "e2e-provider-key"},
+  "script": [
+    {"tool_calls": [{"name": "desktop", "arguments": {"action": "snapshot", "app": "Editor"}}]},
+    {"tool_calls": [{"name": "desktop", "arguments": {"action": "set_value", "target": "@s123:e4", "text": "--headed & whoami"}}]},
+    {"text": "Desktop action checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "tool_results": [
+      {"request": 2, "contains": ["fixture:snapshot|--app=Editor|--compact:false"]},
+      {"request": 3, "contains": ["fixture:set-value|--|@s123:e4|--headed & whoami:false"]}
+    ],
+    "stdout_contains": ["Desktop action checked."]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "description": "The Linux sandbox permits workspace and private tmp writes but blocks a host Unix socket.",
+  "linux_only": true,
+  "requires_bwrap": true,
+  "setup_host_socket": true,
+  "prompt": "Run the sandbox verification command.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[sandbox]\nenabled = true\nmode = \"workspace-write\"\n"
+  },
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "test -S host.sock && test -S host-dgram.sock && echo written > sandbox-created.txt && touch /tmp/nur-test && (python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect(\"host.sock\")' && echo SOCKET_ESCAPED || echo SOCKET_BLOCKED) && (python3 -c 'import socket; a,b=socket.socketpair(socket.AF_UNIX,socket.SOCK_DGRAM); a.sendmsg([b\"escape\"],[],0,\"host-dgram.sock\")' && echo DGRAM_ESCAPED || echo DGRAM_BLOCKED) && (python3 -c 'import socket; a,b=socket.socketpair(socket.AF_UNIX,socket.SOCK_DGRAM); a.sendto(b\"escape\",\"host-dgram.sock\")' && echo SENDTO_ESCAPED || echo SENDTO_BLOCKED) && python3 -c 'import socket; a,b=socket.socketpair(); a.send(b\"ok\"); assert b.recv(2)==b\"ok\"' && echo IPC_OK"}}]},
+    {"text": "Sandbox checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": ["Sandbox checked."],
+    "tool_results": [{"request": 2, "contains": ["SOCKET_BLOCKED", "DGRAM_BLOCKED", "SENDTO_BLOCKED", "IPC_OK"], "lacks": ["SOCKET_ESCAPED", "DGRAM_ESCAPED", "SENDTO_ESCAPED"]}],
+    "files": {"sandbox-created.txt": "written\n"}
+  }
+}

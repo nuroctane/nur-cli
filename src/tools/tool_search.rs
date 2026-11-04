@@ -29,6 +29,7 @@ const LOADED_PREFIX: &str = "Loaded: ";
 /// session machinery the turn state refers to (todos, goal, background jobs,
 /// peer messages, context store), delegation, and this loader.
 pub const LEAN_ALWAYS_ON: &[&str] = &[
+    "typesafe",
     "read_file",
     "list_dir",
     "write_file",

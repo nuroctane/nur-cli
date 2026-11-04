@@ -126,7 +126,7 @@ impl Drop for ContextLink {
 /// Let `child` read the `shared` variables of `parent` while the returned
 /// link is held. An empty list shares nothing.
 pub fn link_child(child: &str, parent: &str, shared: &[String]) -> ContextLink {
-    if !child.is_empty() && !parent.is_empty() && child != parent && !shared.is_empty() {
+    if !child.is_empty() && !parent.is_empty() && child != parent {
         if let Ok(mut links) = lineage().lock() {
             links.insert(
                 child.to_string(),
@@ -140,6 +140,30 @@ pub fn link_child(child: &str, parent: &str, shared: &[String]) -> ContextLink {
     ContextLink {
         child: child.to_string(),
     }
+}
+
+/// Whether this session is an active child, even when it shares no variables.
+pub fn is_child(session_id: &str) -> bool {
+    lineage()
+        .lock()
+        .map(|links| links.contains_key(session_id))
+        .unwrap_or(false)
+}
+
+/// Capture the originating session while its child link is still alive.
+pub fn root_session(session_id: &str) -> String {
+    let Ok(links) = lineage().lock() else {
+        return session_id.to_string();
+    };
+    let mut current = session_id.to_string();
+    let mut seen = std::collections::HashSet::new();
+    while seen.insert(current.clone()) {
+        match links.get(&current) {
+            Some(link) if !seen.contains(&link.parent) => current = link.parent.clone(),
+            _ => break,
+        }
+    }
+    current
 }
 
 /// Ancestors `session_id` may read `name` from, nearest first: each hop must

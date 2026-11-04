@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 /// Events emitted while an agent turn runs.
 pub enum AgentEvent {
     Status(String),
+    ChildStatus { parent_session: String, status: String, finished: bool },
     ReasoningDelta(String),
     TextDelta(String),
     /// The model stream dropped after `discard` bytes of text had already been
@@ -61,6 +62,7 @@ pub enum AgentEvent {
     LoginRequired {
         provider_id: String,
         provider_name: String,
+        parent_session: Option<String>,
         /// The original subagent request that was blocked, so the TUI can
         /// faithfully re-deploy it verbatim once the user completes login
         /// (rather than relying on the model to reconstruct it from context).
@@ -94,9 +96,10 @@ pub enum AgentEvent {
         name: String,
         args: String,
         respond: oneshot::Sender<ApprovalDecision>,
+        parent_session: Option<String>,
     },
     /// The model asked the user a close-ended question (`question` tool).
-    /// The TUI shows a modal; headless runners answer `dismissed`.
+    /// Interactive clients answer; noninteractive runners dismiss it.
     QuestionRequest {
         turn_cancel: CancellationToken,
         question: String,
@@ -104,6 +107,7 @@ pub enum AgentEvent {
         options: Vec<(String, String)>,
         multi_select: bool,
         respond: oneshot::Sender<QuestionAnswer>,
+        parent_session: Option<String>,
     },
     Usage {
         session: TokenUsage,
@@ -208,6 +212,8 @@ pub struct AgentRunner {
     /// (default 1 = children only, no grandchildren). This field is the *current*
     /// runner's nesting level (0 = root). Enables budgeted RLM-style recursion.
     pub is_subagent: bool,
+    /// The caller can receive and answer questions from delegated agents.
+    pub interactive_children: bool,
     /// Current recursion depth of this runner (0 = root). Incremented when a
     /// subagent spawns children; bounded by `config.subagent_depth`.
     pub subagent_depth: u32,
@@ -301,9 +307,7 @@ pub async fn run_collect(
     // depends on receiving a final channel event. The old detached-task path
     // used `unreachable!` when a task panicked or the channel closed, turning a
     // recoverable backend failure into a parent-process panic.
-    let result = runner
-        .run_turn_events(&mut session, &prompt, &mut usage, &tx, &cancel)
-        .await;
+    let result = Box::pin(runner.run_turn_events(&mut session, &prompt, &mut usage, &tx, &cancel)).await;
     usage.set_state("idle");
     if !runner.is_subagent {
         let _ = session.save();
@@ -349,8 +353,6 @@ impl AgentRunner {
         }
     }
 
-    /// Session id used for async subagent admissions. The runner does not own a
-    /// session; prefer the ambient `NUR_SESSION_ID`, else a process-global id.
     /// Append the AGENTS.md / NUR.md of directories below the cwd that this
     /// tool call touched for the first time this session. They ride in the
     /// tool result, never the system prompt, so the cached prefix holds.
@@ -371,17 +373,6 @@ impl AgentRunner {
             Some(extra) => body + &extra,
             None => body,
         }
-    }
-
-    fn session_id_for_admission(&self) -> String {
-        if let Ok(sid) = std::env::var("NUR_SESSION_ID") {
-            if !sid.is_empty() {
-                return sid;
-            }
-        }
-        static PROC: OnceLock<String> = OnceLock::new();
-        PROC.get_or_init(|| format!("proc-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]))
-            .clone()
     }
 
     /// Run one model request against `client`, forwarding stream events to the
@@ -756,6 +747,13 @@ impl AgentRunner {
         tx: &mpsc::UnboundedSender<AgentEvent>,
         cancel: &CancellationToken,
     ) -> Result<String> {
+        let effective_text = if self.config.ignore_project_tuning {
+            None
+        } else {
+            crate::self_tune::active_instruction(&self.cwd, &self.config.provider, &self.config.model)
+                .map(|instruction| crate::self_tune::apply_instruction(&instruction, user_text))
+        };
+        let user_text = effective_text.as_deref().unwrap_or(user_text);
         crate::typesafe::context::scope(session.id.clone(), cancel.clone(), async {
             let result = self
                 .run_turn_scoped(session, user_text, usage, tx, cancel)
@@ -964,28 +962,24 @@ impl AgentRunner {
         // rejected the request outright. Track counts instead, and require the
         // context to have actually grown before compacting again so a compaction
         // that frees nothing cannot spin.
-        let mut compactions: u8 = 0;
-        let mut compact_failures: u8 = 0;
         let mut last_compact_input: u64 = 0;
-        let mut emergency_compactions: u8 = 0;
         // Staged context-limit recovery markers (promotion → model
         // compaction → local minimal trim) so a size rejection never ends
         // the turn before every stage has run.
         let mut emergency_compact_attempted = false;
         let mut emergency_local_trim_done = false;
         let mut recovery_window: Option<u64> = None;
+        let mut minimum_window_stalls: u32 = 0;
         // Preflight context-window recoveries (compact + retry instead of
         // dying) for this user turn.
         let mut preflight_recoveries: u8 = 0;
         // Codex/ChatGPT free (and some hosts) sometimes emit only a reasoning
-        // summary and zero tool calls / zero answer text. Retry once with a
-        // hard nudge + tool_choice=required before giving up.
-        let mut empty_tool_stalls: u8 = 0;
+        // summary and zero tool calls / zero answer text. Retry with a
+        // nudge and tool_choice=required, backing off on repeated stalls.
+        let mut empty_tool_stalls: u64 = 0;
         // How many times the skill layer has corrected this turn. Bounded so a
         // triggered skill can steer the work, not nag it.
         let mut skill_nudges: u8 = 0;
-        let mut truncation_continuations: u8 = 0;
-        let mut truncation_giving_up = false;
         let mut force_tool_choice = false;
         let mut recovered_default_model: Option<String> = None;
         // OMP contextPromotion: try a larger-window sibling once before compact.
@@ -1023,31 +1017,40 @@ impl AgentRunner {
             // past where the previous one ran.
             let input_now = {
                 let last = usage.last_usage();
-                if last.input_tokens > 0 {
+                let reported = if last.input_tokens > 0 {
                     last.input_tokens
                 } else {
                     last.total_tokens
-                }
+                };
+                reported.max(estimate_context_tokens(&session.input_items))
             };
-            if compactions < MAX_AUTO_COMPACTIONS
-                && compact_failures < MAX_AUTO_COMPACT_FAILURES
-                && input_now > last_compact_input
-                && should_auto_compact(usage, &self.config, &session.input_items)
+            if input_now > last_compact_input
+                && should_auto_compact(
+                    usage,
+                    &self.config,
+                    recovered_default_model
+                        .as_deref()
+                        .unwrap_or(&self.config.model),
+                    self.client.uses_oauth_session(),
+                    &session.input_items,
+                )
             {
                 last_compact_input = input_now;
+                let before_compact = estimate_context_tokens(&session.input_items);
                 let _ = tx.send(AgentEvent::Status("auto-compacting context…".into()));
                 match compact_session_with_mode(self, session, usage, CompactionMode::Pressure)
                     .await
                 {
                     Ok(_) => {
-                        compactions += 1;
+                        if estimate_context_tokens(&session.input_items) < before_compact {
+                            last_compact_input = 0;
+                        }
                         let _ =
                             tx.send(AgentEvent::Status("context compacted — continuing".into()));
                     }
                     Err(e) => {
                         // Count the failure but stay eligible: a later attempt,
                         // after more growth, may well succeed.
-                        compact_failures += 1;
                         let _ = tx.send(AgentEvent::Status(format!("auto-compact skipped: {e}")));
                     }
                 }
@@ -1095,7 +1098,7 @@ impl AgentRunner {
             // Subagents leave the drain to the parent so a completion is not
             // consumed by a child that never asked for the job.
             if !self.is_subagent {
-                if let Some(note) = crate::bg_jobs::completion_note() {
+                if let Some(note) = crate::bg_jobs::completion_note_for(Some(&session.id)) {
                     session.input_items.push(user_text_item(&note));
                     self.persist_session(session);
                     let _ = tx.send(AgentEvent::Status(
@@ -1175,7 +1178,13 @@ impl AgentRunner {
             // tool loaded through `tool_search` joins the end of the roster
             // from the next request on and stays for the rest of the session.
             let mut tools = if self.is_subagent {
-                self.tools.subagent_tool_defs()
+                let mut defs = self.tools.subagent_tool_defs();
+                if self.interactive_children {
+                    if let Some(question) = self.tools.full_tool_defs().into_iter().find(|tool| tool.name == "question") {
+                        defs.push(question);
+                    }
+                }
+                defs
             } else if self.config.tools.is_core() {
                 self.tools.core_tool_defs()
             } else if self.config.tools.is_lean() {
@@ -1244,14 +1253,12 @@ impl AgentRunner {
                         .await
                         {
                             Ok(_) => {
-                                compactions = compactions.saturating_add(1);
                                 let _ = tx.send(AgentEvent::Status(
                                     "context compacted - retrying request".into(),
                                 ));
                             }
                             Err(compact_error) => {
                                 let kept = emergency_compact_session(self, session);
-                                compactions = compactions.saturating_add(1);
                                 let _ = tx.send(AgentEvent::Status(format!(
                                     "model compaction failed ({compact_error}); recovered a \
                                          valid {kept}-item recent context locally - retrying"
@@ -1269,7 +1276,6 @@ impl AgentRunner {
                         emergency_compact_session(self, session);
                         emergency_local_trim_done = true;
                         recovery_window = Some(self.config.context_window.saturating_mul(3) / 4);
-                        compactions = compactions.saturating_add(1);
                         let _ = tx.send(AgentEvent::Status(format!("request preflight: {reason} - fitting retained context and output reservation")));
                         continue;
                     }
@@ -1403,11 +1409,12 @@ impl AgentRunner {
                                 .into(),
                         ));
                         if previous <= 256 {
-                            tokio::select! { _ = cancel.cancelled() => return Err(NurError::Interrupted), _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {} }
+                            minimum_window_stalls = minimum_window_stalls.saturating_add(1);
+                            let seconds = (2_u64 << minimum_window_stalls.saturating_sub(1).min(5)).min(60);
+                            tokio::select! { _ = cancel.cancelled() => return Err(NurError::Interrupted), _ = tokio::time::sleep(std::time::Duration::from_secs(seconds)) => {} }
                         }
                         continue;
                     }
-                    emergency_compactions = emergency_compactions.saturating_add(1);
                     if !emergency_compact_attempted {
                         emergency_compact_attempted = true;
                         let _ = tx.send(AgentEvent::Status(
@@ -1422,7 +1429,6 @@ impl AgentRunner {
                         .await
                         {
                             Ok(_) => {
-                                compactions = compactions.saturating_add(1);
                                 let _ = tx.send(AgentEvent::Status(
                                     "emergency context compaction succeeded - continuing".into(),
                                 ));
@@ -1437,7 +1443,6 @@ impl AgentRunner {
                                 emergency_local_trim_done = true;
                                 recovery_window =
                                     Some(self.config.context_window.saturating_mul(3) / 4);
-                                compactions = compactions.saturating_add(1);
                                 let _ = tx.send(AgentEvent::Status(format!(
                                     "model compaction failed ({compact_error}); recovered a \
                                          valid {kept}-item recent context locally - continuing"
@@ -1448,7 +1453,6 @@ impl AgentRunner {
                         let kept = emergency_compact_session(self, session);
                         emergency_local_trim_done = true;
                         recovery_window = Some(self.config.context_window.saturating_mul(3) / 4);
-                        compactions = compactions.saturating_add(1);
                         let _ = tx.send(AgentEvent::Status(format!(
                             "context still over the window after compaction - recovered a \
                                  minimal {kept}-item recent context locally - continuing"
@@ -1620,35 +1624,20 @@ impl AgentRunner {
             // and persist the poisoned history to disk. So for the tool-call
             // case we fall through and let the real tool run; the continuation
             // nudge is reserved for text-only truncation.
-            //
-            // Guarded by MAX_TRUNCATION_CONTINUATIONS. Once the limit is hit the
-            // guard is TERMINAL for the turn (a `truncation_giving_up` latch),
-            // so a model that truncates every round cannot rearm the allowance
-            // by processing one tool call and looping forever.
-            let mut truncated_this_round = false;
             if resp.status.as_deref() == Some("length") {
-                truncated_this_round = true;
-                if truncation_giving_up || truncation_continuations >= MAX_TRUNCATION_CONTINUATIONS
-                {
-                    // Terminal: surface partial output, never continue again.
-                    if !truncation_giving_up {
-                        truncation_giving_up = true;
-                        let _ = tx.send(AgentEvent::Status(format!(
-                            "model response truncated {truncation_continuations}× at max_tokens — giving up and surfacing partial output (limit {MAX_TRUNCATION_CONTINUATIONS})"
-                        )));
-                    }
-                    // Fall through: if there are tool calls, run them; if not,
-                    // the `calls.is_empty()` branch returns the partial text.
-                } else if calls.is_empty() {
+                if calls.is_empty() {
                     // Text-only truncation: safe to inject a continuation nudge
                     // (no unpaired function_call in history).
-                    truncation_continuations += 1;
-                    let _ = tx.send(AgentEvent::Status(format!(
-                        "model response truncated at max_tokens (finish_reason: length) — asking to continue… ({truncation_continuations}/{MAX_TRUNCATION_CONTINUATIONS})"
-                    )));
+                    let _ = tx.send(AgentEvent::Status(
+                        "model response truncated at max_tokens - asking to continue".into(),
+                    ));
                     let nudge = if !text.trim().is_empty() {
                         "[harness] Your previous response was cut off by the provider's max_tokens limit (finish_reason: length). The user saw a truncated, incomplete answer. Continue exactly where you left off, without repeating the preamble. Finish the answer."
                     } else {
+                        tokio::select! {
+                            _ = cancel.cancelled() => return Err(NurError::Interrupted),
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                        }
                         "[harness] Your previous response was truncated at max_tokens (finish_reason: length) with no usable output. Retry the last step, possibly with smaller chunks, or summarize and continue."
                     };
                     session
@@ -1661,10 +1650,9 @@ impl AgentRunner {
                     // continuation. Fall through so `execute_calls` pairs the
                     // function_call output; the model naturally continues next
                     // round with the tool result in context.
-                    truncation_continuations += 1;
-                    let _ = tx.send(AgentEvent::Status(format!(
-                        "model truncated mid tool-call (finish_reason: length) — running the tool, then continuing ({truncation_continuations}/{MAX_TRUNCATION_CONTINUATIONS})"
-                    )));
+                    let _ = tx.send(AgentEvent::Status(
+                        "model truncated mid tool-call - running the tool, then continuing".into(),
+                    ));
                 }
             }
             if resp.status.as_deref() == Some("content_filter") {
@@ -1681,48 +1669,34 @@ impl AgentRunner {
             // value right after visible text. Treating that as a completed
             // turn is exactly the "ox-alpha stops mid-run" symptom. When the
             // round produced text but no tool calls, nudge the model to pick
-            // up where it stopped — bounded by the same guard as truncation.
+            // up where it stopped without turning a transient failure into a completion.
             if matches!(
                 resp.status.as_deref(),
                 Some("network_error") | Some("unknown")
             ) && calls.is_empty()
             {
                 let reason = resp.status.clone().unwrap_or_default();
-                if truncation_giving_up || truncation_continuations >= MAX_TRUNCATION_CONTINUATIONS
-                {
-                    if !truncation_giving_up {
-                        truncation_giving_up = true;
-                        let _ = tx.send(AgentEvent::Status(format!(
-                            "stream ended early (finish_reason: {reason}) {truncation_continuations}× — giving up and surfacing partial output"
-                        )));
+                let _ = tx.send(AgentEvent::Status(format!(
+                    "stream ended early (finish_reason: {reason}) - asking the model to continue"
+                )));
+                let nudge = if text.trim().is_empty() {
+                    tokio::select! {
+                        _ = cancel.cancelled() => return Err(NurError::Interrupted),
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
                     }
-                    // Fall through to the normal completion path with whatever
-                    // text arrived; never loop forever on a flapping route.
-                } else {
-                    truncation_continuations += 1;
-                    let _ = tx.send(AgentEvent::Status(format!(
-                        "stream ended early (finish_reason: {reason}) — asking the model to continue… ({}/{MAX_TRUNCATION_CONTINUATIONS})",
-                        truncation_continuations
-                    )));
-                    let nudge = if text.trim().is_empty() {
-                        "[harness] The stream ended before you produced anything usable \
+                    "[harness] The stream ended before you produced anything usable \
                          (transport error, not a real stop). Retry your last step now."
-                    } else {
-                        "[harness] The stream was cut off by a transport error right after the \
+                } else {
+                    "[harness] The stream was cut off by a transport error right after the \
                          partial answer above (finish_reason marked it unreliable — this was NOT \
                          a natural stop). Continue exactly where you left off. Do not repeat or \
                          re-preamble; finish the response."
-                    };
-                    session
-                        .input_items
-                        .push(crate::api::types::user_text_item(nudge));
-                    self.persist_session(session);
-                    continue;
-                }
-            }
-            if !truncated_this_round {
-                truncation_continuations = 0;
-                truncation_giving_up = false;
+                };
+                session
+                    .input_items
+                    .push(crate::api::types::user_text_item(nudge));
+                self.persist_session(session);
+                continue;
             }
 
             if text_deltas == 0 && !text.is_empty() && !suppress_duplicate_preamble {
@@ -1765,10 +1739,17 @@ impl AgentRunner {
                 }
                 // Reasoning-only / empty completion: model "planned" but never
                 // answered or called tools. Common on ChatGPT free + Codex OAuth
-                // with some gpt-5.* models. Retry once before surfacing a note.
+                // with some gpt-5.* models. Keep retrying until there is a
+                // real response, cancellation, or an explicit budget stop.
                 let emptyish = text.trim().is_empty();
-                if emptyish && empty_tool_stalls < MAX_EMPTY_TOOL_STALLS {
-                    empty_tool_stalls += 1;
+                if emptyish {
+                    empty_tool_stalls = empty_tool_stalls.saturating_add(1);
+                    if empty_tool_stalls > 3 {
+                        tokio::select! {
+                            _ = cancel.cancelled() => return Err(NurError::Interrupted),
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                        }
+                    }
                     force_tool_choice = true;
                     let note = if unknown_items > 0 {
                         format!(
@@ -1791,18 +1772,6 @@ impl AgentRunner {
                     self.persist_session(session);
                     continue;
                 }
-
-                let text = if emptyish {
-                    let hint = empty_turn_hint(&self.config.provider, &self.config.model);
-                    let msg = format!(
-                        "I only produced a short planning thought and never called tools or \
-                         wrote an answer (nothing to show).\n\n{hint}"
-                    );
-                    let _ = tx.send(AgentEvent::AssistantMessage(msg.clone()));
-                    msg
-                } else {
-                    text
-                };
 
                 // Output guardrails - warn (do not hard-block final answers).
                 if let super::guardrails::GuardDecision::Warn(w) =
@@ -2006,6 +1975,7 @@ impl AgentRunner {
         cancel: &CancellationToken,
     ) -> Result<()> {
         let mut idx = 0usize;
+        let mut compact_requests = Vec::new();
         // Jev's tool gate runs once per response, over the whole call list: one
         // request in, `call_id -> skip reason` out. Everything it decides is
         // recorded here so the post-execution judge can reuse the same facts.
@@ -2282,6 +2252,30 @@ impl AgentRunner {
                 continue;
             }
 
+            // A transcript can only be compacted after every call from this
+            // response has an output. Defer it until the entire batch is paired.
+            let requests_compact = call.name == "typesafe"
+                && serde_json::from_str::<Value>(&call.arguments)
+                    .ok()
+                    .and_then(|v| v.get("action").and_then(Value::as_str).map(str::to_owned))
+                    .as_deref()
+                    == Some("compact");
+            if requests_compact {
+                let body = "Compaction requested; it will run after this tool batch finishes.";
+                compact_requests.push(call.call_id.clone());
+                let _ = tx.send(AgentEvent::ToolEnd {
+                    id,
+                    name: call.name.clone(),
+                    result: body.into(),
+                    ok: true,
+                });
+                session
+                    .input_items
+                    .push(function_call_output_item(&call.call_id, body));
+                idx += 1;
+                continue;
+            }
+
             usage.set_state(format!("tool:{}", call.name));
 
             let (body, ok) = if let Some(reason) = ts_skip.get(&call.call_id) {
@@ -2484,6 +2478,36 @@ impl AgentRunner {
         // part against the transcript before it counts.
         self.maybe_verify_goal_completion(&ts_results, session, tx)
             .await;
+        if !compact_requests.is_empty() {
+            let result =
+                compact_session_with_mode(self, session, usage, CompactionMode::Model).await;
+            let report = match result {
+                Ok(s) => compact_receipt_detail(&s),
+                Err(e @ (NurError::Budget(_) | NurError::Interrupted)) => return Err(e),
+                Err(e) => format!("compaction failed: {e}"),
+            };
+            let report = crate::secrets::redact(&report).into_owned();
+            let _ = tx.send(AgentEvent::Status(report.clone()));
+            let mut found = false;
+            for item in &mut session.input_items {
+                if item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                    && item
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| compact_requests.iter().any(|requested| requested == id))
+                {
+                    item["output"] = Value::String(report.clone());
+                    found = true;
+                }
+            }
+            // Summary compaction replaces the call pair. Tell the model the
+            // outcome without creating an orphaned tool output.
+            if !found {
+                session
+                    .input_items
+                    .push(user_text_item(&format!("[harness] {report}")));
+            }
+        }
         Ok(())
     }
 
@@ -3309,7 +3333,7 @@ impl AgentRunner {
                 ));
             }
         }
-        if self.is_subagent {
+        if self.is_subagent && !self.interactive_children {
             return Ok((
                 question_tool::format_answer(
                     &UserAnswer::Dismissed {
@@ -3343,6 +3367,7 @@ impl AgentRunner {
             options: parsed.options.clone(),
             multi_select: parsed.multi_select,
             respond: otx,
+            parent_session: None,
         });
         let answer = tokio::select! {
             _ = cancel.cancelled() => return Err(NurError::Interrupted),
@@ -3574,6 +3599,7 @@ impl AgentRunner {
                 name: name.to_string(),
                 args: args.to_string(),
                 respond: otx,
+                parent_session: None,
             })
             .is_err()
         {
@@ -3592,7 +3618,9 @@ impl AgentRunner {
                 true
             }
             Ok(ApprovalDecision::Deny) => false,
-            Err(_) => self.permission_mode.get().auto_approves(),
+            // This path only runs after an explicit approval was required.
+            // Losing the responder is not the user's consent, even in auto mode.
+            Err(_) => false,
         }
     }
 }
@@ -3624,6 +3652,7 @@ async fn ask_peer_mail(
             ],
             multi_select: false,
             respond,
+            parent_session: None,
         })
         .is_err()
     {
@@ -4073,9 +4102,57 @@ mod tests {
             permissions: SharedPermissions::load(&cwd),
             hooks: HooksConfig::default(),
             is_subagent: true, // Do not update the user's latest-session pointer.
+            interactive_children: false,
             subagent_depth: 0,
             prewalk_override: Arc::new(Mutex::new(None)),
             approved_domains: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    #[tokio::test]
+    async fn lost_forced_approval_denies_in_auto_mode() {
+        if crate::agent::admission::isolated_test(
+            "agent::r#loop::tests::lost_forced_approval_denies_in_auto_mode",
+        ) {
+            return;
+        }
+        let runner = compaction_test_runner(Config::default());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let receiver = tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                if let AgentEvent::ApprovalRequest { respond, .. } = event {
+                    drop(respond);
+                    break;
+                }
+            }
+        });
+        let allowed = runner
+            .check_approval(
+                "secscan",
+                r#"{"action":"baseline","ids":["fixture"]}"#,
+                &tx,
+                &CancellationToken::new(),
+            )
+            .await;
+        receiver.await.unwrap();
+        assert!(!allowed, "a dropped approval response authorized the baseline");
+    }
+
+    #[test]
+    fn automatic_route_fallback_does_not_request_login() {
+        if crate::agent::admission::isolated_test(
+            "agent::r#loop::tests::automatic_route_fallback_does_not_request_login",
+        ) {
+            return;
+        }
+        std::env::remove_var("DEEPSEEK_API_KEY");
+        let config = Config { provider: "vllm".into(), model: "fixture".into(), ..Config::default() };
+        let runner = compaction_test_runner(config);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let result = resolve_planned_target(true, &runner.client, &runner.config, Some("deepseek"), None, None, None, None, &tx);
+        assert!(matches!(result, SubagentTarget::Ready { .. }));
+        while let Ok(event) = rx.try_recv() {
+            assert!(!matches!(event, AgentEvent::LoginRequired { .. }), "automatic fallback requested an unnecessary login");
         }
     }
 
@@ -5834,46 +5911,6 @@ fn multimodal_user_item(text: &str, media: &[MediaAttach]) -> Value {
     user_multimodal_item(text, &parts)
 }
 
-/// User-facing hint when the model ends a turn with no tools and no text.
-fn empty_turn_hint(provider: &str, model: &str) -> String {
-    let openai_oauth = provider == "openai"
-        || std::env::var("NUR_PROVIDER")
-            .map(|p| p.eq_ignore_ascii_case("openai"))
-            .unwrap_or(false);
-    // ChatGPT free OAuth often returns reasoning-only on Codex backend.
-    if openai_oauth || model.contains("sol") || model.starts_with("gpt-5") {
-        return format!(
-            "Likely causes:\n\
-             • **ChatGPT OAuth / free plan** on the Codex backend — some models emit only a \
-               reasoning summary and skip tool calls. Paid ChatGPT / an **OpenAI API key** \
-               (`/login` → OpenAI key) is more reliable for agent tools.\n\
-             • Model `{model}` may not be fully tool-capable on this endpoint — try \
-               `/model` and pick another, or switch provider (`/login`).\n\
-             • Retry the same prompt once; nur already auto-retried with required tool use."
-        );
-    }
-    format!(
-        "The model (`{model}` via `{provider}`) returned no tools and no answer after a \
-         forced retry. Try `/model`, another provider via `/login`, or rephrase the request."
-    )
-}
-
-/// Empty (reasoning-only, no tools, no text) rounds retried before giving up.
-/// Reset after any round that produces real tool calls.
-const MAX_EMPTY_TOOL_STALLS: u8 = 3;
-
-/// Consecutive truncation continuations before we surface partial output and stop.
-/// Guards against an infinite loop if the provider keeps returning finish_reason=length.
-const MAX_TRUNCATION_CONTINUATIONS: u8 = 5;
-
-/// Ceiling on automatic compactions inside one user turn. High enough that a
-/// long agent run never runs out of relief, low enough to bound the cost.
-/// Exhausting it does NOT end the turn: the provider-rejection recovery
-/// stages below still apply.
-const MAX_AUTO_COMPACTIONS: u8 = 8;
-/// Consecutive-ish compaction failures tolerated before proactive compaction
-/// stops retrying. Exhausting it does NOT end the turn either.
-const MAX_AUTO_COMPACT_FAILURES: u8 = 3;
 /// Cap on preflight context-window recoveries (compact + retry) per user
 /// turn, so a pathological estimate cannot spin the loop forever. After the
 /// cap the request is sent anyway from a minimal locally-trimmed context.
@@ -6051,14 +6088,32 @@ pub(crate) fn strip_inline_images(item: &mut Value) -> usize {
     dropped
 }
 
-fn should_auto_compact(usage: &UsageTracker, cfg: &Config, items: &[Value]) -> bool {
+fn should_auto_compact(
+    usage: &UsageTracker,
+    cfg: &Config,
+    model: &str,
+    subscription: bool,
+    items: &[Value],
+) -> bool {
     let last = usage.last_usage();
     let provider_used = if last.input_tokens > 0 {
         last.input_tokens
     } else {
         last.total_tokens
     };
-    let window = cfg.context_window.max(1);
+    // OpenAI bills the entire GPT-5.6 Sol request at a higher rate above
+    // 272k input tokens. This is a proactive compaction target, not a hard
+    // request limit: failed compaction must never stop a turn.
+    let has_price_cliff = cfg.avoid_long_context_pricing
+        && !subscription
+        && matches!(cfg.provider.as_str(), "openai" | "openai-cc")
+        && (model == "gpt-5.6" || model.starts_with("gpt-5.6-sol"));
+    let window = if has_price_cliff {
+        cfg.context_window.min(272_000)
+    } else {
+        cfg.context_window
+    }
+    .max(1);
     let used = provider_used.max(estimate_context_tokens(items));
     used > compaction_threshold_tokens(window)
 }
@@ -6707,10 +6762,13 @@ struct ChildSpawn {
     mode: SharedMode,
     domains: Arc<Mutex<HashSet<String>>>,
     depth: u32,
+    interactive_children: bool,
     /// The parent's session id, and the variables of its context store the
     /// call named in `context_vars`: all the child may read of it.
     parent_session: String,
     context_vars: Vec<String>,
+    output_schema: Option<Value>,
+    worktree: Option<String>,
     /// `cost_mode: economy`: a cheap model, low effort (see [`economy_model`]).
     economy: bool,
 }
@@ -6727,6 +6785,18 @@ impl ChildSpawn {
         call: &FunctionCallRef,
     ) -> Result<Self> {
         let args: Value = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
+        let worktree = match args.get("worktree") {
+            None => None,
+            Some(Value::String(name)) if !name.is_empty() => Some(name.clone()),
+            Some(_) => return Err(NurError::Tool("agent.worktree must be a nonempty managed worktree name".into())),
+        };
+        let output_schema = args.get("output_schema").cloned();
+        if let Some(schema) = &output_schema {
+            if !schema.is_object() {
+                return Err(NurError::Tool("agent.output_schema must be a JSON Schema object".into()));
+            }
+            jsonschema::validator_for(schema).map_err(|error| NurError::Tool(format!("invalid agent.output_schema: {error}")))?;
+        }
         let mut context_vars: Vec<String> = Vec::new();
         for name in args
             .get("context_vars")
@@ -6765,8 +6835,11 @@ impl ChildSpawn {
             mode: runner.permission_mode.clone(),
             domains: runner.approved_domains.clone(),
             depth: runner.subagent_depth,
+            interactive_children: runner.interactive_children && !super::goal::load(parent_session).is_some_and(|goal| goal.status == super::goal::GoalStatus::Active),
             parent_session: parent_session.to_string(),
             context_vars,
+            output_schema,
+            worktree,
             economy: args.get("cost_mode").and_then(Value::as_str) == Some("economy"),
         })
     }
@@ -6779,78 +6852,131 @@ impl ChildSpawn {
         tx: &mpsc::UnboundedSender<AgentEvent>,
     ) -> Result<(String, TokenUsage)> {
         let (prompt, kind, desc, provider_override, model_override) = parsed;
-        let (prompt, provider_override, model_override, hopped) = plan_unrouted_child(
-            &self.config,
-            prompt,
-            context,
-            provider_override,
-            model_override,
-            tx,
-        )
-        .await;
-        // Cross-provider: a named provider gets a client from its own stored
-        // credentials. Missing creds → LoginRequired + hard block, never a
-        // silent run on the parent.
-        match resolve_planned_target(
-            hopped,
-            &self.client,
-            &self.config,
-            provider_override.as_deref(),
-            model_override.as_deref(),
-            Some(prompt.as_str()),
-            Some(desc.as_str()),
-            Some(kind.as_str()),
-            tx,
-        ) {
-            SubagentTarget::Ready { client, mut config } => {
-                // A named or routed model is a choice; economy fills the gap.
-                if self.economy && model_override.is_none() {
-                    let status = match economy_model(&self.config, &client, &config.provider).await
-                    {
-                        Some(model) => {
-                            config.model = model;
-                            format!("subagent · economy · {}", config.model)
-                        }
-                        None => format!(
-                            "subagent · economy · no priced cheaper model, staying on {}",
-                            config.model
-                        ),
-                    };
-                    config.reasoning_effort = "low".into();
-                    let _ = tx.send(AgentEvent::Status(status));
-                }
-                // Handed-over context leaves the parent's provider: say so.
-                if !self.context_vars.is_empty() && config.provider != self.config.provider {
-                    let name = crate::providers::by_id(&config.provider)
-                        .map(|provider| provider.name)
-                        .unwrap_or(config.provider.as_str());
-                    let n = self.context_vars.len();
-                    let _ = tx.send(AgentEvent::Status(format!(
-                        "subagent · sharing {n} context variable{} with {name}",
-                        if n == 1 { "" } else { "s" }
-                    )));
-                }
-                subagent::run_subagent(
-                    client,
-                    *config,
-                    self.cwd,
-                    self.mode,
-                    self.domains,
-                    &prompt,
-                    &kind,
-                    self.depth,
-                    &self.parent_session,
-                    &self.context_vars,
-                    cancel,
-                    tx,
-                )
-                .await
+        let (cwd, _worktree_lease) = if let Some(name) = self.worktree {
+            let root = self.cwd.clone();
+            let token = cancel.clone();
+            let task = tokio::task::spawn_blocking(move || crate::worktree::claim(&root, &name, &token));
+            let lease = tokio::select! {
+                _ = cancel.cancelled() => return Err(NurError::Interrupted),
+                result = task => result.map_err(|error| NurError::Tool(format!("worktree lookup failed: {error}")))??,
+            };
+            let lease = Arc::new(lease);
+            (lease.path.clone(), Some(lease))
+        } else {
+            (self.cwd, None)
+        };
+        // Every event from child routing is scoped, including events emitted
+        // before the child runner exists. An async child can outlive this
+        // turn, so an unscoped status or login notice could reach a new session.
+        let (child_tx, mut child_rx) = tokio::sync::mpsc::unbounded_channel();
+        let parent_tx = tx.clone();
+        let parent_scope = self.parent_session.clone();
+        let child_cancel = cancel.clone();
+        let forward = tokio::spawn(async move {
+            while let Some(event) = child_rx.recv().await {
+                if child_cancel.is_cancelled() { break; }
+                let event = match event {
+                    AgentEvent::LoginRequired { provider_id, provider_name, retry_prompt, retry_desc, retry_kind, retry_model, .. } => AgentEvent::LoginRequired {
+                        provider_id, provider_name, retry_prompt, retry_desc, retry_kind, retry_model,
+                        parent_session: Some(parent_scope.clone()),
+                    },
+                    AgentEvent::Status(status) => AgentEvent::ChildStatus {
+                        parent_session: parent_scope.clone(), status, finished: false,
+                    },
+                    other => other,
+                };
+                if parent_tx.send(event).is_err() { break; }
             }
-            // A tool error, so the parent model does not take a parent-provider
-            // run for success. LoginRequired was already emitted.
-            SubagentTarget::AwaitingLogin { message, .. }
-            | SubagentTarget::Unavailable { message } => Err(NurError::Other(message)),
+        });
+        let result = async {
+            let tx = &child_tx;
+            let (prompt, provider_override, model_override, hopped) = plan_unrouted_child(
+                &self.config,
+                prompt,
+                context,
+                provider_override,
+                model_override,
+                tx,
+            )
+            .await;
+            // Cross-provider: a named provider gets a client from its own stored
+            // credentials. Missing creds → LoginRequired + hard block, never a
+            // silent run on the parent.
+            let target = resolve_planned_target(
+                hopped,
+                &self.client,
+                &self.config,
+                provider_override.as_deref(),
+                model_override.as_deref(),
+                Some(prompt.as_str()),
+                Some(desc.as_str()),
+                Some(kind.as_str()),
+                tx,
+            );
+            match target {
+                SubagentTarget::Ready { client, mut config } => {
+                    // A named or routed model is a choice; economy fills the gap.
+                    if self.economy && model_override.is_none() {
+                        let status = match economy_model(&self.config, &client, &config.provider).await
+                        {
+                            Some(model) => {
+                                config.model = model;
+                                format!("subagent · economy · {}", config.model)
+                            }
+                            None => format!(
+                                "subagent · economy · no priced cheaper model, staying on {}",
+                                config.model
+                            ),
+                        };
+                        config.reasoning_effort = "low".into();
+                        let _ = tx.send(AgentEvent::Status(status));
+                    }
+                    // Handed-over context leaves the parent's provider: say so.
+                    if !self.context_vars.is_empty() && config.provider != self.config.provider {
+                        let name = crate::providers::by_id(&config.provider)
+                            .map(|provider| provider.name)
+                            .unwrap_or(config.provider.as_str());
+                        let n = self.context_vars.len();
+                        let _ = tx.send(AgentEvent::Status(format!(
+                            "subagent · sharing {n} context variable{} with {name}",
+                            if n == 1 { "" } else { "s" }
+                        )));
+                    }
+                    let (report, usage) = subagent::run_subagent(
+                        client,
+                        *config,
+                        cwd,
+                        self.mode,
+                        self.domains,
+                        &prompt,
+                        &kind,
+                        self.depth,
+                        self.interactive_children,
+                        &self.parent_session,
+                        &self.context_vars,
+                        self.output_schema.as_ref(),
+                        _worktree_lease.clone(),
+                        cancel,
+                        tx,
+                    )
+                    .await?;
+                    if let Some(schema) = &self.output_schema {
+                        let value: Value = serde_json::from_str(&report).map_err(|_| NurError::Tool("subagent output does not match output_schema: expected a JSON value".into()))?;
+                        let validator = jsonschema::validator_for(schema).map_err(|error| NurError::Tool(format!("invalid agent.output_schema: {error}")))?;
+                        validator.validate(&value).map_err(|error| NurError::Tool(format!("subagent output does not match output_schema: {error}")))?;
+                    }
+                    Ok((report, usage))
+                }
+                // A tool error, so the parent model does not take a parent-provider
+                // run for success. LoginRequired was already emitted.
+                SubagentTarget::AwaitingLogin { message, .. }
+                | SubagentTarget::Unavailable { message } => Err(NurError::Other(message)),
+            }
         }
+        .await;
+        drop(child_tx);
+        let _ = forward.await;
+        result
     }
 }
 
@@ -6888,7 +7014,7 @@ async fn run_agent_tool(
         .map(|v| v.get("async").and_then(Value::as_bool).unwrap_or(false))
         .unwrap_or(false);
     if want_async && !runner.is_subagent {
-        let sid = runner.session_id_for_admission();
+        let sid = parent_session.to_string();
         let id = crate::agent::admission::admit(&sid, &desc);
         let tx2 = tx.clone();
         let accept = cancel.clone();
@@ -6898,6 +7024,7 @@ async fn run_agent_tool(
                 Ok((text, _)) => crate::agent::admission::finish(&sid, id, &text, true),
                 Err(e) => crate::agent::admission::finish(&sid, id, &e.to_string(), false),
             }
+            let _ = tx2.send(AgentEvent::ChildStatus { parent_session: sid, status: String::new(), finished: true });
         });
         let _ = tx.send(AgentEvent::Status(format!(
             "admitted subagent #{id} · {desc} (async; agent can keep working)"
@@ -6983,6 +7110,10 @@ fn resolve_planned_target(
     retry_kind: Option<&str>,
     tx: &mpsc::UnboundedSender<AgentEvent>,
 ) -> SubagentTarget {
+    // An automatic route is only a candidate. Do not surface its login or
+    // failure notices if the parent route can be used instead.
+    let (candidate_tx, mut candidate_rx) = tokio::sync::mpsc::unbounded_channel();
+    let candidate_events = if hopped { &candidate_tx } else { tx };
     let target = resolve_subagent_target(
         parent_client,
         parent_config,
@@ -6991,8 +7122,9 @@ fn resolve_planned_target(
         retry_prompt,
         retry_desc,
         retry_kind,
-        tx,
+        candidate_events,
     );
+    drop(candidate_tx);
     if hopped && !matches!(target, SubagentTarget::Ready { .. }) {
         let _ = tx.send(AgentEvent::Status(
             "subagent · routed model unavailable - running on the parent model".into(),
@@ -7007,6 +7139,9 @@ fn resolve_planned_target(
             retry_kind,
             tx,
         );
+    }
+    while let Ok(event) = candidate_rx.try_recv() {
+        let _ = tx.send(event);
     }
     target
 }
@@ -7166,6 +7301,7 @@ fn resolve_subagent_target(
         let _ = tx.send(AgentEvent::LoginRequired {
             provider_id: prov.id.to_string(),
             provider_name: prov.name.to_string(),
+            parent_session: None,
             retry_prompt: retry_prompt.map(str::to_string),
             retry_desc: retry_desc.map(str::to_string),
             retry_kind: retry_kind.map(str::to_string),
@@ -7329,965 +7465,10 @@ fn maybe_fire_prewalk(runner: &AgentRunner, tool_name: &str) -> Option<String> {
     Some(into)
 }
 
-/// Resolve OMP-style remote compact URL. Opt-in only:
-/// - `compaction.remote_endpoint` in config.toml (implies want remote), or
-/// - `compaction.remote_enabled = true` plus endpoint / `NUR_COMPACT_REMOTE_ENDPOINT`, or
-/// - `NUR_COMPACT_REMOTE=1` plus `NUR_COMPACT_REMOTE_ENDPOINT`.
-fn remote_compact_endpoint(cfg: &Config) -> Option<String> {
-    let cfg_ep = cfg.compaction.remote_endpoint.trim();
-    let env_ep = std::env::var("NUR_COMPACT_REMOTE_ENDPOINT")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let env_force = std::env::var("NUR_COMPACT_REMOTE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    if !cfg_ep.is_empty() {
-        // OMP: setting remoteEndpoint is enough.
-        return Some(cfg_ep.to_string());
-    }
-    if cfg.compaction.remote_enabled || env_force {
-        return env_ep;
-    }
-    None
-}
-
-/// OMP `compaction.remoteEndpoint` protocol: POST `{systemPrompt,prompt}` → `{summary}`.
-struct RemoteCompactSummary {
-    summary: String,
-    endpoint_origin: String,
-    input_tokens_estimate: u64,
-    output_tokens: u64,
-    usage_reported: bool,
-}
-
-async fn try_remote_compact_summary(
-    runner: &AgentRunner,
-    system_prompt: &str,
-    items: &[Value],
-) -> Option<RemoteCompactSummary> {
-    let endpoint = remote_compact_endpoint(&runner.config)?;
-
-    // Preserve both the original goal and the newest in-flight work. The old
-    // `take(80)` retained only the beginning of long sessions, and appended the
-    // summary instruction a second time even though it is already in `items`.
-    let serialized = bounded_remote_compact_transcript(items, 120_000);
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .ok()?;
-    let openai_compatible = endpoint
-        .split('?')
-        .next()
-        .unwrap_or(&endpoint)
-        .trim_end_matches('/')
-        .ends_with("/chat/completions");
-    let body = if openai_compatible {
-        serde_json::json!({
-            "model": runner.config.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": serialized},
-            ],
-            "stream": false,
-        })
-    } else {
-        serde_json::json!({
-            "systemPrompt": system_prompt,
-            "prompt": serialized,
-        })
-    };
-    let resp = client.post(&endpoint).json(&body).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let v: Value = resp.json().await.ok()?;
-    let summary = v
-        .get("summary")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            v.pointer("/choices/0/message/content")
-                .and_then(Value::as_str)
-        })
-        .map(str::trim)
-        .filter(|s| !s.is_empty())?;
-    let input_tokens_estimate = (serialized.chars().count() as u64).div_ceil(3);
-    let reported_input = v
-        .pointer("/usage/input_tokens")
-        .and_then(Value::as_u64)
-        .or_else(|| v.pointer("/usage/prompt_tokens").and_then(Value::as_u64));
-    let reported_output = v
-        .pointer("/usage/output_tokens")
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            v.pointer("/usage/completion_tokens")
-                .and_then(Value::as_u64)
-        });
-    let usage_reported = reported_input.is_some() || reported_output.is_some();
-    Some(RemoteCompactSummary {
-        summary: summary.to_string(),
-        endpoint_origin: compact_endpoint_origin(&endpoint),
-        input_tokens_estimate: reported_input.unwrap_or(input_tokens_estimate),
-        output_tokens: reported_output
-            .unwrap_or_else(|| (summary.chars().count() as u64).div_ceil(3)),
-        usage_reported,
-    })
-}
-
-fn compact_endpoint_origin(endpoint: &str) -> String {
-    let without_scheme = endpoint
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(endpoint);
-    without_scheme
-        .split('/')
-        .next()
-        .unwrap_or("remote-endpoint")
-        .split('?')
-        .next()
-        .unwrap_or("remote-endpoint")
-        .to_string()
-}
-
-fn bounded_remote_compact_transcript(items: &[Value], max_chars: usize) -> String {
-    let full = items
-        .iter()
-        .filter_map(|item| serde_json::to_string(item).ok())
-        .collect::<Vec<_>>()
-        .join("\n");
-    if full.chars().count() <= max_chars {
-        return full;
-    }
-
-    const MARKER: &str = "\n...[middle omitted for bounded remote compaction]...\n";
-    let content_budget = max_chars.saturating_sub(MARKER.chars().count());
-    let head_budget = content_budget / 4;
-    let tail_budget = content_budget.saturating_sub(head_budget);
-    let head: String = full.chars().take(head_budget).collect();
-    let tail: String = full
-        .chars()
-        .rev()
-        .take(tail_budget)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    format!("{head}{MARKER}{tail}")
-}
-
-pub async fn compact_session(
-    runner: &AgentRunner,
-    session: &mut Session,
-    usage: &mut UsageTracker,
-) -> Result<String> {
-    compact_session_with_mode(runner, session, usage, CompactionMode::Manual).await
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CompactionMode {
-    Manual,
-    Pressure,
-}
-
-impl CompactionMode {
-    fn jev_wins(self, replace_summary: bool, reduction: f64, minimum: f64) -> bool {
-        replace_summary && (self == Self::Manual || (reduction > 0.0 && reduction >= minimum))
-    }
-}
-
-async fn compact_session_with_mode(
-    runner: &AgentRunner,
-    session: &mut Session,
-    usage: &mut UsageTracker,
-    mode: CompactionMode,
-) -> Result<String> {
-    let before = session.input_items.len();
-    let result = compact_session_inner(runner, session, usage, mode).await;
-    record_auxiliary_telemetry(&session.id);
-    receipt::record(
-        &session.id,
-        receipt::Event::Compaction {
-            trigger: if mode == CompactionMode::Manual {
-                "manual"
-            } else {
-                "context_pressure"
-            }
-            .into(),
-            strategy: match &result {
-                Ok(s) if s.starts_with("[compact: jev unchanged") => "jev_unchanged",
-                Ok(s) if s.starts_with("[compact: jev-scored") => "jev_pruned",
-                Ok(_) => "summary",
-                Err(_) => "failed",
-            }
-            .into(),
-            detail: result
-                .as_ref()
-                .map(|s| compact_receipt_detail(s))
-                .unwrap_or_else(|_| "compaction failed; transcript backup preserved".into()),
-            items_before: before,
-            items_after: session.input_items.len(),
-        },
-    );
-    result
-}
-
-fn compact_receipt_detail(report: &str) -> String {
-    // The summary is user content. Only the final code-generated status belongs
-    // in the receipt, even if the summary itself contains a compact marker.
-    report
-        .rfind("[compact:")
-        .map(|i| report[i..].to_string())
-        .unwrap_or_else(|| "compaction completed".into())
-}
-
-async fn compact_session_inner(
-    runner: &AgentRunner,
-    session: &mut Session,
-    usage: &mut UsageTracker,
-    mode: CompactionMode,
-) -> Result<String> {
-    snapshot_before_compact(session);
-
-    let early_mem_scope = {
-        let proj = std::path::Path::new(&session.cwd)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("workspace");
-        format!("{proj}:{}", session.id)
-    };
-
-    // Native-memory upkeep runs on *every* compaction path, including the Jev fast
-    // path below. It used to sit after that path's early return, so enabling Jev
-    // quietly stopped the tier ladder from ageing (recent→l1→l2→l3) and stopped
-    // consolidation for every successful fast-path compaction.
-    if runner.config.native_memory {
-        let _ = super::native_memory::consolidate_localized(&early_mem_scope, 32);
-        // closes the tier-ladder gap: age-progress recent→l1 and l2→l3 so deep
-        // tiers are produced automatically, not only by manual remember/consolidate.
-        let _ = super::native_memory::promote_aged(&early_mem_scope);
-        let _ = super::chronicle::append(
-            &early_mem_scope,
-            "compact",
-            "compaction requested - native memory upkeep completed",
-            None,
-        );
-    }
-
-    // Jev-scored compaction first. This is the cheapest release valve in the
-    // harness: Jev is shown the whole conversation with tool results replaced by
-    // short notes, and asked two questions per tool call - does the call still
-    // matter, does its result still need to be kept verbatim. Dead calls go,
-    // survivors are untouched, and text is never rewritten. If it frees enough
-    // context, the summarizing model call is skipped entirely: no frontier
-    // tokens, no lossy summary, and the working transcript stays readable.
-    let mut items = session.input_items.clone();
-    let mut jev_note: Option<String> = None;
-    let ts = runner.config.typesafe.clone();
-    if ts.enabled && ts.compaction.enabled {
-        let opts = crate::typesafe::compact::CompactOptions::from_config(&ts.compaction)
-            .with_goal(typesafe_goal(session, ts.compaction.goal_prompts));
-        let for_task = items.clone();
-        let cfg = ts.clone();
-        let outcome = crate::typesafe::context::blocking(move || {
-            crate::typesafe::compact::try_compact_items(&cfg, &for_task, &opts)
-        })
-        .await
-        .unwrap_or(Err(crate::typesafe::compact::CompactSkip::NoJudgments));
-        match outcome {
-            Ok(outcome) => {
-                let pretty = outcome.stats.summary();
-                if mode.jev_wins(
-                    ts.compaction.replace_summary,
-                    outcome.stats.reduction_ratio(),
-                    ts.compaction.min_reduction,
-                ) {
-                    crate::typesafe::telemetry::record_prune(0, 0, 0, 1);
-                    if outcome.items == items {
-                        return Ok(format!("[compact: jev unchanged - judgments kept the transcript; no summary written · {pretty}]"));
-                    }
-                    // Keep reporting out of the provider transcript: a verbose
-                    // synthetic banner can cost more tokens than a small prune.
-                    let decisions = outcome.decision_counts();
-                    let kept = outcome.items.len();
-                    session.input_items = outcome.items;
-                    runner.persist_session(session);
-                    return Ok(format!(
-                    "[compact: jev-scored, no summary · {pretty} · {decisions} · {kept} items retained · \
-                     precompact bak written]"
-                ));
-                }
-                items = outcome.items;
-                jev_note = Some(format!(
-                    "{pretty}; summary required by {}",
-                    if ts.compaction.replace_summary {
-                        "automatic context recovery threshold"
-                    } else {
-                        "replace_summary=false"
-                    }
-                ));
-            }
-            Err(reason) => {
-                if mode == CompactionMode::Manual
-                    && ts.compaction.replace_summary
-                    && reason != crate::typesafe::compact::CompactSkip::Unavailable
-                {
-                    return Ok(format!("[compact: jev unchanged - {reason}; transcript preserved, no summary written]"));
-                }
-                jev_note = Some(format!("{reason}; summary fallback"));
-            }
-        }
-    }
-
-    // The summary is text: inline screenshots add nothing to it, cost a tile
-    // budget each, and break the request on a text-only summarizer. `items` is
-    // the summarizer's copy, so the live session keeps its images.
-    for item in items.iter_mut() {
-        strip_inline_images(item);
-    }
-    // Thin old tool bodies for the summarizer so we don't re-pay huge dumps.
-    let thinned = thin_tool_bodies_for_compact(
-        &mut items,
-        runner.config.compact_tool_body_max_chars as usize,
-        runner.config.compact_keep_user_turns as usize,
-    );
-    let user_prompt =
-        "Summarize this conversation for a fresh context window. Capture: goals, decisions, \
-         files touched, current state, pending next steps. Prefer decisions over raw tool dumps. \
-         Dense bullets.";
-    let system_prompt = "You compress agent conversations into handoff summaries. \
-             Preserve goals, decisions, file paths, and next steps; drop redundant tool noise.";
-    items.push(user_text_item(user_prompt));
-    let compact_input_estimate = serde_json::to_string(&items)
-        .map(|text| (text.chars().count() as u64).div_ceil(3))
-        .unwrap_or(0)
-        .saturating_add((system_prompt.chars().count() as u64).div_ceil(3));
-    if let Some(block) = preflight_request_budget(
-        &runner.config,
-        usage,
-        &runner.config.provider,
-        &runner.config.model,
-        compact_input_estimate,
-        runner.config.request_output_reserve_tokens,
-    ) {
-        match block {
-            // The summarizer request itself would not fit the model's
-            // window. Shrink to a bounded recent working set locally and
-            // summarize THAT, instead of giving up on model-assisted
-            // compaction at exactly the volume where it is needed. A budget
-            // cap stays a hard stop.
-            PreflightBlock::ContextWindow(_reason) => {
-                emergency_compact_session(runner, session);
-                items = session.input_items.clone();
-                thin_tool_bodies_for_compact(
-                    &mut items,
-                    runner.config.compact_tool_body_max_chars as usize,
-                    runner.config.compact_keep_user_turns as usize,
-                );
-                items.push(user_text_item(user_prompt));
-            }
-            PreflightBlock::Budget(msg) => {
-                return Err(NurError::Budget(format!("compaction {msg}")));
-            }
-        }
-    }
-
-    // OMP-compatible remote summarization (compaction.remoteEndpoint). Opt-in;
-    // any failure falls through to the local model path below.
-    let remote_summary = try_remote_compact_summary(runner, system_prompt, &items).await;
-    let summary = if let Some(remote) = remote_summary {
-        let remote_usage =
-            TokenUsage::estimated(remote.input_tokens_estimate, remote.output_tokens);
-        // The endpoint is an explicit remote boundary, not the active route.
-        // Pricing is necessarily an estimate unless the endpoint reports a
-        // native cost, but tokens still count toward session safeguards.
-        usage.record_request_as(
-            "remote-compaction",
-            &remote.endpoint_origin,
-            remote_usage,
-            None,
-            crate::usage::PURPOSE_COMPACTION_REMOTE,
-        );
-        session.usage.add(usage.last_usage());
-        receipt::record(
-            &session.id,
-            receipt::Event::RemoteCompaction {
-                endpoint_origin: remote.endpoint_origin.clone(),
-                input_tokens_estimate: remote.input_tokens_estimate,
-                output_tokens: remote.output_tokens,
-                usage_reported: remote.usage_reported,
-            },
-        );
-        remote.summary
-    } else {
-        let req = ResponseRequest {
-            model: runner.config.model.clone(),
-            input: Value::Array(items),
-            instructions: Some(system_prompt.into()),
-            tools: None,
-            tool_choice: None,
-            store: Some(false),
-            include: Some(vec!["reasoning.encrypted_content".into()]),
-            reasoning: Some(ReasoningConfig {
-                effort: Some("low".into()),
-                summary: None,
-            }),
-            stream: Some(false),
-            parallel_tool_calls: None,
-            prompt_cache_key: Some(format!("compact:{}", session.id)),
-            max_output_tokens: (runner.config.request_output_reserve_tokens > 0)
-                .then_some(runner.config.request_output_reserve_tokens),
-        };
-        let resp = runner.client.create_response(&req).await?;
-        let raw = resp.accounting_usage();
-        usage.record_side_request(raw, resp.id.clone(), crate::usage::PURPOSE_COMPACTION);
-        session.usage.add(usage.last_usage());
-        let summary = resp.output_text();
-        if summary.is_empty() {
-            return Err(NurError::Other("compaction produced no summary".into()));
-        }
-        summary
-    };
-
-    // New context: summary + last N user/assistant display messages + the tail of
-    // the live working items.
-    //
-    // That last part is not optional. `session.messages` only gains an assistant
-    // entry when the turn *returns*, so mid-run it holds the user prompt and
-    // nothing else. Rebuilding from it alone handed the model a summary and the
-    // original request with no trace of the work in flight — so it answered as
-    // if starting fresh, produced no tool calls, and the loop treated that as a
-    // completed turn. A silent stop, right at the token volume where compaction
-    // first fires.
-    let keep_n = runner.config.compact_keep_user_turns.max(1) as usize;
-    // RLM invariant (Prime): compaction summarizes chat but context_store vars remain.
-    // Connectome: live edge is compacted; deep memory is maintained *localized* (paper M4).
-    let mem_scope = {
-        let proj = std::path::Path::new(&session.cwd)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("workspace");
-        format!("{proj}:{}", session.id)
-    };
-    let store_inv = super::context_store::prompt_inventory(&session.id);
-    let mem_inv = if runner.config.native_memory {
-        super::native_memory::prompt_block(&mem_scope, "", 1_200)
-    } else {
-        String::new()
-    };
-    let store_note = {
-        let mut parts = Vec::new();
-        if !store_inv.is_empty() {
-            parts.push(format!(
-                "[RLM context store preserved — tool `context`]\n{store_inv}"
-            ));
-        }
-        if !mem_inv.is_empty() {
-            parts.push(mem_inv);
-        }
-        // Running tools are preserved across the summary: the jobs keep
-        // running while it is written, and their results land afterwards.
-        if !runner.is_subagent {
-            if let Some(running) = crate::bg_jobs::running_note() {
-                parts.push(running);
-            }
-        }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            format!("\n\n{}", parts.join("\n"))
-        }
-    };
-    let mut new_items = vec![user_text_item(&format!(
-        "[Context compacted. Summary of the conversation so far:]\n\n{summary}{store_note}"
-    ))];
-    let recent = recent_dialogue_items(&session.messages, keep_n);
-    let kept = recent.len();
-    let tail = safe_tail_after_compact(&session.input_items, COMPACT_KEEP_WORKING_ITEMS);
-    let (tail_kept, strategy) = if runner.config.kv_stable_compact {
-        // KV-stable: carry the recent edge verbatim and preserve its ordering,
-        // maximizing a reusable prefix at providers that cache it.
-        new_items.extend(recent);
-        (
-            extend_unique_items(&mut new_items, tail),
-            "kv-stable: recent edge carried verbatim",
-        )
-    } else {
-        // Classic rebuild: put the in-flight work directly after the new
-        // summary, then reconstruct recent dialogue. This deliberately opts
-        // out of retaining the former cacheable edge while preserving valid
-        // tool-call/result pairs for stateless provider loops.
-        let tail_kept = extend_unique_items(&mut new_items, tail);
-        extend_unique_items(&mut new_items, recent);
-        (tail_kept, "classic rebuild: working tail reconstructed")
-    };
-    session.input_items = new_items;
-    runner.persist_session(session);
-    Ok(format!(
-        "{summary}\n\n[compact: thinned {thinned} tool bodies · kept {kept} recent dialogue items · \
-         {tail_kept} working items · precompact bak written · context_store vars preserved · \
-         {strategy}{}]",
-        jev_note
-            .map(|n| format!(" · jev pre-pass: {n}"))
-            .unwrap_or_default()
-    ))
-}
-
-fn extend_unique_items(
-    items: &mut Vec<Value>,
-    additions: impl IntoIterator<Item = Value>,
-) -> usize {
-    let before = items.len();
-    for item in additions {
-        if !items.contains(&item) {
-            items.push(item);
-        }
-    }
-    items.len() - before
-}
-
-/// Keep a request-valid recent context when the provider refuses both the
-/// original request and the model-assisted compaction request as too large.
-///
-/// The full persisted transcript is copied to `*.precompact.bak` first. The
-/// live request retains recent dialogue and complete tool-call/result pairs,
-/// which is enough for the agent to continue or reconstruct details with tools.
-fn emergency_compact_session(runner: &AgentRunner, session: &mut Session) -> usize {
-    snapshot_before_compact(session);
-    let keep_turns = runner.config.compact_keep_user_turns.max(2) as usize;
-    let mut new_items = vec![user_text_item(
-        "[Emergency context recovery: the provider rejected the prior request as larger than its \
-         context window. Older details remain in the persisted session and precompact backup. \
-         Continue the current task from the recent dialogue and complete tool results below. \
-         Re-read workspace files when an omitted detail is needed.]",
-    )];
-    new_items.extend(recent_dialogue_items(&session.messages, keep_turns));
-    new_items.extend(safe_tail_after_compact(
-        &session.input_items,
-        EMERGENCY_KEEP_WORKING_ITEMS,
-    ));
-    session.input_items = new_items;
-    runner.persist_session(session);
-    session.input_items.len()
-}
-
-/// Fit all request components, retaining every tool name and valid schema.
-/// Original large payloads stay retrievable, and call/result pairs are removed
-/// together when their arguments alone cannot fit the provider window.
-fn fit_recovery_request(
-    session: &mut Session,
-    instructions: &mut String,
-    tools: &mut [crate::api::types::ToolDef],
-    window: u64,
-    reserve: u64,
-) -> u64 {
-    fn kind(item: &Value) -> &str {
-        item.get("type").and_then(Value::as_str).unwrap_or("")
-    }
-    fn call_id(item: &Value) -> &str {
-        item.get("call_id").and_then(Value::as_str).unwrap_or("")
-    }
-    fn compact_schema(value: &mut Value) {
-        if let Some(object) = value.as_object_mut() {
-            object.remove("description");
-            object.remove("examples");
-            object.remove("title");
-            if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
-                for property in properties.values_mut() {
-                    compact_schema(property);
-                }
-            }
-            for field in ["items", "additionalProperties"] {
-                if let Some(value) = object.get_mut(field) {
-                    compact_schema(value);
-                }
-            }
-            for field in ["oneOf", "anyOf", "allOf"] {
-                if let Some(values) = object.get_mut(field).and_then(Value::as_array_mut) {
-                    for value in values {
-                        compact_schema(value);
-                    }
-                }
-            }
-        }
-    }
-    fn excerpt(session: &str, name: &str, body: &str, limit: usize) -> String {
-        let name = format!("{name}_{}", uuid::Uuid::new_v4().simple());
-        let saved = super::context_store::register(
-            session,
-            &name,
-            body,
-            "context_recovery",
-            "provider-window",
-        );
-        let pointer = match saved {
-            Ok(variable) => format!("Full content: context tool peek/slice/search name={} (id={}).", variable.name, variable.id),
-            Err(_) => "Full prior dialogue/tool results remain in the persisted session and precompact backup; original skills remain on disk.".into(),
-        };
-        let notice =
-            format!("[Context recovery. {pointer} Retrieve omitted details before acting.]\n");
-        let remaining = limit.saturating_sub(notice.len());
-        let mut head_end = (remaining / 2).min(body.len());
-        while !body.is_char_boundary(head_end) {
-            head_end -= 1;
-        }
-        let mut tail_start = body.len().saturating_sub(remaining / 2);
-        while !body.is_char_boundary(tail_start) {
-            tail_start += 1;
-        }
-        let head = &body[..head_end];
-        let tail = &body[tail_start..];
-        format!("{notice}{head}\n{tail}")
-    }
-    let reserve = reserve.min(window / 8);
-    for tool in tools.iter_mut() {
-        if let Some(description) = &mut tool.description {
-            *description = description.chars().take(240).collect();
-        }
-        if let Some(parameters) = &mut tool.parameters {
-            compact_schema(parameters);
-        }
-    }
-    let instruction_limit = (window.saturating_mul(4) / 3).max(512) as usize;
-    if instructions.len() > instruction_limit {
-        *instructions = excerpt(
-            &session.id,
-            "recovery_instructions",
-            instructions,
-            instruction_limit,
-        );
-    }
-    let fixed = attribute_request(instructions, tools, &[])
-        .estimated_input_tokens()
-        .saturating_add(reserve)
-        .saturating_add(128);
-    let available_chars = window.saturating_sub(fixed).saturating_mul(4).max(512) as usize;
-    let individual = available_chars / session.input_items.len().max(1);
-    let mut omitted_calls = std::collections::HashSet::new();
-    for (index, item) in session.input_items.iter_mut().enumerate() {
-        // Inline images are priced as media (see `estimate_item_tokens`), so a
-        // normal screenshot never counts as oversized text here.
-        let measured = crate::agent::prompt::estimate_item_tokens(item).saturating_mul(4) as usize;
-        if measured <= individual.max(256) {
-            continue;
-        }
-        // An item that is still too large with its images drops them to a
-        // placeholder; the base64 must never be excerpted as text.
-        if strip_inline_images(item) > 0 {
-            let again = crate::agent::prompt::estimate_item_tokens(item).saturating_mul(4) as usize;
-            if again <= individual.max(256) {
-                continue;
-            }
-        }
-        let encoded = serde_json::to_string(item).unwrap_or_default();
-        if kind(item) == "function_call" {
-            omitted_calls.insert(call_id(item).to_string());
-            continue;
-        }
-        if kind(item) == "function_call_output" {
-            let body = item
-                .get("output")
-                .and_then(Value::as_str)
-                .unwrap_or(&encoded)
-                .to_string();
-            item["output"] = Value::String(excerpt(
-                &session.id,
-                &format!("recovery_result_{index}"),
-                &body,
-                individual.max(256),
-            ));
-        } else {
-            *item = user_text_item(&excerpt(
-                &session.id,
-                &format!("recovery_item_{index}"),
-                &encoded,
-                individual.max(256),
-            ));
-        }
-    }
-    session
-        .input_items
-        .retain(|item| !omitted_calls.contains(call_id(item)));
-    // Remove older dialogue/pairs as complete groups until the envelope fits.
-    while session.input_items.len() > 1
-        && attribute_request(instructions, tools, &session.input_items)
-            .estimated_input_tokens()
-            .saturating_add(reserve)
-            > window
-    {
-        let id = call_id(&session.input_items[0]).to_string();
-        session.input_items.remove(0);
-        if !id.is_empty() {
-            session.input_items.retain(|item| call_id(item) != id);
-        }
-    }
-    reserve
-}
-
-fn snapshot_before_compact(session: &Session) {
-    let path = session.path();
-    if path.is_file() {
-        let pre = path.with_extension("precompact.bak");
-        let _ = std::fs::copy(path, pre);
-    }
-}
-
-/// Working items carried across a compaction so the model can see the task it
-/// was mid-way through.
-const COMPACT_KEEP_WORKING_ITEMS: usize = 12;
-const EMERGENCY_KEEP_WORKING_ITEMS: usize = 16;
-
-/// Take the tail of the working items, keeping only *complete* tool pairs.
-///
-/// A `function_call_output` whose `function_call` was summarised away is a hard
-/// 400 on both wire formats — OpenAI rejects a `tool` message with no preceding
-/// declaration, Anthropic rejects a `tool_result` with no matching `tool_use`.
-/// Dropping either half of a split pair keeps the slice valid for both.
-fn safe_tail_after_compact(items: &[Value], want: usize) -> Vec<Value> {
-    let start = items.len().saturating_sub(want);
-    let tail = &items[start..];
-    fn kind(v: &Value) -> &str {
-        v.get("type").and_then(|t| t.as_str()).unwrap_or("")
-    }
-    fn call_id(v: &Value) -> &str {
-        v.get("call_id").and_then(|c| c.as_str()).unwrap_or("")
-    }
-    let calls: std::collections::HashSet<&str> = tail
-        .iter()
-        .filter(|v| kind(v) == "function_call")
-        .map(call_id)
-        .collect();
-    let outputs: std::collections::HashSet<&str> = tail
-        .iter()
-        .filter(|v| kind(v) == "function_call_output")
-        .map(call_id)
-        .collect();
-    tail.iter()
-        .filter(|v| match kind(v) {
-            "function_call" => outputs.contains(call_id(v)),
-            "function_call_output" => calls.contains(call_id(v)),
-            _ => true,
-        })
-        .cloned()
-        .collect()
-}
-
-/// Truncate oversized `function_call_output` bodies outside the last `keep_user_turns`
-/// user messages. Returns how many bodies were thinned.
-fn thin_tool_bodies_for_compact(
-    items: &mut [Value],
-    max_chars: usize,
-    keep_user_turns: usize,
-) -> usize {
-    if max_chars == 0 {
-        return 0;
-    }
-    let user_idxs: Vec<usize> = items
-        .iter()
-        .enumerate()
-        .filter(|(_, it)| it.get("role").and_then(|r| r.as_str()) == Some("user"))
-        .map(|(i, _)| i)
-        .collect();
-    let protect_from = if user_idxs.len() > keep_user_turns.max(1) {
-        user_idxs[user_idxs.len() - keep_user_turns.max(1)]
-    } else {
-        0
-    };
-
-    let mut n = 0usize;
-    for (i, it) in items.iter_mut().enumerate() {
-        if i >= protect_from {
-            continue;
-        }
-        if it.get("type").and_then(|t| t.as_str()) != Some("function_call_output") {
-            continue;
-        }
-        let Some(out) = it.get("output").and_then(|o| o.as_str()) else {
-            continue;
-        };
-        if out.chars().count() <= max_chars {
-            continue;
-        }
-        let preview: String = out.chars().take(max_chars).collect();
-        let total = out.chars().count();
-        if let Some(m) = it.as_object_mut() {
-            m.insert(
-                "output".into(),
-                Value::String(format!(
-                    "{preview}\n… [thinned for compact: {total} → {max_chars} chars]"
-                )),
-            );
-        }
-        n += 1;
-    }
-    n
-}
-
-/// One completed tool call from this response, kept for the post-execution
-/// judge. Bodies stay verbatim; this is a reference, not a rewrite.
-pub(crate) struct TsToolResult {
-    pub tool: String,
-    pub args: String,
-    pub body: String,
-    pub ok: bool,
-}
-
-/// The ongoing job as Jev should see it: the last `prompts` user turns and any
-/// assistant reply, bounded.
-fn typesafe_goal(session: &Session, prompts: usize) -> String {
-    let items = recent_dialogue_items(&session.messages, prompts);
-    let mut out = String::new();
-    for item in items {
-        let text = item
-            .get("content")
-            .and_then(Value::as_array)
-            .and_then(|a| a.first())
-            .and_then(|p| p.get("text"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if text.is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(&crate::typesafe::harness::judge_preview(text, 1_500));
-    }
-    out
-}
-
-/// Code-built facts for the gate: for each pending call, the index of an
-/// identical earlier call whose result is still in context, and how many times
-/// that exact call has already failed.
-///
-/// This is deliberately code, not a question: Jev is only asked to judge the
-/// cases where a duplicate actually exists. "Did anything change since?" is a
-/// fact too, so any other state-changing call (earlier in the transcript or
-/// earlier in this batch) resets both facts: a read after an edit is not a
-/// duplicate, and a failure before a fix is not the same failure again.
-fn typesafe_call_facts(calls: &[FunctionCallRef], items: &[Value]) -> Vec<(Option<usize>, u32)> {
-    enum Outcome {
-        Pending,
-        Ok,
-        /// In context only in part (cut down by Jev compaction).
-        Partial,
-        Failed,
-    }
-    let mut order: Vec<(String, String, String)> = Vec::new(); // call_id, name, args
-    let mut outcome_of: std::collections::HashMap<String, Outcome> =
-        std::collections::HashMap::new();
-    for item in items {
-        let kind = item.get("type").and_then(Value::as_str).unwrap_or("");
-        let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
-        match kind {
-            "function_call" => order.push((
-                call_id.to_string(),
-                item.get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                item.get("arguments")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-            )),
-            "function_call_output" => {
-                let body = item.get("output").and_then(Value::as_str).unwrap_or("");
-                let outcome = if body.trim_start().starts_with("error:") {
-                    Outcome::Failed
-                } else if body.contains("chars dropped by Jev-scored compaction") {
-                    Outcome::Partial
-                } else {
-                    Outcome::Ok
-                };
-                outcome_of.insert(call_id.to_string(), outcome);
-            }
-            _ => {}
-        }
-    }
-    calls
-        .iter()
-        .enumerate()
-        .map(|(k, c)| {
-            let want = normalize_args(&c.arguments);
-            let same = |name: &str, args: &str| name == c.name && normalize_args(args) == want;
-            let changes = |name: &str, args: &str| {
-                !same(name, args) && !crate::tools::capabilities::is_read_only_call(name, args)
-            };
-            let mut dup: Option<usize> = None;
-            let mut failures = 0u32;
-            for (i, (id, name, args)) in order.iter().enumerate() {
-                if changes(name, args) {
-                    dup = None;
-                    failures = 0;
-                    continue;
-                }
-                if !same(name, args) {
-                    continue;
-                }
-                match outcome_of.get(id).unwrap_or(&Outcome::Pending) {
-                    Outcome::Failed => failures += 1,
-                    Outcome::Ok => dup = Some(i),
-                    Outcome::Partial | Outcome::Pending => {}
-                }
-            }
-            if calls[..k].iter().any(|p| changes(&p.name, &p.arguments)) {
-                dup = None;
-                failures = 0;
-            }
-            (dup, failures)
-        })
-        .collect()
-}
-
-/// Canonical form of a tool call's arguments, for "is this the same call?".
-///
-/// Structural when the arguments parse as JSON (`{"a": 1}` and `{"a":1}` are the
-/// same call; key order does not matter), with a whitespace collapse as the
-/// fallback for tools that take raw text. Whitespace *inside* a JSON string is
-/// significant and stays significant.
-fn normalize_args(args: &str) -> String {
-    match serde_json::from_str::<Value>(args) {
-        Ok(v) => v.to_string(),
-        Err(_) => args.split_whitespace().collect::<Vec<_>>().join(" "),
-    }
-}
-
-/// This turn's tool trace as one-line evidence: what was called, and roughly
-/// what came back. Code-built, bounded, and never the whole repository.
-fn typesafe_trace_evidence(items: &[Value], max: usize) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for item in items.iter().rev() {
-        let kind = item.get("type").and_then(Value::as_str).unwrap_or("");
-        match kind {
-            "function_call_output" => {
-                let body = item.get("output").and_then(Value::as_str).unwrap_or("");
-                let failed = body.trim_start().starts_with("error:");
-                out.push(format!(
-                    "{}result: {}",
-                    if failed { "FAILED " } else { "" },
-                    crate::typesafe::harness::judge_preview(body, 200)
-                ));
-            }
-            "function_call" => {
-                out.push(format!(
-                    "call {} {}",
-                    item.get("name").and_then(Value::as_str).unwrap_or("?"),
-                    crate::typesafe::harness::judge_preview(
-                        item.get("arguments").and_then(Value::as_str).unwrap_or(""),
-                        160
-                    )
-                ));
-            }
-            _ => {}
-        }
-        if out.len() >= max {
-            break;
-        }
-    }
-    out.reverse();
-    out
-}
+#[path = "compaction.rs"]
+mod compaction;
+use compaction::*;
+pub use compaction::compact_session;
 
 /// Most times the skill layer may correct a single turn. A triggered skill
 /// should steer the work, not nag it.

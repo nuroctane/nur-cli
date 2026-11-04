@@ -24,6 +24,28 @@ pub struct ProcessTree {
 }
 
 impl ProcessTree {
+    /// Keep descendants alive after a successfully completed launcher. This is
+    /// needed for tools that deliberately start a persistent browser daemon.
+    pub fn disarm(self) {
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::System::JobObjects::{
+                JobObjectExtendedLimitInformation, SetInformationJobObject,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            };
+            let info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+            unsafe {
+                SetInformationJobObject(
+                    job.as_raw_handle(),
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const _,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+            }
+        }
+    }
+
     /// Spawn `cmd` so that every descendant is in the tree from its first
     /// instruction.
     pub fn spawn(cmd: &mut Command) -> std::io::Result<(Child, Self)> {

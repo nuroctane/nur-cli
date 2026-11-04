@@ -1,0 +1,45 @@
+{
+  "description": "Disabling prewarm leaves the first edit independent of the language server.",
+  "prompt": "Edit note.py.",
+  "setup_files": {
+    "fake_lsp.py": "import sys, json\nr = sys.stdin.buffer\nw = sys.stdout.buffer\ndef send(obj):\n    body = json.dumps(obj).encode()\n    w.write((\"Content-Length: %d\\r\\n\\r\\n\" % len(body)).encode() + body)\n    w.flush()\nwhile True:\n    headers = {}\n    while True:\n        line = r.readline()\n        if not line: sys.exit(0)\n        if line in (b\"\\r\\n\", b\"\\n\"): break\n        key, value = line.decode().split(\":\", 1)\n        headers[key.lower()] = value.strip()\n    msg = json.loads(r.read(int(headers[\"content-length\"])))\n    if msg.get(\"method\") == \"initialize\":\n        send({\"jsonrpc\":\"2.0\",\"id\":msg[\"id\"],\"result\":{\"capabilities\":{}}})\n    if msg.get(\"method\") in (\"textDocument/didOpen\",\"textDocument/didChange\"):\n        doc = msg[\"params\"][\"textDocument\"]\n        send({\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":doc[\"uri\"],\"diagnostics\":[{\"range\":{\"start\":{\"line\":0,\"character\":0}},\"severity\":1,\"message\":\"version %s\" % doc[\"version\"]}]}})\n",
+    "note.py": "value = 1\n"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[lsp]\nprewarm = false\n[lsp.servers]\npy = \"python {workspace}/fake_lsp.py\"\n"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "note.py",
+            "contents": "value = 2\n"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Updated."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": [
+          "wrote note.py"
+        ],
+        "lacks": [
+          "version 1"
+        ]
+      }
+    ],
+    "stdout_contains": [
+      "Updated."
+    ]
+  }
+}

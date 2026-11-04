@@ -1,0 +1,17 @@
+{
+  "description": "A managed worktree name cannot escape the managed directory.",
+  "setup_git": true,
+  "setup_files": {"note.txt": "original\n"},
+  "prompt": "Try to create the specified worktree.",
+  "script": [
+    {"tool_calls": [{"name": "worktree", "arguments": {"action": "create", "name": "../outside"}}]},
+    {"text": "Invalid worktree name rejected."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["worktree name must contain"]}],
+    "files": {"note.txt": "original\n"},
+    "stdout_contains": ["Invalid worktree name rejected."]
+  }
+}

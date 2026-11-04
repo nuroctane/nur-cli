@@ -152,6 +152,13 @@ the surviving items so the next request can fit. Missing credentials, disabled
 Jev/compaction, or explicit `replace_summary = false` retain the normal summary
 path. A key does not override an explicit disable setting.
 
+Models can call `typesafe` with `{"action":"compact"}` to compact their live
+session. Nur waits until all tool calls in that response are answered, then
+uses the same Jev-first pressure recovery and reports the result. The action is
+available in every tool profile and to subagents, and uses the configured
+hosted or local decision engine. When it cannot prune enough, it falls back to
+summarization.
+
 `/receipt` records the trigger, strategy (`jev_pruned`, `jev_unchanged`,
 `summary`, or `failed`), item counts and reason, without summary contents.
 The manual result no longer labels a Jev prune or no-op as a summary.

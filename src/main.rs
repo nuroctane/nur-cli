@@ -8,6 +8,7 @@ mod bootstrap;
 mod cache_io;
 mod cli;
 mod config;
+mod config_dump;
 mod credential_seal;
 mod dogwood;
 mod ecosystem;
@@ -17,6 +18,8 @@ mod error;
 mod fractal;
 mod gateway;
 mod gepa;
+mod self_tune;
+mod acp;
 mod headless;
 mod headroom;
 mod jev_catalog;
@@ -40,6 +43,8 @@ mod pricing;
 mod process_tree;
 mod providers;
 mod sandbox_os;
+#[cfg(target_os = "linux")]
+mod sandbox_linux;
 mod sgrep;
 mod secrets;
 mod skills_market;
@@ -53,6 +58,7 @@ mod tools;
 mod tui;
 mod typesafe;
 mod usage;
+mod worktree;
 
 use agent::session::{print_sessions, Session};
 use agent::{AgentEvent, AgentRunner, ApprovalDecision, PermissionMode, SharedMode};
@@ -118,10 +124,20 @@ fn run_key_pool(action: &cli::PoolCmd) -> Result<()> {
 
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--nur-sandbox-internal")) {
+        sandbox_linux::run_helper();
+    }
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--nur-mcp-http-internal")) {
+        mcp_stdio::run_http_helper();
+        return;
+    }
     startup::mark("main");
     init_tracing();
 
-    if let Err(e) = real_main().await {
+    let result = real_main().await;
+    tools::debug_tool::shutdown_all();
+    if let Err(e) = result {
         theme::print_err(&e.to_string());
         std::process::exit(e.exit_code());
     }
@@ -604,6 +620,11 @@ async fn real_main() -> Result<()> {
         .or_else(|| std::env::current_dir().ok())
         .and_then(|dir| cfg.scope_to(&dir));
 
+    if matches!(cli.command, Some(Commands::Config { dump: true })) {
+        println!("{}", config_dump::redacted_dump(&cfg)?);
+        return Ok(());
+    }
+
     // models.dev list prices → status-line $ estimates (background refresh).
     if !deferred_tui {
         pricing::spawn_catalog_refresh();
@@ -694,9 +715,11 @@ async fn real_main() -> Result<()> {
             &cfg.model,
         );
         if resolved != cfg.model {
-            theme::print_info(&format!(
-                "local model placeholder → resolved to `{resolved}` via /models"
-            ));
+            if !matches!(cli.command, Some(Commands::Acp)) {
+                theme::print_info(&format!(
+                    "local model placeholder → resolved to `{resolved}` via /models"
+                ));
+            }
             cfg.model = resolved;
         }
     }
@@ -918,10 +941,14 @@ async fn real_main() -> Result<()> {
             )
             .await?;
         }
+        Some(Commands::Acp) => {
+            acp::serve(client, cfg).await.map_err(|error| error::NurError::Other(error.to_string()))?;
+        }
         Some(Commands::Bench { action }) => {
             bench::run_bench(action, client, cfg, cwd).await?;
         }
-        Some(Commands::Auth { .. })
+        Some(Commands::Config { .. })
+        | Some(Commands::Auth { .. })
         | Some(Commands::Usage)
         | Some(Commands::Permissions { .. })
         | Some(Commands::Skills { .. })
@@ -956,6 +983,7 @@ fn maybe_auto_update_on_launch(command: &Option<Commands>) -> bool {
             | Some(Commands::SelfInstall)
             | Some(Commands::Update { .. })
             | Some(Commands::Doctor)
+            | Some(Commands::Config { .. })
     ) {
         return false;
     }
@@ -1651,6 +1679,7 @@ async fn run_headless(
         permissions,
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
+        interactive_children: false,
         prewalk_override: Arc::new(Mutex::new(None)),
         approved_domains: Arc::new(Mutex::new(HashSet::new())),
         subagent_depth: 0,
@@ -1689,6 +1718,9 @@ async fn run_headless(
             AgentEvent::AssistantMessage(m) => out.assistant_message(&m),
             AgentEvent::ReasoningDelta(_) => {}
             AgentEvent::Status(s) => out.status(&s),
+            AgentEvent::ChildStatus { status, finished, .. } => {
+                if !finished { out.status(&format!("subagent · {status}")); }
+            }
             AgentEvent::ToolStart { name, args, .. } => out.tool_start(&name, &args),
             AgentEvent::ToolEnd {
                 name, result, ok, ..
@@ -1697,6 +1729,7 @@ async fn run_headless(
                 name,
                 args,
                 respond,
+                ..
             } => {
                 // Interactive terminal prompt (headless without -y), on stderr
                 // so a captured stdout stays the answer.
@@ -1914,6 +1947,7 @@ async fn run_continuous(
         permissions: agent::SharedPermissions::load(&cwd),
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
+        interactive_children: false,
         prewalk_override: Arc::new(Mutex::new(None)),
         approved_domains: Arc::new(Mutex::new(HashSet::new())),
         subagent_depth: 0,
@@ -2047,6 +2081,7 @@ async fn run_continuous(
                     name,
                     args,
                     respond,
+                    ..
                 } => {
                     let decision = tokio::task::spawn_blocking(move || {
                         eprintln!();

@@ -1,0 +1,12 @@
+{
+  "description": "A debugger adapter cannot write outside the workspace when the OS sandbox is enabled.",
+  "linux_only": true,
+  "requires_bwrap": true,
+  "setup_home_files": {"config.toml": "provider=\"vllm\"\nbase_url=\"http://127.0.0.1:{port}/v1\"\nmodel=\"e2e-model\"\n[sandbox]\nenabled=true\nmode=\"workspace-write\"\n"},
+  "prompt": "Try the debug adapter.",
+  "script": [
+    {"tool_calls": [{"name": "debug", "arguments": {"action": "start", "session": "probe", "adapter": "/bin/sh", "adapter_args": ["-c", "echo escaped > ../debug-escape.txt"], "launch": {}}}]},
+    {"text": "Adapter checked."}
+  ],
+  "expect": {"exit_code": 0, "requests": 2, "stdout_contains": ["Adapter checked."], "absent_files": ["../debug-escape.txt"]}
+}

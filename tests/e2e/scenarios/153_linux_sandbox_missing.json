@@ -1,0 +1,20 @@
+{
+  "description": "An unavailable sandbox refuses a command instead of running it unsandboxed.",
+  "linux_only": true,
+  "prompt": "Run the sandbox verification command.",
+  "env": {"PATH": "{workspace}"},
+  "setup_files": {"bwrap": "not a trusted sandbox\n"},
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[sandbox]\nenabled = true\nmode = \"workspace-write\"\n"
+  },
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "echo ESCAPED"}}]},
+    {"text": "Sandbox refusal checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": ["Sandbox refusal checked."],
+    "tool_results": [{"request": 2, "contains": ["bubblewrap is unavailable"], "lacks": ["ESCAPED"]}]
+  }
+}

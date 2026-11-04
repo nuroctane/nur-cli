@@ -25,8 +25,11 @@ pub async fn run_subagent(
     prompt: &str,
     subagent_type: &str,
     parent_depth: u32,
+    interactive_children: bool,
     parent_session: &str,
     context_vars: &[String],
+    output_schema: Option<&serde_json::Value>,
+    worktree_lease: Option<Arc<crate::worktree::Lease>>,
     cancel: &CancellationToken,
     parent_tx: &mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<(String, TokenUsage)> {
@@ -62,6 +65,7 @@ pub async fn run_subagent(
         permissions: super::SharedPermissions::load(&cwd),
         hooks: super::hooks::HooksConfig::load(),
         is_subagent: true,
+        interactive_children,
         prewalk_override: Arc::new(Mutex::new(None)),
         // Children share the parent's approved fetch domains: a domain the
         // user already blessed stays blessed inside a delegated run.
@@ -70,6 +74,7 @@ pub async fn run_subagent(
     });
 
     let session = Session::new_for_provider(&cfg.model, &cfg.provider, &cwd.display().to_string());
+    let _lease_scope = crate::worktree::attach(&session.id, worktree_lease)?;
     // The parent hands over the context variables it named (a spilled tool
     // result, a registered document); the child reads them in place instead of
     // the parent pasting them into the prompt; the task prompt lists them.
@@ -86,10 +91,20 @@ pub async fn run_subagent(
         inventory if inventory.is_empty() => inventory,
         inventory => format!("\n\n{inventory}"),
     };
+    let question_instruction = if interactive_children {
+        "Use the question tool only when a human decision is necessary."
+    } else {
+        "Do not ask the user questions."
+    };
+    let format_instruction = match output_schema {
+        Some(schema) => format!("When finished, return only one JSON value matching this output_schema: {schema}. Do not use markdown fences. {question_instruction}"),
+        None => format!("When finished, respond with a concise report: findings, files touched/read, next steps. {question_instruction}"),
+    };
     let prompt = format!(
         "[SUBAGENT:{subagent_type}] {prompt}{handed_over}\n\n\
-         When finished, respond with a concise report: findings, files touched/read, next steps. \
-         Do not ask the user questions."
+         If a command is handed to a background job, inspect its result before \
+         claiming it completed, or report the job id and that it is still pending.\n\n\
+         {format_instruction}"
     );
 
     let handle = super::spawn_turn(runner, session, usage, prompt, tx, cancel.clone());
@@ -97,14 +112,24 @@ pub async fn run_subagent(
     // Publish this run to the shared table the inline `/swarm` card reads,
     // including where it was routed — the whole point of a cross-provider
     // fan-out is being able to see that it actually went elsewhere.
-    let run_id = swarm::begin_on(subagent_type, &task, &cfg.provider, &cfg.model);
+    let run_id = swarm::begin_on_for(
+        parent_session,
+        subagent_type,
+        &task,
+        &cfg.provider,
+        &cfg.model,
+    );
 
     let mut last_text = String::new();
     while let Some(ev) = rx.recv().await {
         match ev {
             AgentEvent::Status(status) => {
                 swarm::activity(run_id, &status);
-                let _ = parent_tx.send(AgentEvent::Status(format!("subagent · {status}")));
+                let _ = parent_tx.send(AgentEvent::ChildStatus {
+                    parent_session: parent_session.to_string(),
+                    status,
+                    finished: false,
+                });
             }
             AgentEvent::ToolStart { name, args, .. } => {
                 swarm::tool_start_with(run_id, &name, &args);
@@ -126,6 +151,7 @@ pub async fn run_subagent(
                 retry_desc,
                 retry_kind,
                 retry_model,
+                ..
             } => {
                 let _ = parent_tx.send(AgentEvent::LoginRequired {
                     provider_id,
@@ -134,6 +160,7 @@ pub async fn run_subagent(
                     retry_desc,
                     retry_kind,
                     retry_model,
+                    parent_session: Some(parent_session.to_string()),
                 });
             }
             AgentEvent::FusionLoginRequired { .. } => {}
@@ -141,8 +168,20 @@ pub async fn run_subagent(
                 name,
                 args,
                 respond,
+                ..
             } => {
-                relay_approval(parent_tx, name, args, respond, &cancel).await;
+                relay_approval_scoped(
+                    parent_tx,
+                    name,
+                    args,
+                    respond,
+                    &cancel,
+                    Some(parent_session.to_string()),
+                )
+                .await;
+            }
+            event @ AgentEvent::QuestionRequest { .. } => {
+                relay_question(parent_tx, event, &cancel, parent_session).await;
             }
             AgentEvent::TextDelta(d) => {
                 swarm::thinking(run_id);
@@ -215,14 +254,72 @@ fn subagent_failure(error: &str, partial: &str) -> NurError {
     }
 }
 
-/// One approval prompt at a time, across every concurrent subagent.
+/// One child prompt at a time per parent session.
 ///
 /// The parent has a single approval slot (TUI dialogue / terminal prompt), so
 /// two children asking at once would clobber each other — the loser's channel
 /// drops and it silently reads as a denial. Children queue here instead.
-fn approval_turnstile() -> &'static tokio::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(Default::default)
+fn approval_turnstile(session: &str) -> Arc<tokio::sync::Mutex<()>> {
+    type WeakLock = std::sync::Weak<tokio::sync::Mutex<()>>;
+    static LOCKS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, WeakLock>>> =
+        std::sync::OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(session).and_then(WeakLock::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(session.to_string(), Arc::downgrade(&lock));
+    lock
+}
+
+async fn relay_question(
+    parent_tx: &mpsc::UnboundedSender<AgentEvent>,
+    event: AgentEvent,
+    cancel: &CancellationToken,
+    parent_session: &str,
+) {
+    let AgentEvent::QuestionRequest {
+        turn_cancel,
+        question,
+        header,
+        options,
+        multi_select,
+        respond,
+        ..
+    } = event
+    else {
+        return;
+    };
+    let turnstile = approval_turnstile(parent_session);
+    let _turn = tokio::select! {
+        _ = cancel.cancelled() => { let _ = respond.send(super::QuestionAnswer::unavailable()); return; }
+        turn = turnstile.lock() => turn,
+    };
+    let (proxy_tx, proxy_rx) = tokio::sync::oneshot::channel();
+    if parent_tx
+        .send(AgentEvent::QuestionRequest {
+            turn_cancel,
+            question,
+            header: format!("Subagent - {header}"),
+            options,
+            multi_select,
+            respond: proxy_tx,
+            parent_session: Some(parent_session.to_string()),
+        })
+        .is_err()
+    {
+        let _ = respond.send(super::QuestionAnswer::unavailable());
+        return;
+    }
+    let answer = tokio::select! {
+        _ = cancel.cancelled() => super::QuestionAnswer::unavailable(),
+        answer = proxy_rx => answer.unwrap_or_else(|_| super::QuestionAnswer::unavailable()),
+    };
+    let _ = respond.send(answer);
 }
 
 #[cfg(test)]
@@ -238,6 +335,7 @@ pub async fn relay_approval_for_test(
 
 /// Proxy a child approval through the parent event loop, which is the only
 /// runner that has a terminal prompt or TUI approval surface.
+#[cfg(test)]
 async fn relay_approval(
     parent_tx: &mpsc::UnboundedSender<AgentEvent>,
     name: String,
@@ -245,16 +343,28 @@ async fn relay_approval(
     respond: tokio::sync::oneshot::Sender<ApprovalDecision>,
     cancel: &CancellationToken,
 ) {
+    relay_approval_scoped(parent_tx, name, args, respond, cancel, None).await;
+}
+
+async fn relay_approval_scoped(
+    parent_tx: &mpsc::UnboundedSender<AgentEvent>,
+    name: String,
+    args: String,
+    respond: tokio::sync::oneshot::Sender<ApprovalDecision>,
+    cancel: &CancellationToken,
+    parent_session: Option<String>,
+) {
     if cancel.is_cancelled() {
         let _ = respond.send(ApprovalDecision::Deny);
         return;
     }
+    let turnstile = approval_turnstile(parent_session.as_deref().unwrap_or_default());
     let _turn = tokio::select! {
         _ = cancel.cancelled() => {
             let _ = respond.send(ApprovalDecision::Deny);
             return;
         }
-        turn = approval_turnstile().lock() => turn,
+        turn = turnstile.lock() => turn,
     };
     if cancel.is_cancelled() {
         let _ = respond.send(ApprovalDecision::Deny);
@@ -266,6 +376,7 @@ async fn relay_approval(
             name,
             args,
             respond: proxy_tx,
+            parent_session,
         })
         .is_err()
     {
@@ -282,6 +393,24 @@ async fn relay_approval(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn child_prompts_in_other_sessions_are_not_blocked() {
+        let first = approval_turnstile("session-one");
+        let second = approval_turnstile("session-two");
+        let _held = first.lock().await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), second.lock())
+                .await
+                .is_ok()
+        );
+        let same = approval_turnstile("session-one");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), same.lock())
+                .await
+                .is_err()
+        );
+    }
 
     #[test]
     fn partial_child_output_never_turns_a_failure_into_success() {

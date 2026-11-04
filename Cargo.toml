@@ -19,6 +19,7 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.13.5", features = ["json", "stream", "rustls", "blocking", "form", "query", "http2", "system-proxy"], default-features = false }
+rmcp = { version = "=3.8.0", default-features = false, features = ["auth", "client", "reqwest"] }
 helix-ast = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -67,6 +68,8 @@ anydoc = { version = "0.2.4", optional = true }
 # toolchain, no ambient fs/net/process), so the tool bridge really is the only
 # way out of a script. Optional so a lean build can drop the engine.
 boa_engine = { version = "0.22", default-features = false, optional = true }
+jsonschema = { version = "0.60.2", default-features = false }
+agent-client-protocol = { version = "=5.0.0", features = ["stdio"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_Diagnostics_ToolHelp", "Win32_Globalization"] }
@@ -74,6 +77,10 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Sh
 [target.'cfg(unix)'.dependencies]
 # killpg for shell process groups (std has no group kill).
 libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.7"
+seccompiler = "0.5.0"
 
 [features]
 default = ["image-peek", "anydoc", "codemode"]
@@ -96,3 +103,6 @@ codemode = ["dep:boa_engine"]
 strip = true
 lto = "thin"
 codegen-units = 1
+
+[dev-dependencies]
+tempfile = "3"

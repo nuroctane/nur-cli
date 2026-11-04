@@ -1,0 +1,22 @@
+{
+  "description": "A worktree stays leased while a handed-off child command is still running.",
+  "setup_git": true,
+  "setup_files": {"note.txt": "original\n"},
+  "prompt": "Create a worktree, start a slow writer, then try another writer there.",
+  "script": [
+    {"tool_calls": [{"name": "worktree", "arguments": {"action": "create", "name": "writer1"}}]},
+    {"match_child": false, "tool_calls": [{"name": "agent", "arguments": {"description": "slow writer", "prompt": "Run the slow command and report its job id.", "subagent_type": "general", "worktree": "writer1"}}]},
+    {"match_child": true, "tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(20); print('finished')\""}}]},
+    {"match_child": true, "text": "The command is still running in a background job."},
+    {"match_child": false, "tool_calls": [{"name": "agent", "arguments": {"description": "second writer", "prompt": "Edit a file.", "subagent_type": "general", "worktree": "writer1"}}]},
+    {"match_child": false, "tool_calls": [{"name": "bg", "arguments": {"action": "cancel", "id": 1}}]},
+    {"match_child": false, "tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(1)\""}}]},
+    {"match_child": false, "text": "Background writer isolation checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "min_requests": 8,
+    "requests_contain": ["worktree is already in use"],
+    "stdout_contains": ["Background writer isolation checked."]
+  }
+}

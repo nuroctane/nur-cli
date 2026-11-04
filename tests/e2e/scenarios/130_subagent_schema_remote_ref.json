@@ -1,0 +1,14 @@
+{
+  "description": "Remote schema references are rejected before a child runs.",
+  "prompt": "Ask a child for structured output.",
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Structured report", "prompt": "Report.", "output_schema": {"$ref": "https://example.test/schema.json"}}}]},
+    {"text": "The schema could not be resolved."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["invalid agent.output_schema"]}],
+    "stdout_contains": ["The schema could not be resolved."]
+  }
+}

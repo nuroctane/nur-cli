@@ -1,0 +1,16 @@
+{
+  "description": "An explicit child shell timeout takes precedence over automatic backgrounding.",
+  "prompt": "Have a child run the fixture with its requested timeout.",
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Run fixture", "prompt": "Run the command with its explicit timeout.", "subagent_type": "general"}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(6); print('finished')\"", "timeout_ms": 12000}}]},
+    {"text": "The command finished."},
+    {"text": "The child completed the command."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 4,
+    "tool_results": [{"request": 3, "contains": ["finished"], "lacks": ["handed off"]}],
+    "stdout_contains": ["The child completed the command."]
+  }
+}

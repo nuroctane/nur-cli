@@ -1,0 +1,42 @@
+{
+  "description": "Large-repository semantic discovery does not silently replace a query with a lexical filter.",
+  "workspace_paths": true,
+  "setup_empty_files": 3001,
+  "setup_files": {
+    "probe_semantic.py": "import json\nprint(json.dumps([{'path':'meaning.rs','start':1,'end':1,'content':'semantic result'}]))\n"
+  },
+  "env": {
+    "NUR_SGREP_BIN": "{python}"
+  },
+  "prompt": "Find the matching code semantically.",
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "sgrep",
+          "arguments": {
+            "query": "{workspace}/probe_semantic.py"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Semantic search completed."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": [
+          "semantic result"
+        ]
+      }
+    ],
+    "stdout_contains": [
+      "Semantic search completed."
+    ]
+  }
+}

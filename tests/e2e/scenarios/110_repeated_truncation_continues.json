@@ -1,0 +1,47 @@
+{
+  "description": "A turn continues past five provider truncations and reaches the model's actual completion.",
+  "prompt": "Complete the task despite short responses.",
+  "script": [
+    {
+      "text": "partial 1",
+      "finish_reason": "length"
+    },
+    {
+      "text": "partial 2",
+      "finish_reason": "length"
+    },
+    {
+      "text": "partial 3",
+      "finish_reason": "length"
+    },
+    {
+      "text": "partial 4",
+      "finish_reason": "length"
+    },
+    {
+      "text": "partial 5",
+      "finish_reason": "length"
+    },
+    {
+      "text": "partial 6",
+      "finish_reason": "length"
+    },
+    {
+      "text": "partial 7",
+      "finish_reason": "length"
+    },
+    {
+      "text": "All work completed."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 8,
+    "stdout_contains": [
+      "All work completed."
+    ],
+    "requests_contain": [
+      "finish_reason: length"
+    ]
+  }
+}

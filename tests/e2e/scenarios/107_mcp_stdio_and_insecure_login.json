@@ -1,0 +1,83 @@
+{
+  "description": "A local MCP server is initialized and called, while a remote plain HTTP login is rejected.",
+  "prompt": "List the MCP tools, call hello, and try the specified login.",
+  "setup_files": {
+    "fake_mcp.py": "import sys,json,os\nfor line in sys.stdin:\n    m=json.loads(line)\n    if \"id\" not in m: continue\n    method=m[\"method\"]\n    if method==\"initialize\": result={\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"serverInfo\":{\"name\":\"fake\",\"version\":\"1\"}}\n    elif method==\"tools/list\": result={\"tools\":[{\"name\":\"hello\",\"description\":\"Say hello\",\"inputSchema\":{\"type\":\"object\"}}]}\n    elif method==\"tools/call\": result={\"content\":[{\"type\":\"text\",\"text\":\"hello from stdio LEAKED_PROVIDER_KEY\" if os.environ.get(\"OPENAI_API_KEY\") else \"hello from stdio\"}]}\n    else: result={}\n    print(json.dumps({\"jsonrpc\":\"2.0\",\"id\":m[\"id\"],\"result\":result}),flush=True)\n"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[mcp.servers.fake]\ncommand = \"python\"\nargs = [\"{workspace}/fake_mcp.py\"]\nread_only = true\n"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "mcp",
+          "arguments": {
+            "action": "list"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "mcp",
+          "arguments": {
+            "action": "call",
+            "server": "fake",
+            "tool": "hello",
+            "arguments": {}
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "mcp",
+          "arguments": {
+            "action": "login",
+            "server": "fake",
+            "url": "http://example.test/mcp"
+          }
+        }
+      ]
+    },
+    {
+      "text": "MCP checked."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 4,
+    "stdout_contains": [
+      "MCP checked."
+    ],
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": [
+          "hello"
+        ]
+      },
+      {
+        "request": 3,
+        "contains": [
+          "hello from stdio"
+        ],
+        "lacks": [
+          "LEAKED_PROVIDER_KEY"
+        ]
+      },
+      {
+        "request": 4,
+        "contains": [
+          "requires HTTPS"
+        ]
+      }
+    ]
+  },
+  "env": {
+    "OPENAI_API_KEY": "e2e-provider-key"
+  }
+}

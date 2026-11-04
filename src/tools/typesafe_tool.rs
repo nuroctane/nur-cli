@@ -54,13 +54,14 @@ impl Tool for Typesafe {
          actions: ask (batched, any mix of question types) | choice | noul | score \
          | pick (choose among candidate strings you supply) | rank (score every \
          candidate in one request) | classify | risk | verify | prune (what still \
-         earns its context) | spam | needs_human | route (cheapest adequate model \
+         earns its context) | compact (compact this session using the configured \
+         decision engine, with summary fallback) | spam | needs_human | route (cheapest adequate model \
          for a fresh subagent) | reset | status. Multiple \
          independent questions in one `ask` cost a single round trip. Answers come \
          back with probabilities and `confidence`; below [typesafe] \
          escalate_confidence (0.5) the judgment is not trustworthy - escalate to a \
-         human or a bigger model instead of acting. The state you send goes to \
-         https://api.typesafe.ai; do not send secrets."
+         human or a bigger model instead of acting. State goes to the configured \
+         decision engine; do not send secrets."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -70,7 +71,7 @@ impl Tool for Typesafe {
                 "action": {
                     "type": "string",
                     "enum": ["ask", "choice", "noul", "score", "pick", "rank",
-                             "classify", "risk", "verify", "prune", "spam",
+                             "classify", "risk", "verify", "prune", "compact", "spam",
                              "needs_human", "route", "reset", "status"],
                     "default": "status"
                 },
@@ -168,13 +169,14 @@ impl Tool for Typesafe {
             "risk" => risk(&cfg, args),
             "verify" => verify(&cfg, args),
             "prune" => prune(&cfg, args),
+            "compact" => Ok("Session compaction must run through the agent loop.".into()),
             "reset" => Ok(reset()),
             "spam" => spam(&cfg, args),
             "needs_human" => needs_human(&cfg, args),
             "route" => route(&cfg, args),
             other => Ok(format!(
                 "unknown typesafe action '{other}' - ask|choice|noul|score|pick|rank|\
-                 classify|risk|verify|spam|needs_human|route|status"
+                 classify|risk|verify|prune|compact|reset|spam|needs_human|route|status"
             )),
         }
     }

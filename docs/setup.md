@@ -88,13 +88,14 @@ Same steps as the remote one-liner, using the checkout you already have.
 ### 4. Manual `cargo` build
 
 ```bash
-git clone https://github.com/nuroctane/nur-cli.git && cd nur-cli
+git clone --depth 1 https://github.com/nuroctane/nur-cli.git && cd nur-cli
 cargo build --release
 ./target/release/nur install   # Windows: .\target\release\nur.exe install
 nur auth login
 ```
 
 `nur install` is the same one-stop path the release EXE runs (binary → PATH → ecosystem → browser).
+The shallow clone avoids downloading the full project history; run `git fetch --unshallow` if you need it.
 
 ### Update (keep NurCLI current)
 
@@ -350,3 +351,8 @@ nur doctor   # confirm version + sha256
 - Source checkout: `~/laboratory/nur-cli` (or your clone path)
 - Rust target artifacts: inside that repo’s `target/`
 - rustup / node / bun / uv / ffmpeg: uninstall with your OS package manager if you installed them only for NurCLI and don’t need them elsewhere
+## Optional pre-push checks
+
+Install cargo-nextest and run `git config core.hooksPath scripts/hooks` to use
+the repository's optional pre-push test hook. Remove that setting with
+`git config --unset core.hooksPath` to disable it.

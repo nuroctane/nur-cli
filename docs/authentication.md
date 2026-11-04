@@ -70,7 +70,7 @@ What happens:
 1. **Nothing is cleared.** Opening the picker — and backing out of it with `Esc`
    — leaves your current credential exactly as it was. Credentials are replaced
    only at the moment a new one is committed.
-2. A **scrollable, type-to-filter** picker lists **71 providers** (frontier APIs,
+2. A **scrollable, type-to-filter** picker lists **72 providers** (frontier APIs,
    inference clouds, Chinese labs, OpenAI-compatible routers, local servers).
    Providers with browser sign-in show a 🌐 hint.
 3. If the provider supports browser auth, choose:
@@ -81,6 +81,9 @@ What happens:
 
 After browser sign-in, `/model` queries that provider with the OAuth credential and
 shows only models the account can use.
+
+For Refuseless, save an API key with `nur auth login --provider refuseless`, or
+set `REFUSELESS_API_KEY`; select it with `/login refuseless`.
 
 NurCLI resolves the current OAuth token before every model or inference request, keeps
 the active and per-provider session stores synchronized after token rotation, and

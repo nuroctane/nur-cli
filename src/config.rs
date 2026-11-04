@@ -109,6 +109,9 @@ pub struct Config {
     /// Model context window (tokens) — used for the ctx% meter in the TUI.
     #[serde(default = "default_context_window")]
     pub context_window: u64,
+    /// Compact before a documented long-context price tier when possible.
+    #[serde(default = "default_true")]
+    pub avoid_long_context_pricing: bool,
     /// Max chars of a single tool result kept inline in the model context.
     /// Larger outputs spill to `~/.nur/tool-results/` with a short preview.
     /// `0` = unlimited (legacy behavior).
@@ -269,6 +272,9 @@ pub struct Config {
     /// `/model`), so path models stay out of it.
     #[serde(skip)]
     pub route_pinned: bool,
+    /// Internal benchmark switch: score the supplied candidate alone.
+    #[serde(skip)]
+    pub ignore_project_tuning: bool,
     /// OMP-style prewalk: strong model plans + todos, then switch to a cheap
     /// model at the first edit/write. Default **off**.
     #[serde(default)]
@@ -954,7 +960,11 @@ pub struct ToolsConfig {
     /// a refusal falls back to cargo (`tools::rust_builder`).
     #[serde(default = "default_rust_builder")]
     pub rust_builder: String,
+    /// Auto-background child shell commands after this many seconds; zero disables it.
+    #[serde(default = "default_worker_background_secs")]
+    pub worker_background_secs: u64,
 }
+fn default_worker_background_secs() -> u64 { 5 }
 fn default_rust_builder() -> String {
     "cargo".into()
 }
@@ -965,6 +975,9 @@ fn default_tool_profile() -> String {
 /// `[lsp]` - native language-server integration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LspConfig {
+    /// Start detected language servers in the background and on first edit.
+    #[serde(default = "default_true")]
+    pub prewarm: bool,
     /// Extension -> command override, e.g. `{ "rs": "rust-analyzer" }` or
     /// `{ "py": "basedpyright-langserver --stdio" }`. An extension absent
     /// here (and from the built-in list) has no server: the `lsp` tool says
@@ -975,6 +988,7 @@ pub struct LspConfig {
 impl Default for LspConfig {
     fn default() -> Self {
         LspConfig {
+            prewarm: true,
             servers: Default::default(),
         }
     }
@@ -982,8 +996,8 @@ impl Default for LspConfig {
 
 /// `[sandbox]` - OS-level jail for the `bash` tool (bwrap on Linux,
 /// Seatbelt on macOS). Approval still gates *whether* a command runs; this
-/// decides what it can reach when it does. A missing sandbox binary degrades
-/// to an unsandboxed run with a note, never an error.
+/// decides what it can reach when it does. An unavailable requested sandbox
+/// rejects the command; `mode = "off"` explicitly permits unsandboxed runs.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SandboxConfig {
     /// `true` (default on Linux/macOS): wrap shell commands in the OS sandbox.
@@ -991,8 +1005,7 @@ pub struct SandboxConfig {
     pub enabled: bool,
     /// `read-only` (default) | `workspace-write` | `off`. `read-only` makes the
     /// filesystem read-only outside a private /tmp and turns the network off;
-    /// `workspace-write` adds a writable workspace. Windows has no jail this
-    /// cycle: `enabled` degrades to an unsandboxed run with a note.
+    /// `workspace-write` adds a writable workspace. Windows defaults to `off`.
     #[serde(default = "default_sandbox_mode")]
     pub mode: String,
 }
@@ -1018,6 +1031,7 @@ impl Default for ToolsConfig {
             sgrep_first: true,
             pass_provider_keys: false,
             rust_builder: default_rust_builder(),
+            worker_background_secs: default_worker_background_secs(),
         }
     }
 }
@@ -1299,6 +1313,7 @@ impl Default for Config {
             max_turns: default_max_turns(),
             stream: true,
             context_window: default_context_window(),
+            avoid_long_context_pricing: true,
             tool_result_max_chars: default_tool_result_max_chars(),
             shell_timeout_handoff: true,
             max_session_cost_usd: None,
@@ -1335,6 +1350,7 @@ impl Default for Config {
             path_models: Vec::new(),
             scoped: None,
             route_pinned: false,
+            ignore_project_tuning: false,
             prewalk: PrewalkConfig::default(),
             instructions: InstructionsConfig::default(),
             auto_continue: Default::default(),

@@ -1,0 +1,15 @@
+{
+  "description": "A child report that violates the requested schema is returned as an error, not accepted as structured output.",
+  "prompt": "Ask a child to count the items and return JSON.",
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Count items", "prompt": "Count the items.", "subagent_type": "explore", "output_schema": {"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]}}}]},
+    {"text": "{\"count\":\"wrong\"}"},
+    {"text": "The child report was invalid."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "tool_results": [{"request": 3, "contains": ["does not match output_schema"]}],
+    "stdout_contains": ["The child report was invalid."]
+  }
+}

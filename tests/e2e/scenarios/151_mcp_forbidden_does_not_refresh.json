@@ -1,0 +1,23 @@
+{
+  "description": "A forbidden MCP response does not spend or rotate a refresh token.",
+  "prompt": "Call hello on the configured MCP server.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[mcp.servers.fake]\nurl = \"http://127.0.0.1:{port}/mcp\"\nread_only = true\n",
+    "mcp-tokens.json": "{\"fake\":{\"resource\":\"http://127.0.0.1:{port}/mcp\",\"access_token\":\"unprivileged-access\",\"refresh_token\":\"old-refresh\",\"client_id\":\"test-client\",\"token_endpoint\":\"http://127.0.0.1:{port}/mcp-token\",\"expires_at\":4102444800}}"
+  },
+  "mcp": {
+    "key": "fresh-access", "auth_status": 403,
+    "refresh": {"token": "old-refresh", "client_id": "test-client"}
+  },
+  "script": [
+    {"tool_calls": [{"name": "mcp", "arguments": {"action": "call", "server": "fake", "tool": "hello", "arguments": {}}}]},
+    {"text": "MCP permission checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": ["MCP permission checked."],
+    "tool_results": [{"request": 2, "contains": ["HTTP 403"]}],
+    "mcp": {"methods": ["initialize"]}
+  }
+}

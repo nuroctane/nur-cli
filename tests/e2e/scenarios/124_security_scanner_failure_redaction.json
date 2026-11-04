@@ -1,0 +1,16 @@
+{
+  "description": "A scanner failure does not echo raw scanner output containing secrets.",
+  "setup_native_scanners": true,
+  "env": {"NUR_TEST_SCANNER_FAIL": "1"},
+  "prompt": "Scan for secrets.",
+  "script": [
+    {"tool_calls": [{"name": "secscan", "arguments": {"action": "run", "scanners": ["trufflehog"]}}]},
+    {"text": "Scan checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["scan failed"], "lacks": ["NEVER_SHOW_SECRET"]}],
+    "stdout_contains": ["Scan checked."]
+  }
+}

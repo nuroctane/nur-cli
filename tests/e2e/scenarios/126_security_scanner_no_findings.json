@@ -1,0 +1,16 @@
+{
+  "description": "An empty TruffleHog report means no findings, not a malformed report.",
+  "setup_native_scanners": true,
+  "env": {"NUR_TEST_SCANNER_EMPTY": "1"},
+  "prompt": "Scan for secrets.",
+  "script": [
+    {"tool_calls": [{"name": "secscan", "arguments": {"action": "run", "scanners": ["trufflehog"]}}]},
+    {"text": "Scan checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["trufflehog: 0 finding(s)"], "lacks": ["invalid or incomplete report"]}],
+    "stdout_contains": ["Scan checked."]
+  }
+}

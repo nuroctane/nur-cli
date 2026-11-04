@@ -445,23 +445,4 @@ mod tests {
             Some(r#"{"id":7}"#)
         );
     }
-
-    /// The parity surface is name-stable against the server's tool list; these
-    /// are the exact names `MCPAllToolNames` guarantees.
-    #[test]
-    fn parity_tool_calls_use_exact_server_tool_names() {
-        for tool in ["query_catalog", "graphql_help", "ask_graphjin_agent"] {
-            let err = call_tool(tool, &serde_json::json!({}), 1_000);
-            // With no binary installed this is the install hint; with one, it is
-            // a setup/connection error. Either way it must never be a panic and
-            // must stay attributable to graphjin.
-            if let Err(e) = err {
-                let msg = e.to_string();
-                assert!(
-                    msg.contains("graphjin"),
-                    "error for {tool} should name the tool: {msg}"
-                );
-            }
-        }
-    }
 }

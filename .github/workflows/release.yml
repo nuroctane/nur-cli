@@ -138,8 +138,8 @@ jobs:
         run: |
           chmod +x dist/nur-linux-x86_64/nur-linux-x86_64
           chmod +x dist/nur-linux-x86_64-musl/nur-linux-x86_64-musl
-          docker run --rm -v "$PWD/dist/nur-linux-x86_64:/b:ro" debian:12 /b --version
-          docker run --rm -v "$PWD/dist/nur-linux-x86_64-musl:/b:ro" alpine:3.19 /b --version
+          docker run --rm --cpus=2 --memory=2g -v "$PWD/dist/nur-linux-x86_64:/b:ro" debian:12 /b/nur-linux-x86_64 --version
+          docker run --rm --cpus=2 --memory=2g -v "$PWD/dist/nur-linux-x86_64-musl:/b:ro" alpine:3.19 /b/nur-linux-x86_64-musl --version
 
   skills:
     needs: validate
@@ -161,6 +161,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/build_market_index.py --out nur-market-index.json
+      - name: Stage third-party notices
+        run: cp third-party/openai-codex-{LICENSE,NOTICE} .
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -169,10 +171,12 @@ jobs:
             nur-skills.zip
             nur-skills.zip.sha256
             nur-market-index.json
+            openai-codex-LICENSE
+            openai-codex-NOTICE
           if-no-files-found: error
 
   publish:
-    needs: [build, skills]
+    needs: [smoke, skills]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts

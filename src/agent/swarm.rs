@@ -121,6 +121,7 @@ impl TraceEntry {
 #[derive(Debug, Clone)]
 pub struct AgentRun {
     pub id: u64,
+    pub parent_session: String,
     /// `subagent_type` — explore / general / plan / …
     pub kind: String,
     /// What it was asked to do (first meaningful line of the prompt).
@@ -232,10 +233,22 @@ pub fn begin(kind: &str, task: &str) -> u64 {
 
 /// Register a starting subagent and the provider/model it was routed to;
 /// returns its handle id.
+#[cfg(test)]
 pub fn begin_on(kind: &str, task: &str, provider: &str, model: &str) -> u64 {
+    begin_on_for("", kind, task, provider, model)
+}
+
+pub fn begin_on_for(
+    parent_session: &str,
+    kind: &str,
+    task: &str,
+    provider: &str,
+    model: &str,
+) -> u64 {
     let id = next_id();
     let run = AgentRun {
         id,
+        parent_session: parent_session.to_string(),
         kind: clip(kind),
         task: clip(task),
         provider: clip(provider),
@@ -377,13 +390,32 @@ fn prune(runs: &mut Vec<AgentRun>) {
 }
 
 /// Current table, oldest first.
+#[cfg(test)]
 pub fn snapshot() -> Vec<AgentRun> {
     table().lock().map(|g| g.clone()).unwrap_or_default()
 }
 
-/// Cheap count of table entries without cloning the runs (PERF-D).
-pub fn snapshot_len() -> usize {
-    table().lock().map(|g| g.len()).unwrap_or(0)
+pub fn snapshot_for(session: &str) -> Vec<AgentRun> {
+    table()
+        .lock()
+        .map(|runs| {
+            runs.iter()
+                .filter(|run| run.parent_session == session)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn snapshot_len_for(session: &str) -> usize {
+    table()
+        .lock()
+        .map(|runs| {
+            runs.iter()
+                .filter(|run| run.parent_session == session)
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 /// Runs registered after `after_id`, oldest first.
@@ -392,6 +424,7 @@ pub fn snapshot_len() -> usize {
 /// it reacted to gets exactly the spawns it has not seen yet — including ones
 /// that started *and finished* between two polls, which a "who is running now"
 /// check would miss entirely.
+#[cfg(test)]
 pub fn runs_since(after_id: u64) -> Vec<AgentRun> {
     table()
         .lock()
@@ -399,7 +432,20 @@ pub fn runs_since(after_id: u64) -> Vec<AgentRun> {
         .unwrap_or_default()
 }
 
+pub fn runs_since_for(session: &str, after_id: u64) -> Vec<AgentRun> {
+    table()
+        .lock()
+        .map(|runs| {
+            runs.iter()
+                .filter(|run| run.parent_session == session && run.id > after_id)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Forget every finished run (running ones stay).
+#[cfg(test)]
 pub fn clear_finished() -> usize {
     let Ok(mut guard) = table().lock() else {
         return 0;
@@ -409,7 +455,17 @@ pub fn clear_finished() -> usize {
     before - guard.len()
 }
 
+pub fn clear_finished_for(session: &str) -> usize {
+    let Ok(mut runs) = table().lock() else {
+        return 0;
+    };
+    let before = runs.len();
+    runs.retain(|run| run.parent_session != session || !run.state.is_terminal());
+    before - runs.len()
+}
+
 /// How many subagents are in flight right now.
+#[cfg(test)]
 pub fn running_count() -> usize {
     table()
         .lock()
@@ -417,17 +473,15 @@ pub fn running_count() -> usize {
         .unwrap_or(0)
 }
 
-/// Mark every still-running entry cancelled — used when a turn is interrupted,
-/// so no pane is left spinning forever.
-pub fn cancel_running() {
-    if let Ok(mut guard) = table().lock() {
-        for run in guard.iter_mut().filter(|r| r.state == RunState::Running) {
-            run.state = RunState::Cancelled;
-            run.ended = Some(Instant::now());
-            run.tool = None;
-            run.activity = "cancelled".into();
-        }
-    }
+pub fn running_count_for(session: &str) -> usize {
+    table()
+        .lock()
+        .map(|runs| {
+            runs.iter()
+                .filter(|run| run.parent_session == session && run.state == RunState::Running)
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -452,6 +506,26 @@ pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_views_and_clear_do_not_cross_sessions() {
+        let _g = lock();
+        reset();
+        let first = begin_on_for("first", "general", "first task", "", "");
+        let second = begin_on_for("second", "general", "second task", "", "");
+        finish(first, RunState::Done, 1);
+        finish(second, RunState::Done, 1);
+        assert_eq!(
+            snapshot_for("first")
+                .iter()
+                .map(|run| run.id)
+                .collect::<Vec<_>>(),
+            vec![first]
+        );
+        assert_eq!(clear_finished_for("first"), 1);
+        assert!(snapshot_for("first").is_empty());
+        assert_eq!(snapshot_for("second")[0].id, second);
+    }
 
     fn lock() -> std::sync::MutexGuard<'static, ()> {
         test_lock()
@@ -563,7 +637,7 @@ mod tests {
         assert_eq!(clear_finished(), 1);
         assert_eq!(running_count(), 1);
 
-        cancel_running();
+        finish(live, RunState::Cancelled, 0);
         assert_eq!(running_count(), 0);
         let runs = snapshot();
         let run = runs.iter().find(|r| r.id == live).unwrap();

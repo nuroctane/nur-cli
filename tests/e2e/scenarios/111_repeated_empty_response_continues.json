@@ -1,0 +1,28 @@
+{
+  "description": "The agent keeps retrying empty completions instead of presenting an artificial finished answer.",
+  "prompt": "Finish the requested work.",
+  "script": [
+    {
+      "text": ""
+    },
+    {
+      "text": ""
+    },
+    {
+      "text": ""
+    },
+    {
+      "text": ""
+    },
+    {
+      "text": "Completed after recovery."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 5,
+    "stdout_contains": [
+      "Completed after recovery."
+    ]
+  }
+}

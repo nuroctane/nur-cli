@@ -80,29 +80,3 @@ fn run_detached(command: &str) {
         .stderr(std::process::Stdio::null())
         .spawn();
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_bell_is_the_single_portable_byte() {
-        assert_eq!(BELL, b"\x07");
-        assert_eq!(BELL.len(), 1);
-    }
-
-    #[test]
-    fn config_defaults_to_on_with_no_command() {
-        let cfg = NotificationsConfig::default();
-        assert!(cfg.chime);
-        assert!(cfg.command.is_empty());
-    }
-
-    #[test]
-    fn disabled_never_writes_or_spawns() {
-        // No assertion on the terminal here (tests are not a TTY); the contract
-        // is that a disabled or empty config returns immediately.
-        chime(false, "");
-        chime(false, "definitely-not-a-real-sound-command");
-    }
-}

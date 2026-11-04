@@ -1,0 +1,50 @@
+{
+  "description": "On per-token GPT-5.6, automatic compaction runs before crossing the long-context price tier.",
+  "provider": "openai-cc",
+  "model": "gpt-5.6",
+  "env": {
+    "OPENAI_API_KEY": "e2e-isolated-key"
+  },
+  "setup_home_files": {
+    "config.toml": "provider=\"openai-cc\"\nbase_url=\"http://127.0.0.1:{port}/v1\"\nmodel=\"gpt-5.6\"\ncontext_window=1000000\nnative_memory=false\n[typesafe]\nenabled=false\n"
+  },
+  "prompt": "Inspect the workspace and continue.",
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "list_dir",
+          "arguments": {
+            "path": "."
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 280000,
+        "completion_tokens": 5,
+        "total_tokens": 280005
+      }
+    },
+    {
+      "text": "Workspace inspected; preserve the task."
+    },
+    {
+      "text": "Continued under the lower-cost tier."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "stdout_contains": [
+      "Continued under the lower-cost tier."
+    ],
+    "request_contains": [
+      {
+        "request": 2,
+        "contains": [
+          "Summarize this conversation"
+        ]
+      }
+    ]
+  }
+}

@@ -174,6 +174,11 @@ pub async fn run_bench(
         BenchCmd::Run { name, models } => {
             run_tasks(name, models.as_deref(), client, cfg, cwd).await
         }
+        BenchCmd::SelfTune {
+            train,
+            held_out,
+            rounds,
+        } => crate::self_tune::run(train, held_out, *rounds, client, cfg, cwd).await,
         BenchCmd::Optimize { name, gens, pop } => {
             crate::gepa::run_optimize(name, *gens, *pop, client, cfg, cwd).await
         }
@@ -262,7 +267,7 @@ async fn run_tasks(
         let mut results = Vec::new();
         for model in &model_list {
             theme::print_info(&format!("→ {} · {}", task.name, model));
-            let result = run_one(task, model, &client, &cfg, &cwd, "").await;
+            let result = run_one(task, model, &client, &cfg, &cwd, "", false).await;
             match result {
                 Ok(r) => results.push(r),
                 Err(e) => {
@@ -296,6 +301,7 @@ pub(crate) async fn run_one(
     cfg: &Config,
     repo: &Path,
     prefix: &str,
+    ignore_project_tuning: bool,
 ) -> Result<BenchResult> {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -312,6 +318,7 @@ pub(crate) async fn run_one(
     // Run the agent in the worktree with this model (auto-approve, sandboxed).
     let mut cfg_m = cfg.clone();
     cfg_m.model = model.to_string();
+    cfg_m.ignore_project_tuning = ignore_project_tuning;
     let runner = Arc::new(AgentRunner {
         client: client.clone(),
         config: cfg_m,
@@ -322,6 +329,7 @@ pub(crate) async fn run_one(
         permissions: agent::SharedPermissions::load(&wt),
         hooks: agent::hooks::HooksConfig::load(),
         is_subagent: false,
+        interactive_children: false,
         prewalk_override: Arc::new(Mutex::new(None)),
         approved_domains: Arc::new(Mutex::new(std::collections::HashSet::new())),
         subagent_depth: 0,
@@ -344,7 +352,7 @@ pub(crate) async fn run_one(
         )
     };
     let (_s, u, result, _interrupted) =
-        agent::run_collect(runner, session, usage, prompt, cancel).await;
+        Box::pin(agent::run_collect(runner, session, usage, prompt, cancel)).await;
     let secs = start.elapsed().as_secs_f64();
     let tokens = u.session_usage().total_tokens;
 

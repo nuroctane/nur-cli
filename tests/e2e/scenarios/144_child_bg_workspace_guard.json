@@ -1,0 +1,16 @@
+{
+  "description": "Child agents cannot use the process-wide background launcher with the wrong workspace.",
+  "prompt": "Have a child start a background command.",
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Start command", "prompt": "Start the command.", "subagent_type": "general"}}]},
+    {"tool_calls": [{"name": "bg", "arguments": {"action": "run", "command": "echo marker"}}]},
+    {"text": "The child must use bash background mode."},
+    {"text": "The background command was not started through bg."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 4,
+    "tool_results": [{"request": 3, "contains": ["child agents start background commands with bash background=true"]}],
+    "stdout_contains": ["The background command was not started through bg."]
+  }
+}

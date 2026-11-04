@@ -1,0 +1,16 @@
+{
+  "description": "The desktop accessibility tool is available to a model and reports a missing native binary without falling back to a shell.",
+  "prompt": "Check the desktop accessibility status.",
+  "env": {"NUR_AGENT_DESKTOP_BIN": "{workspace}/missing-agent-desktop.exe"},
+  "script": [
+    {"tool_calls": [{"name": "desktop", "arguments": {"action": "status"}}]},
+    {"text": "Desktop status checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "request_contains": [{"request": 1, "contains": ["desktop"]}],
+    "tool_results": [{"request": 2, "contains": ["Desktop binary not found"]}],
+    "stdout_contains": ["Desktop status checked."]
+  }
+}

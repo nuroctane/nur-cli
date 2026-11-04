@@ -2687,7 +2687,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
             || animated
             || app.wrap_cache_keys.get(cell_idx).copied().unwrap_or(0) == 0
         {
-            cell_wrap_key(cell, spin_i)
+            cell_wrap_key(cell, spin_i, &app.session_id)
         } else {
             app.wrap_cache_keys[cell_idx]
         };
@@ -2886,7 +2886,7 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         let collapsible = cell.is_collapsible();
         let peekable = cell.is_peekable();
         let swarm_pane_rows = if let Cell::Swarm { detail, .. } = cell {
-            Some(swarm_card_pane_hits(inner_w as usize, *detail))
+            Some(swarm_card_pane_hits(&app.session_id, inner_w as usize, *detail))
         } else {
             None
         };
@@ -3813,7 +3813,7 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
                 out.push(Line::from(Span::styled(l.clone(), theme::style_status())));
             }
         }
-        Cell::Swarm { live, detail } => swarm_card(width, *live, *detail, tick, out),
+        Cell::Swarm { live, detail } => swarm_card(&app.session_id, width, *live, *detail, tick, out),
         Cell::Error(text) => {
             out.push(Line::default());
             for (i, l) in text.lines().enumerate() {
@@ -3964,6 +3964,7 @@ fn pulse_line(pulse: &[u8], width: usize, running: bool, tick: Duration) -> Stri
 /// [`grid::Canvas`] so borders stay aligned no matter how the terminal is
 /// sized.
 fn swarm_card(
+    session: &str,
     width: usize,
     live: bool,
     detail: bool,
@@ -3972,7 +3973,7 @@ fn swarm_card(
 ) {
     use crate::agent::swarm::{self, RunState};
 
-    let runs = swarm::snapshot();
+    let runs = swarm::snapshot_for(session);
     // Never draw wider than the viewport: the card must shrink with the window,
     // not spill and wrap. Below one legible pane it drops the frames entirely.
     let w = width.max(4);
@@ -4106,16 +4107,16 @@ fn swarm_card(
 /// occupy that row. Mirrors `swarm_card`'s own layout so a double-click on a
 /// pane opens the matching kid peek. Returns rows indexed from the card's first
 /// emitted line (the leading blank line = row 0).
-pub fn swarm_card_pane_hits(width: usize, detail: bool) -> Vec<Vec<(u64, usize, usize)>> {
+pub fn swarm_card_pane_hits(session: &str, width: usize, detail: bool) -> Vec<Vec<(u64, usize, usize)>> {
     use crate::agent::swarm::RunState;
     let w = width.max(4);
     let compact = w < COMPACT_BELOW;
     // PERF-D: `running_count()` is a cheap lock-scan; only pay for the full
     // `snapshot()` clone when there is actually a run to place a hit-box on.
-    if crate::agent::swarm::running_count() == 0 && crate::agent::swarm::snapshot_len() == 0 {
+    if crate::agent::swarm::running_count_for(session) == 0 && crate::agent::swarm::snapshot_len_for(session) == 0 {
         return Vec::new();
     }
-    let runs = crate::agent::swarm::snapshot();
+    let runs = crate::agent::swarm::snapshot_for(session);
     // Card layout: row 0 = blank, row 1 = header, then body, then footer.
     // We emit a Vec per body-relative row; the caller offsets by +2 (blank+header).
     let mut rows: Vec<Vec<(u64, usize, usize)>> = Vec::new();
@@ -4267,7 +4268,7 @@ fn draw_sidegraph_panel(f: &mut Frame, app: &mut App, area: Rect) {
         };
         let model = app.sidegraph_model.as_ref().unwrap_or(&empty_model);
 
-        let runs = crate::agent::swarm::snapshot();
+        let runs = crate::agent::swarm::snapshot_for(&app.session_id);
         // Spinner phase only matters when something is actually animating; when
         // idle we drop it from the fingerprint so a frozen graph never rebuilds.
         let any_live = running
@@ -6080,7 +6081,7 @@ fn draw_hover_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Re
 /// Ctrl+C copies the full trace (task header + dynamic content; handled in app.rs).
 fn draw_swarm_peek(f: &mut Frame, app: &mut App, area: Rect) -> Option<(Rect, Rect)> {
     let run_id = app.peek_swarm?;
-    let run = crate::agent::swarm::snapshot()
+    let run = crate::agent::swarm::snapshot_for(&app.session_id)
         .into_iter()
         .find(|r| r.id == run_id)?;
 
@@ -7473,7 +7474,7 @@ fn draw_approval(f: &mut Frame, app: &App, area: Rect) {
         rect,
         phase,
         hue,
-        &format!(" ⚠ approve · {} · {family} ", a.name),
+        &format!(" ⚠ {}approve · {} · {family} ", if a.from_subagent { "subagent " } else { "" }, a.name),
         None,
         &format!(
             "  y once   ·   a always: {}   ·   n/esc deny  ",
@@ -7795,7 +7796,7 @@ fn pad_to(s: &str, w: usize) -> String {
 }
 
 /// Stable-ish fingerprint so wrap cache can skip finished cells.
-fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
+fn cell_wrap_key(cell: &Cell, spin_i: u64, session: &str) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
@@ -7894,6 +7895,7 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
         }
         Cell::Swarm { live, detail } => {
             11u8.hash(&mut h);
+            session.hash(&mut h);
             live.hash(&mut h);
             detail.hash(&mut h);
             if *live {
@@ -7901,7 +7903,7 @@ fn cell_wrap_key(cell: &Cell, spin_i: u64) -> u64 {
                 spin_i.hash(&mut h);
             } else {
                 // Frozen: fingerprint the table so a later run still repaints.
-                for run in crate::agent::swarm::snapshot() {
+                for run in crate::agent::swarm::snapshot_for(session) {
                     run.id.hash(&mut h);
                     run.state.hash(&mut h);
                     run.tools_done.hash(&mut h);
@@ -8804,7 +8806,7 @@ See the [token store notes](https://example.test/docs/token-store) for the stora
     /// Render the card and return its plain-text rows.
     fn swarm_rows(width: usize, live: bool, detail: bool) -> Vec<String> {
         let mut out = Vec::new();
-        swarm_card(width, live, detail, Duration::from_millis(0), &mut out);
+        swarm_card("", width, live, detail, Duration::from_millis(0), &mut out);
         out.iter().map(line_to_plain).collect()
     }
 
@@ -10081,6 +10083,7 @@ mod sidegraph_canvas_tests {
     fn mk_run(id: u64, kind: &str, task: &str) -> crate::agent::swarm::AgentRun {
         crate::agent::swarm::AgentRun {
             id,
+            parent_session: String::new(),
             kind: kind.into(),
             task: task.into(),
             provider: "xai".into(),

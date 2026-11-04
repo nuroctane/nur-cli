@@ -1,0 +1,23 @@
+{
+  "description": "An MCP token rejected during a tool call is refreshed and the session is reopened.",
+  "prompt": "Call hello on the configured MCP server.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[mcp.servers.fake]\nurl = \"http://127.0.0.1:{port}/mcp\"\nread_only = true\n",
+    "mcp-tokens.json": "{\"fake\":{\"resource\":\"http://127.0.0.1:{port}/mcp\",\"access_token\":\"old-access\",\"refresh_token\":\"old-refresh\",\"client_id\":\"test-client\",\"token_endpoint\":\"http://127.0.0.1:{port}/mcp-token\",\"expires_at\":4102444800}}"
+  },
+  "mcp": {
+    "key": "old-access", "reject_method_once": "tools/call",
+    "refresh": {"token": "old-refresh", "client_id": "test-client", "new_key": "fresh-access"},
+    "tools": [{"name": "hello", "inputSchema": {"type": "object"}}],
+    "results": {"hello": {"content": [{"type": "text", "text": "hello after session refresh"}]}}
+  },
+  "script": [
+    {"tool_calls": [{"name": "mcp", "arguments": {"action": "call", "server": "fake", "tool": "hello", "arguments": {}}}]},
+    {"text": "MCP session checked."}
+  ],
+  "expect": {
+    "exit_code": 0, "requests": 2, "stdout_contains": ["MCP session checked."],
+    "tool_results": [{"request": 2, "contains": ["hello after session refresh"]}],
+    "mcp": {"methods": ["initialize", "notifications/initialized", "tools/call", "initialize", "notifications/initialized", "tools/call"]}
+  }
+}

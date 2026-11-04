@@ -1,0 +1,17 @@
+{
+  "description": "A model can list its own asynchronously admitted child in the current session.",
+  "prompt": "Start a child in the background and list its admission.",
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "unique async review", "prompt": "Review briefly.", "async": true}}]},
+    {"match_child": true, "text": "Child complete."},
+    {"match_child": false, "tool_calls": [{"name": "admission", "arguments": {"action": "list"}}]},
+    {"match_child": false, "text": "Admission checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "min_requests": 3,
+    "requests_contain": ["1 admission(s)", "unique async review"],
+    "requests_lack": ["no admitted subagents in this session"],
+    "stdout_contains": ["Admission checked."]
+  }
+}

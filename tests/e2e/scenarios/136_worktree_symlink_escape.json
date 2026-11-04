@@ -1,0 +1,18 @@
+{
+  "description": "Managed worktree creation refuses a worktree directory redirected outside Nur's home.",
+  "setup_git": true,
+  "setup_worktree_escape": true,
+  "setup_files": {"note.txt": "original\n"},
+  "prompt": "Create the named worktree.",
+  "script": [
+    {"tool_calls": [{"name": "worktree", "arguments": {"action": "create", "name": "writer1"}}]},
+    {"text": "The unsafe worktree was rejected."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["escapes Nur's home"]}],
+    "files": {"note.txt": "original\n", "outside/sentinel.txt": "safe\n"},
+    "stdout_contains": ["The unsafe worktree was rejected."]
+  }
+}

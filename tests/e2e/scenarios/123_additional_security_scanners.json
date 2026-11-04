@@ -1,0 +1,16 @@
+{
+  "description": "Trivy, Checkov, and TruffleHog findings are normalized without exposing secret values.",
+  "setup_native_scanners": true,
+  "env": {"OPENAI_API_KEY": "e2e-provider-key"},
+  "prompt": "Scan the workspace with the additional security scanners.",
+  "script": [
+    {"tool_calls": [{"name": "secscan", "arguments": {"action": "run", "scanners": ["trivy", "checkov", "trufflehog"]}}]},
+    {"text": "Scan complete."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["TRIVY-1", "CKV-1", "AWS"], "lacks": ["NEVER_SHOW_SECRET"]}],
+    "stdout_contains": ["Scan complete."]
+  }
+}

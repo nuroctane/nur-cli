@@ -7,7 +7,7 @@
 //! signatures. It is a triage view: enough to decide where to read, never a
 //! substitute for `read_file`.
 
-use super::{arg_str, arg_u64, Tool, ToolContext};
+use super::{arg_u64, Tool, ToolContext};
 use crate::error::{NurError, Result};
 use serde_json::Value;
 use std::path::Path;
@@ -57,8 +57,12 @@ impl Tool for RepoMap {
         } else {
             super::resolve_path(&ctx.cwd, &rel)?
         };
-        let max_files = arg_u64(args, "max_files").unwrap_or(60).clamp(1, MAX_FILES_CAP) as usize;
-        let per_file = arg_u64(args, "per_file").unwrap_or(8).clamp(1, PER_FILE_CAP) as usize;
+        let max_files = arg_u64(args, "max_files")
+            .unwrap_or(60)
+            .clamp(1, MAX_FILES_CAP) as usize;
+        let per_file = arg_u64(args, "per_file")
+            .unwrap_or(8)
+            .clamp(1, PER_FILE_CAP) as usize;
 
         let decl = regex::Regex::new(
             r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:fn|def|class|struct|enum|trait|impl|interface|type|const|static|function|module|macro_rules!)\b",

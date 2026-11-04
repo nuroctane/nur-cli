@@ -1348,9 +1348,13 @@ pub fn find_bin(name: &str) -> Option<String> {
 }
 
 fn probe_dir(program: Option<String>, args: &[&str]) -> Option<PathBuf> {
-    let out = spawn_program(&program?, args).output().ok()?;
-    let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !dir.is_empty()).then(|| PathBuf::from(dir))
+    // These probes can run in a detached prefetch worker. Supervise their
+    // process tree even when the turn has already finished, so a stuck npm or
+    // uv cannot outlive nur and keep its caller's output pipes open.
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let output = run_capture_inner(&program?, args, None, 2_000, Some(&cancel), &[], CaptureMode::Probe).ok()?;
+    let dir = output.lines().next()?.trim();
+    (!dir.is_empty() && dir != "(no output)").then(|| PathBuf::from(dir))
 }
 
 fn npm_global_prefix() -> Option<PathBuf> {
@@ -1476,7 +1480,7 @@ pub fn run_capture(
     cwd: Option<&Path>,
     timeout_ms: u64,
 ) -> std::result::Result<String, String> {
-    run_capture_inner(bin, args, cwd, timeout_ms, None, &[])
+    run_capture_inner(bin, args, cwd, timeout_ms, None, &[], CaptureMode::Standard)
 }
 
 /// Capture a child process while honoring the agent turn's cancellation token.
@@ -1489,20 +1493,31 @@ pub fn run_capture_cancelled(
     timeout_ms: u64,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> std::result::Result<String, String> {
-    run_capture_inner(bin, args, cwd, timeout_ms, Some(cancel), &[])
+    run_capture_inner(bin, args, cwd, timeout_ms, Some(cancel), &[], CaptureMode::Standard)
 }
 
-/// [`run_capture_cancelled`] with extra child env vars (e.g. `OMP_APP_NAME`
-/// usage attribution on omp >= 18.0.7).
-pub fn run_capture_cancelled_with_env(
+/// Run a native tool without passing provider keys implicitly.
+pub fn run_native_tool_capture(
     bin: &str,
     args: &[&str],
     cwd: Option<&Path>,
     timeout_ms: u64,
     cancel: &tokio_util::sync::CancellationToken,
-    env: &[(&str, &str)],
 ) -> std::result::Result<String, String> {
-    run_capture_inner(bin, args, cwd, timeout_ms, Some(cancel), env)
+    let resolved = std::fs::canonicalize(bin).map_err(|error| format!("Cannot resolve native executable: {error}"))?;
+    let resolved = resolved.to_string_lossy();
+    #[cfg(windows)]
+    if !resolved.to_ascii_lowercase().ends_with(".exe") {
+        return Err("A native executable is required; command scripts cannot safely accept desktop input".into());
+    }
+    run_capture_inner(&resolved, args, cwd, timeout_ms, Some(cancel), &[], CaptureMode::Native)
+}
+
+#[derive(PartialEq, Eq)]
+enum CaptureMode {
+    Standard,
+    Native,
+    Probe,
 }
 
 fn run_capture_inner(
@@ -1512,7 +1527,12 @@ fn run_capture_inner(
     timeout_ms: u64,
     cancel: Option<&tokio_util::sync::CancellationToken>,
     extra_env: &[(&str, &str)],
+    mode: CaptureMode,
 ) -> std::result::Result<String, String> {
+    let scrub_provider_keys = mode == CaptureMode::Native;
+    if cancel.is_some_and(|token| token.is_cancelled()) {
+        return Err(format!("{bin} cancelled before launch"));
+    }
     // Re-resolve bare names to absolute paths (Windows .cmd safety).
     let resolved = if bin.contains('\\')
         || bin.contains('/')
@@ -1525,6 +1545,9 @@ fn run_capture_inner(
     };
 
     let mut cmd = spawn_program(&resolved, args);
+    if scrub_provider_keys {
+        crate::tools::tool_env(&mut cmd);
+    }
     if let Some(c) = cwd {
         cmd.current_dir(c);
     }
@@ -1553,9 +1576,19 @@ fn run_capture_inner(
             }
         }
     }
-    let mut child = cmd
-        .spawn()
+    let (mut child, tree) = if cancel.is_some() {
+        let (child, tree) = crate::process_tree::ProcessTree::spawn_with_flags(
+            &mut cmd,
+            crate::process_tree::CREATE_NO_WINDOW,
+        )
         .map_err(|e| format!("failed to spawn {resolved}: {e}"))?;
+        (child, Some(tree))
+    } else {
+        (
+            cmd.spawn().map_err(|e| format!("failed to spawn {resolved}: {e}"))?,
+            None,
+        )
+    };
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -1565,7 +1598,7 @@ fn run_capture_inner(
         let mut buf = Vec::new();
         if let Some(s) = stdout {
             use std::io::Read;
-            let mut limited = s.take(2_000_000); // 2MB cap for capture
+            let mut limited = s.take(2_000_001); // one extra byte detects truncation
             let _ = limited.read_to_end(&mut buf);
         }
         buf
@@ -1589,7 +1622,9 @@ fn run_capture_inner(
             Ok(None) => {
                 if cancel.is_some_and(|token| token.is_cancelled()) {
                     stopped_early = Some(format!("{resolved} cancelled (process tree killed)"));
-                    kill_process_tree(&mut child);
+                    if let Some(tree) = &tree {
+                        tree.terminate(&mut child);
+                    }
                     break child
                         .wait()
                         .map_err(|error| format!("wait after cancel failed: {error}"))?;
@@ -1598,7 +1633,11 @@ fn run_capture_inner(
                     stopped_early = Some(format!(
                         "{resolved} timed out after {timeout_ms}ms (process tree killed)"
                     ));
-                    kill_process_tree(&mut child);
+                    if let Some(tree) = &tree {
+                        tree.terminate(&mut child);
+                    } else {
+                        kill_process_tree(&mut child);
+                    }
                     break child
                         .wait()
                         .map_err(|error| format!("wait after timeout failed: {error}"))?;
@@ -1609,14 +1648,23 @@ fn run_capture_inner(
         }
     };
 
-    let stdout_bytes = join_capture(out_handle, 2_000);
+    let mut stdout_bytes = join_capture(out_handle, 2_000);
     let stderr_bytes = join_capture(err_handle, 2_000);
     if let Some(reason) = stopped_early {
         return Err(reason);
     }
+    if let Some(tree) = tree {
+        tree.disarm();
+    }
+    if stdout_bytes.len() > 2_000_000 {
+        if scrub_provider_keys {
+            return Err(format!("{resolved} output exceeded the 2 MB capture limit"));
+        }
+        stdout_bytes.truncate(2_000_000);
+    }
     let mut out = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
     let err = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
-    if !err.is_empty() {
+    if !err.is_empty() && mode == CaptureMode::Standard {
         if !out.is_empty() {
             out.push_str("\n\n");
         }
@@ -1648,18 +1696,10 @@ fn join_capture(handle: std::thread::JoinHandle<Vec<u8>>, timeout_ms: u64) -> Ve
 }
 
 fn kill_process_tree(child: &mut std::process::Child) {
-    // Kill the direct child FIRST. `TerminateProcess` is immediate, while
-    // `taskkill /T` walks the whole process table - measured at 30-60s on a
-    // loaded Windows box - and waiting for it made "cancel promptly" depend on
-    // how busy the machine was rather than on the cancellation itself.
     let _ = child.kill();
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // Then sweep the descendants, WITHOUT waiting: the direct child is
-        // already terminated, and this is best-effort cleanup of grandchildren.
-        // It must run before the caller reaps the child (see the wait in
-        // `run_capture_inner`) so the pid cannot be recycled underneath it.
         let _ = std::process::Command::new("taskkill")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .creation_flags(0x0800_0000)
@@ -1730,34 +1770,85 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cancelled_capture_kills_the_child_promptly() {
-        let cancel = tokio_util::sync::CancellationToken::new();
-        cancel.cancel();
+    fn stalled_directory_probe_is_bounded() {
         let started = std::time::Instant::now();
         #[cfg(windows)]
+        let result = probe_dir(Some("cmd.exe".into()), &["/c", "ping -n 15 127.0.0.1 >NUL"]);
+        #[cfg(not(windows))]
+        let result = probe_dir(Some("/bin/sh".into()), &["-c", "sleep 15"]);
+        assert!(result.is_none());
+        assert!(started.elapsed() < std::time::Duration::from_secs(8));
+    }
+
+    #[test]
+    fn directory_probe_does_not_treat_stderr_as_a_path() {
+        #[cfg(windows)]
+        let result = probe_dir(Some("cmd.exe".into()), &["/c", "echo warning 1>&2"]);
+        #[cfg(not(windows))]
+        let result = probe_dir(Some("/bin/sh".into()), &["-c", "echo warning >&2"]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn cancelled_capture_does_not_launch() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
         let result = run_capture_cancelled(
-            "powershell",
-            &["-NoProfile", "-Command", "Start-Sleep -Seconds 120"],
+            "nur-test-nonexistent-cancelled-executable",
+            &[],
             None,
             60_000,
             &cancel,
         );
-        #[cfg(not(windows))]
-        let result = run_capture_cancelled("sh", &["-c", "sleep 120"], None, 60_000, &cancel);
-
         assert!(result.unwrap_err().contains("cancelled"));
-        // The property is "cancellation does not wait for the child to finish
-        // on its own" - the child sleeps 120s, so anything comfortably under
-        // that proves it (15s against a 30s child flaked at 15.5s under load). The old 5s bound was really measuring PowerShell's
-        // cold-start time and failed intermittently whenever the rest of the
-        // suite was spawning processes in parallel; a flaky assertion trains
-        // people to ignore failures, which costs more than the tighter bound
-        // ever bought.
-        let elapsed = started.elapsed();
-        assert!(
-            elapsed < std::time::Duration::from_secs(60),
-            "cancel took {elapsed:?} - should not wait out the child's 120s sleep"
+    }
+
+    #[test]
+    fn cancelling_running_capture_stops_it() {
+        let cwd = tempfile::tempdir().unwrap();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let trigger = cancel.clone();
+        let signal = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            trigger.cancel();
+        });
+        #[cfg(windows)]
+        let result = {
+            let script = cwd.path().join("launcher.cmd");
+            std::fs::write(&script, "@echo off\r\nstart /b cmd /c \"echo started > started.txt & ping -n 6 127.0.0.1 >NUL & echo escaped > marker.txt\" >NUL 2>&1\r\nping -n 30 127.0.0.1 >NUL\r\n").unwrap();
+            run_capture_cancelled(script.to_str().unwrap(), &[], Some(cwd.path()), 60_000, &cancel)
+        };
+        #[cfg(not(windows))]
+        let result = run_capture_cancelled(
+            "sh", &["-c", "(echo started > started.txt; sleep 5; echo escaped > marker.txt) </dev/null >/dev/null 2>&1 & sleep 120"],
+            Some(cwd.path()), 60_000, &cancel,
         );
+        signal.join().unwrap();
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert!(cwd.path().join("started.txt").exists(), "worker did not start before cancellation");
+        std::thread::sleep(std::time::Duration::from_secs(6));
+        assert!(!cwd.path().join("marker.txt").exists(), "worker survived cancellation");
+    }
+
+    #[test]
+    fn successful_capture_preserves_detached_worker() {
+        let cwd = tempfile::tempdir().unwrap();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        #[cfg(windows)]
+        let result = {
+            let script = cwd.path().join("launcher.cmd");
+            std::fs::write(&script, "@echo off\r\nstart /b cmd /c \"ping -n 6 127.0.0.1 >NUL & echo survived > marker.txt\" >NUL 2>&1\r\n").unwrap();
+            run_capture_cancelled(script.to_str().unwrap(), &[], Some(cwd.path()), 15_000, &cancel)
+        };
+        #[cfg(not(windows))]
+        let result = run_capture_cancelled(
+            "sh", &["-c", "(sleep 5; echo survived > marker.txt) </dev/null >/dev/null 2>&1 &"],
+            Some(cwd.path()), 15_000, &cancel,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert!(!cwd.path().join("marker.txt").exists(), "worker exited before the launcher returned");
+        std::thread::sleep(std::time::Duration::from_secs(7));
+        assert!(cwd.path().join("marker.txt").exists(), "detached worker was killed");
     }
 
     #[test]

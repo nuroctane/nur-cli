@@ -1,0 +1,17 @@
+{
+  "description": "Disabling worker auto-background keeps a six-second child command inline.",
+  "setup_home_files": {"config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[tools]\nworker_background_secs = 0\n"},
+  "prompt": "Have a child run the fixture.",
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Run fixture", "prompt": "Run the command.", "subagent_type": "general"}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(6); print('finished')\""}}]},
+    {"text": "The command finished."},
+    {"text": "The child completed the command."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 4,
+    "tool_results": [{"request": 3, "contains": ["finished"], "lacks": ["handed off"]}],
+    "stdout_contains": ["The child completed the command."]
+  }
+}

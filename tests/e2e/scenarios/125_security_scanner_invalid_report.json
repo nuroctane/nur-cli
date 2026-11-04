@@ -1,0 +1,16 @@
+{
+  "description": "An invalid scanner report is an error rather than a clean scan and its contents stay hidden.",
+  "setup_native_scanners": true,
+  "env": {"NUR_TEST_SCANNER_INVALID": "1"},
+  "prompt": "Scan for secrets.",
+  "script": [
+    {"tool_calls": [{"name": "secscan", "arguments": {"action": "run", "scanners": ["trufflehog"]}}]},
+    {"text": "Scan checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["invalid or incomplete report"], "lacks": ["NEVER_SHOW_SECRET"]}],
+    "stdout_contains": ["Scan checked."]
+  }
+}

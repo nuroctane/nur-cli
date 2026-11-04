@@ -1,5 +1,5 @@
 {
-  "description": "As in Claude Code and Codex, a file the model reads reaches the provider verbatim - nur never redacts tool results, because rewritten secrets corrupt config edits. A deny rule in permissions.toml is how a file is kept from the model, and it holds for read-only tools too.",
+  "description": "An allowed file is read, while a permissions.toml deny rule blocks a separate file even for a read-only tool.",
   "prompt": "Read both env files.",
   "setup_files": {
     ".env": "OPENAI_API_KEY=sk-e2etestsecret0123456789abcdefghijklmnop\n",

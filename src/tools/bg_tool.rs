@@ -63,7 +63,7 @@ impl Tool for Bg {
         })
     }
 
-    fn execute(&self, args: &Value, _ctx: &ToolContext) -> Result<String> {
+    fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<String> {
         let action = arg_str(args, "action").unwrap_or_else(|_| "list".into());
         match action.as_str() {
             "list" | "chip" => Ok(crate::bg_jobs::report()),
@@ -99,6 +99,9 @@ impl Tool for Bg {
                 crate::bg_jobs::cancel(id)
             }
             "run" => {
+                if crate::agent::context_store::is_child(&ctx.session_id) {
+                    return Err(NurError::Tool("child agents start background commands with bash background=true, so the command keeps the child's workspace and cancellation scope".into()));
+                }
                 let label = arg_str(args, "label").unwrap_or_else(|_| "bg command".into());
                 if let Ok(program) = arg_str(args, "program") {
                     let argv: Vec<String> = args

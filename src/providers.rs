@@ -918,6 +918,7 @@ const EFFORT_OPENAI_GPT6: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 /// `stealth/ox-alpha` and most reasoning routes take `max`/`high`/`low`.
 /// Paper Instruments' Ultramarine API accepts exactly the same three rungs.
 pub const EFFORT_NOUS: &[&str] = &["low", "high", "max"];
+const EFFORT_REFUSELESS_DEEPSEEK: &[&str] = &["none", "low", "high", "max"];
 /// Morph's DeepSeek V4.1 Flash snapshots: `reasoning_effort` takes these four
 /// (`medium` and `minimal` are folded server-side, so nur sends a real rung).
 const EFFORT_MORPH_DEEPSEEK: &[&str] = &["low", "high", "xhigh", "max"];
@@ -1067,6 +1068,16 @@ pub fn effort_levels(provider_id: &str, model: &str) -> &'static [&'static str] 
             }
         }
         "nous" | "paperinstruments" => EFFORT_NOUS,
+        "refuseless" if model.starts_with("deepseek-v4.1-flash-") => EFFORT_REFUSELESS_DEEPSEEK,
+        "refuseless"
+            if matches!(
+                model,
+                "glm-5.3-abliterated" | "glm-5.3-flash-abliterated" | "minimax-m3.1-flash"
+            ) =>
+        {
+            EFFORT_NOUS
+        }
+        "refuseless" => &[],
         "morph" if is_morph_deepseek(model) => EFFORT_MORPH_DEEPSEEK,
         "morph" => EFFORT_MORPH,
         "perplexity" => EFFORT_PERPLEXITY,
@@ -1588,6 +1599,17 @@ pub const PROVIDERS: &[Provider] = &[
         env_key: "FIREWORKS_API_KEY",
         style: CC,
         note: "fast open models",
+        key_optional: false,
+        browser_auth: false,
+    },
+    Provider {
+        id: "refuseless",
+        name: "Refuseless",
+        base_url: "https://api.refuseless.com/v1",
+        default_model: "glm-5.3-abliterated",
+        env_key: "REFUSELESS_API_KEY",
+        style: CC,
+        note: "hosted open-weight models",
         key_optional: false,
         browser_auth: false,
     },
@@ -3396,7 +3418,11 @@ mod tests {
             ("groq", "openai/gpt-oss-120b", "high"),
             ("mistral", "mistral-large-latest", "high"),
             ("together", "openai/gpt-oss-120b", "high"),
-            ("fireworks", "accounts/fireworks/models/llama-v3p3-70b-instruct", "max"),
+            (
+                "fireworks",
+                "accounts/fireworks/models/llama-v3p3-70b-instruct",
+                "max",
+            ),
             ("cohere", "command-a-03-2025", "high"),
             ("kimi", "kimi-k3", "max"),
             ("deepseek", "deepseek-chat", "max"),
@@ -3469,15 +3495,24 @@ mod tests {
         );
         // Fireworks / Cohere / DeepSeek / Kimi / Zhipu / Qwen / OpenRouter.
         assert_eq!(
-            effort_levels("fireworks", "accounts/fireworks/models/llama-v3p3-70b-instruct"),
+            effort_levels(
+                "fireworks",
+                "accounts/fireworks/models/llama-v3p3-70b-instruct"
+            ),
             ["none", "low", "medium", "high", "max"]
         );
-        assert_eq!(effort_levels("cohere", "command-a-03-2025"), ["none", "high"]);
+        assert_eq!(
+            effort_levels("cohere", "command-a-03-2025"),
+            ["none", "high"]
+        );
         assert_eq!(
             nearest_effort("cohere", "command-a-03-2025", "medium").as_deref(),
             Some("high")
         );
-        assert_eq!(effort_levels("deepseek", "deepseek-chat"), ["low", "high", "max"]);
+        assert_eq!(
+            effort_levels("deepseek", "deepseek-chat"),
+            ["low", "high", "max"]
+        );
         assert_eq!(
             nearest_effort("deepseek", "deepseek-chat", "medium").as_deref(),
             Some("high")
@@ -3606,7 +3641,7 @@ mod tests {
         // `PROVIDER_COUNT_DOC_SITES` below too.
         assert_eq!(
             PROVIDERS.len(),
-            71,
+            72,
             "provider count changed — update the docs that quote it: {}",
             PROVIDER_COUNT_DOC_SITES.join(", ")
         );

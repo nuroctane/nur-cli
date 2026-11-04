@@ -357,6 +357,12 @@ nur secrets remove GITHUB_TOKEN
 
 ---
 
+### `nur config --dump`
+
+Print the effective configuration as JSON. Inline API keys, MCP arguments and
+environment values, LSP command overrides, and URL credentials and query
+strings are redacted.
+
 ### `nur doctor`
 
 Diagnose install, auth, config, ecosystem, and plugin marketplace readiness.
@@ -486,6 +492,34 @@ nur gateway [--token <TOKEN>] [--chat <CHAT_ID>]
 | `--chat` | The one chat the bot answers (else `$TELEGRAM_CHAT_ID`). Required to run anything: without it the bot only pairs, replying to each sender with their chat id and running nothing, because every turn auto-approves tools, `bash` included |
 | `--user` | In a group chat, the one sender the bot obeys (else `$TELEGRAM_USER_ID`). A group (negative chat id) runs nothing without it, since every member could otherwise drive an auto-approved agent; the bot replies with the sender's user id to pair. Private chats do not need it |
 
+Questions and required approvals appear as numbered items. Send `/inbox` to
+list them, `/answer <id> <number or text>` to answer a question, or
+`/answer <id> approve` or `/answer <id> deny` for an approval. `/cancel` stops
+the current turn. Other messages received during a turn wait in order. Only
+the configured chat and sender can answer. An asynchronous child can also
+send a question or required approval after its parent has replied. Secret requests must be handled
+outside Telegram. Pending items and queued messages are held in memory and
+are cleared when the gateway stops.
+
+---
+
+### `nur acp`
+
+Serve the Agent Client Protocol over stdin and stdout for compatible editors:
+
+```bash
+nur acp
+```
+
+Each client session uses its own working directory and path-model route. Tool
+approvals go to the client; questions use client form elicitation when available.
+Client-supplied stdio MCP servers are scoped to their session and stopped when
+the connection closes. Name credentials with `KEY`, `TOKEN`, `SECRET`,
+`PASSWORD`, `PASSWD`, `CREDENTIAL`, or `AUTH` so even values resembling ordinary
+settings are redacted. HTTP and SSE client-provided servers and additional
+workspace directories are not supported. Configure provider credentials before
+starting the server.
+
 ---
 
 ### `nur local`
@@ -516,7 +550,17 @@ nur bench add <name> "<prompt>" [--check "<shell cmd>"]   # exit 0 of the check 
 nur bench list
 nur bench remove <name>
 nur bench run <name|all> [--models <m1,m2>]               # default: the active model
+nur bench self-tune --train <task1,task2> --held-out <task3,task4> [--rounds 1-10]
 ```
+
+Self-tuning proposes one instruction change per round. Every task must have a
+check, and the training and held-out sets must be disjoint. A change is accepted
+only when the training pass rate rises and the held-out pass rate does not fall.
+Decisions are appended to `~/.nur/bench/self-tune.jsonl`; the accepted instruction
+is saved under `~/.nur/bench/tuned/` and applied to later turns with the
+evaluated provider and model in this Git project, including linked worktrees.
+The command prints the instruction's path; deleting that file disables the tuning. Each replay uses the
+active model and consumes tokens.
 
 Also available in the TUI as **`/bench`**.
 
@@ -586,6 +630,7 @@ Type these inside the `nur` TUI. Aliases are shown in the same row.
 | `/steer` | Inject a message into the running turn without cancelling it |
 | `/scan` | Map the codebase → shareable foglamp scan |
 | `/goal` | Set a standing session goal (starts a goal-driven turn; stalls auto-continue while the goal is active) |
+| `/loop 10m prompt` | Repeat a prompt in this session; `/loop off` stops it |
 | `/secrets` | Save a credential outside the chat (`add [NAME]` opens a masked modal), list names, or `remove NAME` |
 | `/autocontinue` | Toggle continuing after usage limits and outages for this session; `on` / `off` / `now` |
 | `/btw` | One-off note attached to the next message |

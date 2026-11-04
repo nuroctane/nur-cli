@@ -60,6 +60,8 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "lsp" => true,
         // Pure read: walks the tree and prints signatures.
         "repo_map" => true,
+        "worktree" => action_is(args, &["list"]),
+        "debug" => action_is(args, &["list", "events"]),
         // `list` spawns configured servers and reads their catalogs; `call` is
         // read-only only when the server is configured `read_only = true`.
         "mcp" => match args.get("action").and_then(|a| a.as_str()) {
@@ -81,7 +83,10 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         // remove files under ~/.nur/context-store, so they must take the approval
         // path instead of riding the read-only shortcut (and the parallel batch,
         // which skips approval entirely).
-        "context" => action_is(args, &["list", "peek", "slice", "search", "inventory"]),
+        "context" => action_is(
+            args,
+            &["list", "peek", "slice", "search", "pack", "inventory"],
+        ),
         // `anydoc` does not dispatch on `action` at all: it always converts and,
         // unless `register=false`, drops the markdown into ~/.nur/context-store.
         // Classifying it by a made-up action name left the *default* call
@@ -164,6 +169,7 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "enclave" => crate::tools::enclave_tool::is_read_only_action(&args.to_string()),
         "browser" => crate::tools::browser_is_read_only(&args.to_string()),
         "terminal_browser" => crate::tools::terminal_browser_is_read_only(&args.to_string()),
+        "desktop" => action_is(args, &["status", "list_apps", "list_windows", "snapshot"]),
         "agent" | "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit"
         | "bash" | "extract_frames" => false,
         _ => false, // fail-closed: unknown tools are not free
@@ -223,6 +229,8 @@ pub fn is_destructive(name: &str, args: &Value) -> bool {
         "egaki" => !is_read_only("egaki", args),
         "browser" => !is_read_only("browser", args),
         "terminal_browser" => !is_read_only("terminal_browser", args),
+        "desktop" => !is_read_only("desktop", args),
+        "debug" => !is_read_only("debug", args),
         "executor" => !is_read_only("executor", args),
         "enclave" => !is_read_only("enclave", args),
         "mcp" => !is_read_only("mcp", args),

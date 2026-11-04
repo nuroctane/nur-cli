@@ -1,0 +1,21 @@
+{
+  "description": "Two concurrent child writers cannot use the same managed worktree.",
+  "setup_git": true,
+  "setup_files": {"note.txt": "original\n"},
+  "prompt": "Create a worktree and launch two writers into it.",
+  "script": [
+    {"tool_calls": [{"name": "worktree", "arguments": {"action": "create", "name": "writer1"}}]},
+    {"tool_calls": [
+      {"name": "agent", "arguments": {"description": "first writer", "prompt": "Wait and report.", "subagent_type": "general", "worktree": "writer1"}},
+      {"name": "agent", "arguments": {"description": "second writer", "prompt": "Wait and report.", "subagent_type": "general", "worktree": "writer1"}}
+    ]},
+    {"match_child": true, "text": "first\nsecond\n", "stream_delay": 2},
+    {"match_child": false, "text": "Writer isolation checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "min_requests": 4,
+    "requests_contain": ["worktree is already in use"],
+    "stdout_contains": ["Writer isolation checked."]
+  }
+}

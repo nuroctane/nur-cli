@@ -35,12 +35,14 @@ impl Tool for WriteFile {
             fs::create_dir_all(parent)
                 .map_err(|e| NurError::Tool(format!("mkdir {}: {e}", parent.display())))?;
         }
-        if let Some(staged) = super::commit_file_write(ctx, &path, &full, &contents, "write_file")?
-            .staged
-        {
+        let commit = super::commit_file_write(ctx, &path, &full, &contents, "write_file")?;
+        if let Some(staged) = commit.staged {
             return Ok(staged);
         }
-        Ok(format!("wrote {}", display_rel(&ctx.cwd, &full)))
+        Ok(super::with_lsp_note(
+            format!("wrote {}", display_rel(&ctx.cwd, &full)),
+            &commit,
+        ))
     }
 }
 

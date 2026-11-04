@@ -1,0 +1,18 @@
+{
+  "description": "The Windows npm shim resolves to the packaged executable without running the shim.",
+  "windows_only": true,
+  "setup_native_desktop": "npm",
+  "setup_files": {"npm/agent-desktop.cmd": "@exit /b 1\n"},
+  "env": {"NUR_AGENT_DESKTOP_BIN": "{workspace}/npm/agent-desktop.cmd"},
+  "prompt": "Check desktop status.",
+  "script": [
+    {"tool_calls": [{"name": "desktop", "arguments": {"action": "status"}}]},
+    {"text": "Desktop status checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["fixture:status:false"]}],
+    "stdout_contains": ["Desktop status checked."]
+  }
+}

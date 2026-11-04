@@ -1,0 +1,20 @@
+{
+  "description": "Automatic compaction remains available after repeated transient failures in a long turn.",
+  "provider": "openai-cc",
+  "model": "gpt-5.6",
+  "env": {"OPENAI_API_KEY": "e2e-isolated-key"},
+  "setup_home_files": {"config.toml": "provider=\"openai-cc\"\nbase_url=\"http://127.0.0.1:{port}/v1\"\nmodel=\"gpt-5.6\"\ncontext_window=1000000\nnative_memory=false\n[typesafe]\nenabled=false\n"},
+  "prompt": "Inspect the workspace repeatedly and keep working.",
+  "script": [
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280000, "completion_tokens": 5, "total_tokens": 280005}},
+    {"status": 400, "error": "temporary summarizer failure"},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280001, "completion_tokens": 5, "total_tokens": 280006}},
+    {"status": 400, "error": "temporary summarizer failure"},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280002, "completion_tokens": 5, "total_tokens": 280007}},
+    {"status": 400, "error": "temporary summarizer failure"},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280003, "completion_tokens": 5, "total_tokens": 280008}},
+    {"text": "Workspace inspected and task preserved."},
+    {"text": "Continued after compaction recovered."}
+  ],
+  "expect": {"exit_code": 0, "requests": 9, "stdout_contains": ["Continued after compaction recovered."], "request_contains": [{"request": 8, "contains": ["Summarize this conversation"]}]}
+}

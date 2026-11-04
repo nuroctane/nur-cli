@@ -245,8 +245,8 @@ pub fn canonical(tool: &str, args_json: &str) -> String {
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .to_string(),
-        "browser" | "terminal_browser" | "graphify" | "plur" | "ruflo" | "akarso" | "omp"
-        | "memory" | "executor" => v
+        "browser" | "terminal_browser" | "desktop" | "worktree" | "graphify" | "plur" | "ruflo"
+        | "akarso" | "omp" | "memory" | "executor" => v
             .get("action")
             .and_then(|c| c.as_str())
             .unwrap_or("")
@@ -328,7 +328,12 @@ pub fn session_grant_keys(tool: &str, args_json: &str) -> Vec<String> {
     }
     match tool {
         "enclave" => vec![canonical(tool, args_json)],
-        "browser" | "terminal_browser" => vec![canonical(tool, args_json)],
+        "desktop" => vec![format!(
+            "{}={}",
+            canonical(tool, args_json),
+            crate::agent::receipt::sha256_hex(args_json.as_bytes())
+        )],
+        "browser" | "terminal_browser" | "worktree" => vec![canonical(tool, args_json)],
         "bash" => {
             let canon = canonical(tool, args_json);
             let Some(command) = canon.strip_prefix("bash:") else {
@@ -348,6 +353,25 @@ pub fn session_grant_keys(tool: &str, args_json: &str) -> Vec<String> {
             keys
         }
         _ => vec![tool.to_string()],
+    }
+}
+
+#[cfg(test)]
+mod desktop_grant_tests {
+    use super::session_grant_keys;
+
+    #[test]
+    fn approval_does_not_cover_different_desktop_input() {
+        let original = r#"{"action":"type","target":"@e3","text":"hello"}"#;
+        let changed = r#"{"action":"type","target":"@e3","text":"another command"}"#;
+        assert_eq!(
+            session_grant_keys("desktop", original),
+            session_grant_keys("desktop", original)
+        );
+        assert_ne!(
+            session_grant_keys("desktop", original),
+            session_grant_keys("desktop", changed)
+        );
     }
 }
 

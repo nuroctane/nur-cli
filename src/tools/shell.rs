@@ -221,6 +221,22 @@ pub enum ShellKind {
     Cmd,
 }
 
+const POWERSHELL_UTF8: &str = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);                        $OutputEncoding=[Text.UTF8Encoding]::new($false);";
+
+/// Build the selected shell invocation for an OS sandbox wrapper.
+pub fn sandbox_shell_words(backend: &ShellBackend, command: &str) -> Vec<std::ffi::OsString> {
+    let mut words = vec![backend.program.as_os_str().to_os_string()];
+    match backend.kind {
+        ShellKind::Bash => words.extend(["-c".into(), command.into()]),
+        ShellKind::Pwsh | ShellKind::PowerShell => words.extend([
+            "-NoProfile".into(), "-NonInteractive".into(), "-Command".into(),
+            format!("{POWERSHELL_UTF8} {command}").into(),
+        ]),
+        ShellKind::Cmd => words.extend(["/C".into(), command.into()]),
+    }
+    words
+}
+
 /// Process-wide cached shell backend. `detect_shell` probes the filesystem and
 /// scans PATH, so callers on hot paths (system prompt, every bash call) use this.
 pub fn shell_backend() -> &'static ShellBackend {
@@ -367,11 +383,18 @@ pub struct ShellOptions {
     /// Hand off almost immediately (after a short grace so instant failures
     /// still come back inline).
     pub background: bool,
+    /// Child-session handoff, including quiet commands, tied to turn cancellation.
+    pub worker_handoff: bool,
+    /// Cancel a child session's handed-off command if its parent turn is cancelled.
+    pub child_handoff_scope: bool,
+    pub owner_session: Option<String>,
+    /// Keep an isolated worktree leased until a handed-off command finishes.
+    pub worktree_lease: Option<Arc<crate::worktree::Lease>>,
     /// Byte budget for stdout kept in the result; stderr gets half.
     pub max_output_bytes: usize,
     /// Sandbox wrapper argv (see `crate::sandbox_os`), already ending in the
     /// shell words + the user command. Empty means "run the backend directly".
-    pub sandbox: Vec<String>,
+    pub sandbox: Vec<std::ffi::OsString>,
 }
 
 impl Default for ShellOptions {
@@ -380,6 +403,10 @@ impl Default for ShellOptions {
             timeout_ms: DEFAULT_TIMEOUT_MS,
             handoff_on_timeout: false,
             background: false,
+            worker_handoff: false,
+            child_handoff_scope: false,
+            owner_session: None,
+            worktree_lease: None,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
             sandbox: Vec::new(),
         }
@@ -501,7 +528,7 @@ pub fn run_in_shell_with(
     } else {
         timeout_ms
     };
-    let handoff = opts.handoff_on_timeout || opts.background;
+    let handoff = opts.handoff_on_timeout || opts.background || opts.worker_handoff;
 
     let mut cmd = if !opts.sandbox.is_empty() {
         // Sandboxed: the wrapper argv already ends in the shell words and the
@@ -531,35 +558,36 @@ pub fn run_in_shell_with(
     if let Some(scratch) = crate::agent::scratch::ensure(cwd) {
         cmd.env(crate::agent::scratch::ENV, scratch);
     }
-    match kind {
-        ShellKind::Bash => {
-            // Non-login: sourcing ~/.bash_profile on every call is slow and
-            // lets profile output leak into results. PATH comes from nur's
-            // own environment, which the user's login shell already set.
-            cmd.args(["-c", command]);
-        }
-        ShellKind::Pwsh | ShellKind::PowerShell => {
-            // Cmdlet output (Get-Content, Select-String, ...) follows these;
-            // Windows PowerShell 5.1 otherwise writes the OEM code page.
-            let utf8 = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);                        $OutputEncoding=[Text.UTF8Encoding]::new($false);";
-            cmd.args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                &format!("{utf8} {command}"),
-            ]);
-        }
-        ShellKind::Cmd => {
-            // Verbatim, not a normal argument: Rust escapes inner quotes as \",
-            // which cmd.exe does not understand, so `type "my file.txt"` ran
-            // with a mangled path. /S strips exactly the outer quotes added here.
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.args(["/S", "/C"]).raw_arg(format!("\"{command}\""));
+    if opts.sandbox.is_empty() {
+        match kind {
+            ShellKind::Bash => {
+                // Non-login: sourcing ~/.bash_profile on every call is slow and
+                // lets profile output leak into results. PATH comes from nur's
+                // own environment, which the user's login shell already set.
+                cmd.args(["-c", command]);
             }
-            #[cfg(not(windows))]
-            cmd.args(["/C", command]);
+            ShellKind::Pwsh | ShellKind::PowerShell => {
+                // Cmdlet output (Get-Content, Select-String, ...) follows these;
+                // Windows PowerShell 5.1 otherwise writes the OEM code page.
+                cmd.args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    &format!("{POWERSHELL_UTF8} {command}"),
+                ]);
+            }
+            ShellKind::Cmd => {
+                // Verbatim, not a normal argument: Rust escapes inner quotes as \",
+                // which cmd.exe does not understand, so `type "my file.txt"` ran
+                // with a mangled path. /S strips exactly the outer quotes added here.
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.args(["/S", "/C"]).raw_arg(format!("\"{command}\""));
+                }
+                #[cfg(not(windows))]
+                cmd.args(["/C", command]);
+            }
         }
     }
 
@@ -613,8 +641,9 @@ pub fn run_in_shell_with(
                     // `background=true` is an explicit request to hand off, so
                     // it does not wait for output; the plain timeout only hands
                     // off a command that is visibly still working.
-                    let still_working =
-                        opts.background || sup.output_within_ms(HANDOFF_RECENT_OUTPUT_MS);
+                    let still_working = opts.background
+                        || opts.worker_handoff
+                        || sup.output_within_ms(HANDOFF_RECENT_OUTPUT_MS);
                     if handoff && still_working {
                         return Ok(hand_off_to_bg(
                             sup,
@@ -623,6 +652,11 @@ pub fn run_in_shell_with(
                             kind,
                             handoff_after_ms,
                             max_output,
+                            HandoffScope {
+                                parent_cancel: opts.child_handoff_scope.then(|| cancel.clone()),
+                                worktree_lease: opts.worktree_lease.clone(),
+                                owner_session: opts.owner_session.clone(),
+                            },
                         ));
                     }
                     sup.kill();
@@ -646,6 +680,12 @@ pub fn run_in_shell_with(
     Ok(format_result(&label, kind, status, &drained, max_output))
 }
 
+struct HandoffScope {
+    parent_cancel: Option<tokio_util::sync::CancellationToken>,
+    worktree_lease: Option<Arc<crate::worktree::Lease>>,
+    owner_session: Option<String>,
+}
+
 /// Move a still-running command to the bg job registry. The returned text is
 /// a placeholder the model can act on now; the real result lands in the job.
 fn hand_off_to_bg(
@@ -655,6 +695,7 @@ fn hand_off_to_bg(
     kind: ShellKind,
     waited_ms: u64,
     max_output: usize,
+    scope: HandoffScope,
 ) -> String {
     let preview = {
         let mut p = String::new();
@@ -682,47 +723,58 @@ fn hand_off_to_bg(
         l
     };
     let label_owned = label.to_string();
-    let id = crate::bg_jobs::spawn(job_label, "shell", move |bg_cancel| {
-        let mut sup = sup;
-        let handoff_deadline = Instant::now() + Duration::from_millis(HANDOFF_MAX_MS);
-        let status = loop {
-            if bg_cancel.load(Ordering::SeqCst) {
-                sup.kill();
-                return Err("cancelled".into());
-            }
-            match sup.child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    if let Some(idle_for) = sup.idle_for_ms() {
-                        sup.kill();
-                        return Err(format!(
-                            "command idle for {idle_for}ms with no output in the background \
+    let id = crate::bg_jobs::spawn_scoped(
+        job_label,
+        "shell",
+        scope.owner_session,
+        move |bg_cancel| {
+            let _worktree_lease = scope.worktree_lease;
+            let mut sup = sup;
+            let handoff_deadline = Instant::now() + Duration::from_millis(HANDOFF_MAX_MS);
+            let status = loop {
+                if bg_cancel.load(Ordering::SeqCst)
+                    || scope
+                        .parent_cancel
+                        .as_ref()
+                        .is_some_and(|token| token.is_cancelled())
+                {
+                    sup.kill();
+                    return Err("cancelled".into());
+                }
+                match sup.child.try_wait() {
+                    Ok(Some(status)) => break status,
+                    Ok(None) => {
+                        if let Some(idle_for) = sup.idle_for_ms() {
+                            sup.kill();
+                            return Err(format!(
+                                "command idle for {idle_for}ms with no output in the background \
                              (process tree killed) - likely waiting for input"
-                        ));
-                    }
-                    if Instant::now() >= handoff_deadline {
-                        sup.kill();
-                        return Err(format!(
+                            ));
+                        }
+                        if Instant::now() >= handoff_deadline {
+                            sup.kill();
+                            return Err(format!(
                             "command still running after {}s in the background (process tree killed)",
                             HANDOFF_MAX_MS / 1_000
                         ));
+                        }
+                        thread::sleep(Duration::from_millis(120));
                     }
-                    thread::sleep(Duration::from_millis(120));
+                    Err(e) => {
+                        sup.kill();
+                        return Err(format!("wait: {e}"));
+                    }
                 }
-                Err(e) => {
-                    sup.kill();
-                    return Err(format!("wait: {e}"));
-                }
+            };
+            let drained = sup.drain();
+            let text = format_result(&label_owned, kind, status, &drained, max_output);
+            if status.success() {
+                Ok(text)
+            } else {
+                Err(text)
             }
-        };
-        let drained = sup.drain();
-        let text = format_result(&label_owned, kind, status, &drained, max_output);
-        if status.success() {
-            Ok(text)
-        } else {
-            Err(text)
-        }
-    });
+        },
+    );
     format!(
         "Command still running after {waited_ms}ms - handed off to bg job #{id}.\n\
          {preview}\
@@ -1048,10 +1100,6 @@ mod tests {
         );
     }
 
-    /// Regression: after the child exits, a grandchild holding the inherited
-    /// pipes must not wedge the tool forever (session 26940d90). `start /b
-    /// ping` backgrounds a writer that keeps stdout alive ~60s; the tool must
-    /// return well inside the 45s wall-clock bound (one DRAIN_CAP_MS window).
     /// cmd.exe is the last-resort shell. A quoted path used to reach it as
     /// `\"...\"` and fail; E2E runs on Git Bash, so only this pins it.
     #[cfg(windows)]
@@ -1078,6 +1126,8 @@ mod tests {
         assert!(out.contains("quoted-path-ok"), "{out}");
     }
 
+    /// A grandchild holding inherited pipes must not wedge the tool (session
+    /// 26940d90). Wait for the helper to exit so the harness has no leaked pipe.
     #[cfg(windows)]
     #[test]
     fn drain_returns_despite_pipe_holding_grandchild() {
@@ -1090,17 +1140,18 @@ mod tests {
         let started = Instant::now();
         let result = run_in_shell(
             &backend,
-            "start /b ping -n 60 127.0.0.1 & exit 0",
+            "start /b ping -n 40 127.0.0.1 & exit 0",
             Path::new("."),
             10_000,
             &cancel,
         );
         let elapsed = started.elapsed();
         assert!(
-            elapsed < Duration::from_secs(45),
+            elapsed < Duration::from_secs(35),
             "run_in_shell took {elapsed:?} - drain wedged on pipe-holding grandchild"
         );
         // cmd exited 0, so this should be a normal Ok result.
         assert!(result.is_ok(), "unexpected failure: {:?}", result.err());
+        std::thread::sleep(Duration::from_secs(42).saturating_sub(started.elapsed()));
     }
 }

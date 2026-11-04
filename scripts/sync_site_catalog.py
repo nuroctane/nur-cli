@@ -69,13 +69,15 @@ for design in ('blackboard', 'digital-sea'):
             ('skills_market', 'Verified skills', 'service', 'signed index / pinned authors', 'src/skills_market.rs',
              'The user installs from a signed index. Author files are pinned by commit and SHA-256 and scanned for hidden instructions; the model can search without installing.'),
             ('code_security', 'Code and security scans', 'tool', 'slop_scan / secscan', 'src/tools/secscan.rs',
-             'Structural checks report code-shape findings. Optional Gitleaks, OSV-Scanner and Semgrep normalize security findings; marking a finding as noise always asks the user.'),
+             'Structural checks report code-shape findings. Optional Gitleaks, OSV-Scanner, Semgrep, Trivy, Checkov and TruffleHog normalize security findings; marking a finding as noise always asks the user.'),
         ]
         existing = {node['id'] for node in data['graph']['nodes']}
         for node_id, label, kind, sub, source, detail in additions:
             if node_id not in existing:
                 data['graph']['nodes'].append(dict(id=node_id, label=label, kind=kind,
                     sub=sub, sourceRef=source, detail=detail))
+            elif node_id == 'code_security':
+                next(node for node in data['graph']['nodes'] if node['id'] == node_id)['detail'] = detail
         for source, target, label in [('tool_runtime', 'secrets', 'inject / redact'),
                 ('agent_loop', 'auto_continue', 'schedule / resume'),
                 ('runtime_entry', 'skills_market', 'user installs'),

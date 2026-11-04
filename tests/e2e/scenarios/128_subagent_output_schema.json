@@ -1,0 +1,16 @@
+{
+  "description": "A parent requests a schema-validated JSON report from a child.",
+  "prompt": "Ask a child to count the two items and return JSON.",
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Count items", "prompt": "Count the two items.", "subagent_type": "explore", "output_schema": {"type": "object", "properties": {"JSON_SCHEMA_REQUIRED_42": {"type": "integer"}}, "required": ["JSON_SCHEMA_REQUIRED_42"], "additionalProperties": false}}}]},
+    {"text": "{\"JSON_SCHEMA_REQUIRED_42\":2}"},
+    {"text": "The count is two."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "request_contains": [{"request": 2, "contains": ["JSON_SCHEMA_REQUIRED_42"]}],
+    "tool_results": [{"request": 3, "contains": ["\"JSON_SCHEMA_REQUIRED_42\":2"]}],
+    "stdout_contains": ["The count is two."]
+  }
+}

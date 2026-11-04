@@ -37,6 +37,7 @@ use tokio_util::sync::CancellationToken;
 // Slash-command handlers (`run_command` + `cmd_*`) live in a child module so
 // this file stays focused on state, rendering hooks, and the event loop.
 mod commands;
+mod recurring;
 pub mod resume;
 mod secret;
 mod startup;
@@ -302,6 +303,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/init", "create or audit the AGENTS.md project guide"),
     ("/scan", "map this codebase → shareable foglamp scan: /scan [focus]"),
     ("/goal", "set a session goal and immediately start working toward it"),
+    ("/loop", "repeat a prompt in this session: /loop 10m prompt | /loop off"),
     ("/secrets", "save credentials outside the chat: /secrets [add NAME | remove NAME]"),
     ("/autocontinue", "continue stopped sessions when limits lift: /autocontinue [on|off|now]"),
     ("/bro", "chill mode: plain words, no jargon, no preamble (toggle)"),
@@ -1149,6 +1151,7 @@ pub fn resolve_transcript_click(
 pub struct ApprovalState {
     pub name: String,
     pub args: String,
+    pub from_subagent: bool,
     pub respond: Option<oneshot::Sender<ApprovalDecision>>,
 }
 
@@ -2386,6 +2389,7 @@ pub struct App {
 
     pub input: InputState,
     pub queue: VecDeque<QueuedPrompt>,
+    recurring: Option<recurring::Recurring>,
     /// When true, a cancel (send-now interject) keeps the queue so the follow-up
     /// can start immediately after the interrupted turn ends.
     preserve_queue_on_interrupt: bool,
@@ -2489,6 +2493,8 @@ pub struct App {
 
     pub approval: Option<ApprovalState>,
     pub question: Option<QuestionState>,
+    /// Human decisions waiting for another dialog or their owning session.
+    pending_human: std::collections::VecDeque<AgentEvent>,
     /// The masked secret modal (`/secrets add`, a pasted credential, the
     /// agent's `secret` request), when open.
     pub secret: Option<SecretModal>,
@@ -2934,6 +2940,7 @@ pub(super) fn new_app(
         mouse_row: 0,
         input: InputState::new(),
         queue: VecDeque::new(),
+        recurring: None,
         preserve_queue_on_interrupt: false,
         swarm_autoshow_seen_id: 0,
         swarm_autoshow_suppressed: false,
@@ -2984,6 +2991,7 @@ pub(super) fn new_app(
         u_last: TokenUsage::default(),
         approval: None,
         question: None,
+        pending_human: std::collections::VecDeque::new(),
         secret: None,
         auto_continue,
         resume_attempts: 0,
@@ -3156,8 +3164,14 @@ pub async fn run_tui(
         if app.poll_resume() {
             dirty = true;
         }
+        if app.poll_recurring() {
+            dirty = true;
+        }
         while let Ok(ev) = app.rx.try_recv() {
             app.on_agent_event(ev);
+            dirty = true;
+        }
+        if app.poll_pending_human() {
             dirty = true;
         }
 
@@ -4063,6 +4077,7 @@ impl App {
         let _ = forked.save();
 
         self.session_id = forked.id.clone();
+        self.swarm_autoshow_seen_id = 0;
         self.u_session = forked.usage.clone();
         self.u_last = TokenUsage::default();
         let mut usage =
@@ -4190,7 +4205,7 @@ impl App {
         let Some(run_id) = self.peek_swarm else {
             return false;
         };
-        let snap = crate::agent::swarm::snapshot();
+        let snap = crate::agent::swarm::snapshot_for(&self.session_id);
         let Some(run) = snap.iter().find(|r| r.id == run_id) else {
             return false;
         };
@@ -4220,7 +4235,7 @@ impl App {
         let Some(run_id) = self.peek_swarm else {
             return 0;
         };
-        crate::agent::swarm::snapshot()
+        crate::agent::swarm::snapshot_for(&self.session_id)
             .iter()
             .find(|r| r.id == run_id)
             .map(|r| r.trace.len())
@@ -4521,7 +4536,7 @@ impl App {
                 // PLUS the dynamic tool output - so the clipboard carries the
                 // whole picture, not just the currently-visible dynamic band.
                 if let Some(run_id) = self.peek_swarm {
-                    let body = crate::agent::swarm::snapshot()
+                    let body = crate::agent::swarm::snapshot_for(&self.session_id)
                         .iter()
                         .find(|r| r.id == run_id)
                         .map(swarm_peek_full_copy)
@@ -9575,7 +9590,7 @@ impl App {
         if self.swarm_autoshow_suppressed {
             return false;
         }
-        let fresh = crate::agent::swarm::runs_since(self.swarm_autoshow_seen_id);
+        let fresh = crate::agent::swarm::runs_since_for(&self.session_id, self.swarm_autoshow_seen_id);
         let Some(newest) = fresh.iter().map(|r| r.id).max() else {
             return false;
         };
@@ -9597,7 +9612,7 @@ impl App {
 
     /// Mark every spawn currently in the registry as already surfaced.
     fn ack_swarm_spawns(&mut self) {
-        let newest = crate::agent::swarm::runs_since(self.swarm_autoshow_seen_id)
+        let newest = crate::agent::swarm::runs_since_for(&self.session_id, self.swarm_autoshow_seen_id)
             .iter()
             .map(|r| r.id)
             .max();
@@ -9674,7 +9689,7 @@ impl App {
                 return;
             }
             "clear" | "reset" => {
-                let dropped = crate::agent::swarm::clear_finished();
+                let dropped = crate::agent::swarm::clear_finished_for(&self.session_id);
                 self.push_note(
                     Tone::Neutral,
                     format!("swarm · dropped {dropped} finished run(s)"),
@@ -9701,7 +9716,7 @@ impl App {
             self.push_note(Tone::Neutral, "swarm · refreshed · moved to bottom".into());
             return;
         }
-        let running = crate::agent::swarm::running_count();
+        let running = crate::agent::swarm::running_count_for(&self.session_id);
         self.push_note(
             Tone::Neutral,
             if running > 0 {
@@ -10443,6 +10458,7 @@ impl App {
             permissions: self.permissions.clone(),
             hooks: agent::hooks::HooksConfig::load(),
             is_subagent: false,
+            interactive_children: true,
             prewalk_override: self.prewalk_override.clone(),
             approved_domains: self.approved_domains.clone(),
             subagent_depth: 0,
@@ -10552,6 +10568,32 @@ impl App {
         }
     }
 
+    fn poll_pending_human(&mut self) -> bool {
+        self.pending_human.retain(|event| match event {
+            AgentEvent::ApprovalRequest { respond, .. } => !respond.is_closed(),
+            AgentEvent::QuestionRequest { respond, turn_cancel, .. } => !respond.is_closed() && !turn_cancel.is_cancelled(),
+            AgentEvent::SecretRequest { respond, .. } => !respond.is_closed(),
+            AgentEvent::LoginRequired { .. } => true,
+            _ => false,
+        });
+        if self.cancelling || self.approval.is_some() || self.question.is_some() || self.secret.is_some() || self.login.is_some() {
+            return false;
+        }
+        let current = &self.session_id;
+        let position = self.pending_human.iter().position(|event| match event {
+            AgentEvent::ApprovalRequest { parent_session, .. } | AgentEvent::QuestionRequest { parent_session, .. } => parent_session.as_ref().is_none_or(|id| id == current),
+            AgentEvent::LoginRequired { parent_session, .. } => parent_session.as_ref().is_none_or(|id| id == current),
+            AgentEvent::SecretRequest { .. } => true,
+            _ => false,
+        });
+        if let Some(event) = position.and_then(|index| self.pending_human.remove(index)) {
+            self.on_agent_event(event);
+            true
+        } else {
+            false
+        }
+    }
+
     // ── agent events ───────────────────────────────────────────────────
     fn on_agent_event(&mut self, ev: AgentEvent) {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
@@ -10561,6 +10603,16 @@ impl App {
                     self.status = "cancelling…".into();
                 } else {
                     self.status = s;
+                }
+            }
+            AgentEvent::ChildStatus { parent_session, status, finished } => {
+                if parent_session == self.session_id {
+                    if finished {
+                        self.set_swarm_live(crate::agent::swarm::running_count_for(&self.session_id) > 0);
+                        self.refresh_sidegraph();
+                    } else if !self.cancelling {
+                        self.status = format!("subagent · {status}");
+                    }
                 }
             }
             AgentEvent::ReasoningDelta(d) => {
@@ -10689,14 +10741,27 @@ impl App {
                 name,
                 args,
                 respond,
+                parent_session,
             } => {
-                if self.cancelling || !self.busy || respond.is_closed() {
+                if respond.is_closed() {
+                    let _ = respond.send(ApprovalDecision::Deny);
+                    return;
+                }
+                if self.approval.is_some() || self.question.is_some() || self.secret.is_some()
+                    || parent_session.as_ref().is_some_and(|id| id != &self.session_id)
+                    || (self.cancelling && parent_session.is_some())
+                {
+                    self.pending_human.push_back(AgentEvent::ApprovalRequest { name, args, respond, parent_session });
+                    return;
+                }
+                if self.cancelling || (!self.busy && parent_session.is_none()) {
                     let _ = respond.send(ApprovalDecision::Deny);
                     return;
                 }
                 self.approval = Some(ApprovalState {
                     name,
                     args,
+                    from_subagent: parent_session.is_some(),
                     respond: Some(respond),
                 });
             }
@@ -10707,12 +10772,20 @@ impl App {
                 options,
                 multi_select,
                 respond,
+                parent_session,
             } => {
-                if self.cancelling
-                    || !self.busy
-                    || turn_cancel.is_cancelled()
-                    || respond.is_closed()
+                if turn_cancel.is_cancelled() || respond.is_closed() {
+                    let _ = respond.send(QuestionAnswer::dismissed());
+                    return;
+                }
+                if self.approval.is_some() || self.question.is_some() || self.secret.is_some()
+                    || parent_session.as_ref().is_some_and(|id| id != &self.session_id)
+                    || (self.cancelling && parent_session.is_some())
                 {
+                    self.pending_human.push_back(AgentEvent::QuestionRequest { turn_cancel, question, header, options, multi_select, respond, parent_session });
+                    return;
+                }
+                if self.cancelling || (!self.busy && parent_session.is_none()) {
                     let _ = respond.send(QuestionAnswer::dismissed());
                     return;
                 }
@@ -10742,11 +10815,21 @@ impl App {
             AgentEvent::LoginRequired {
                 provider_id,
                 provider_name,
+                parent_session,
                 retry_prompt,
                 retry_desc,
                 retry_kind,
                 retry_model,
             } => {
+                if self.login.is_some() || self.approval.is_some() || self.question.is_some() || self.secret.is_some()
+                    || parent_session.as_ref().is_some_and(|id| id != &self.session_id)
+                    || self.cancelling
+                {
+                    self.pending_human.push_back(AgentEvent::LoginRequired {
+                        provider_id, provider_name, parent_session, retry_prompt, retry_desc, retry_kind, retry_model,
+                    });
+                    return;
+                }
                 // A subagent asked for a provider with no stored credentials.
                 // Surface an actionable note and pop the same provider auth
                 // window without changing the parent conversation's provider.
@@ -10802,7 +10885,15 @@ impl App {
                 name,
                 purpose,
                 respond,
-            } => self.open_secret_request(name, purpose, respond),
+            } => {
+                if respond.is_closed() || !self.busy || self.cancelling {
+                    let _ = respond.send(None);
+                } else if self.approval.is_some() || self.question.is_some() || self.secret.is_some() {
+                    self.pending_human.push_back(AgentEvent::SecretRequest { name, purpose, respond });
+                } else {
+                    self.open_secret_request(name, purpose, respond);
+                }
+            }
             AgentEvent::Done {
                 session,
                 usage,
@@ -10823,8 +10914,12 @@ impl App {
                 self.busy = false;
                 self.cancelling = false;
                 self.cancel = None;
-                self.question = None;
-                self.approval = None;
+                if self.question.as_ref().is_some_and(|q| q.respond.as_ref().is_none_or(|r| r.is_closed())) {
+                    self.question = None;
+                }
+                if self.approval.as_ref().is_some_and(|a| a.respond.as_ref().is_none_or(|r| r.is_closed())) {
+                    self.approval = None;
+                }
                 self.drop_secret_request();
                 self.status = "idle".into();
                 // Final graph snapshot for this turn, then stop it animating.
@@ -10834,10 +10929,8 @@ impl App {
                         *live = false;
                     }
                 }
-                // No subagent can outlive its turn - settle any pane still
-                // spinning, then freeze the card at its final state.
-                crate::agent::swarm::cancel_running();
-                self.set_swarm_live(false);
+                // Admitted asynchronous children can outlive their parent.
+                self.set_swarm_live(crate::agent::swarm::running_count_for(&self.session_id) > 0);
                 // Freeze the sidegraph at its final shape too.
                 self.refresh_sidegraph();
                 self.set_sidegraph_live(false);
@@ -12076,6 +12169,28 @@ fn plain_excerpt(line: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn child_login_notice_waits_for_its_session() {
+        if crate::agent::admission::isolated_test("tui::app::tests::child_login_notice_waits_for_its_session") {
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let cwd = workspace.path().to_path_buf();
+        let session = Session::new_for_provider("test", "vllm", &cwd.display().to_string());
+        let usage = UsageTracker::scoped(session.id.clone(), "test".into(), cwd.clone());
+        let client = ApiClient::new("http://127.0.0.1:1", "test-only").unwrap();
+        let mut app = new_app(client, Config::default(), cwd, SharedMode::new(PermissionMode::Auto), session, usage);
+        app.on_agent_event(AgentEvent::LoginRequired {
+            provider_id: "deepseek".into(), provider_name: "DeepSeek".into(),
+            parent_session: Some("other-session".into()),
+            retry_prompt: None, retry_desc: None, retry_kind: None, retry_model: None,
+        });
+        assert!(app.login.is_none());
+        assert_eq!(app.pending_human.len(), 1);
+        assert!(!app.poll_pending_human());
+        assert!(app.login.is_none());
+    }
+
     // Graph boxes showed the answer's raw markdown ("## Fixed ...",
     // "**7 tests**", backticks); identifiers and arithmetic must survive.
     #[test]
@@ -12225,6 +12340,7 @@ mod tests {
         use crate::agent::swarm::{AgentRun, RunState};
         let run = AgentRun {
             id: 7,
+            parent_session: String::new(),
             kind: "general".into(),
             task: "implement expand".into(),
             provider: "anthropic".into(),

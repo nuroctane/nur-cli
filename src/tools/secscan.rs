@@ -7,7 +7,9 @@
 //! - **osv-scanner**: known vulnerabilities in dependency lockfiles (queries
 //!   osv.dev with package names and versions);
 //! - **semgrep**: code patterns (`p/default` rules fetched from the registry,
-//!   metrics off).
+//!   metrics off);
+//! - **trivy** and **checkov**: infrastructure misconfigurations;
+//! - **trufflehog**: filesystem secrets, without remote verification.
 //!
 //! Each writes a JSON report to `.nur/scratch/secscan/`, which is parsed and
 //! deleted; a scanner's exit code only says whether it found something.
@@ -59,8 +61,8 @@ impl Tool for SecScan {
     }
 
     fn description(&self) -> &str {
-        "Run the security scanners installed here (gitleaks for secrets, osv-scanner for \
-         vulnerable dependencies, semgrep for code patterns) and get normalized findings with \
+        "Run installed security scanners (gitleaks, osv-scanner, semgrep, trivy, checkov, \
+         trufflehog) and get normalized findings with \
          file:line and a stable id; secret values are never shown. gitleaks scans the files as \
          they are now; history=true scans every commit instead. Actions: run (default) | \
          status (which scanners are installed) | baseline (record findings the user accepts as \
@@ -75,7 +77,7 @@ impl Tool for SecScan {
                 "action": {"type": "string", "enum": ["run", "status", "baseline"], "default": "run"},
                 "scanners": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["gitleaks", "osv-scanner", "semgrep"]},
+                    "items": {"type": "string", "enum": ["gitleaks", "osv-scanner", "semgrep", "trivy", "checkov", "trufflehog"]},
                     "description": "For run: which scanners (default: every one installed)"
                 },
                 "path": {"type": "string", "description": "For run: subdirectory to scan (default: the workspace)"},
@@ -109,12 +111,34 @@ const SCANNERS: &[(&str, &str)] = &[
         "https://google.github.io/osv-scanner/installation/",
     ),
     ("semgrep", "pip install semgrep (or pipx / brew)"),
+    (
+        "trivy",
+        "https://trivy.dev/docs/latest/getting-started/installation/",
+    ),
+    (
+        "checkov",
+        "https://www.checkov.io/2.Basics/Installing%20Checkov.html",
+    ),
+    (
+        "trufflehog",
+        "https://github.com/trufflesecurity/trufflehog#installation",
+    ),
 ];
+
+fn scanner_bin(name: &str) -> Option<String> {
+    let variable = format!(
+        "NUR_SECSCAN_{}_BIN",
+        name.to_ascii_uppercase().replace('-', "_")
+    );
+    std::env::var(variable)
+        .ok()
+        .or_else(|| crate::ecosystem::find_bin(name))
+}
 
 fn status() -> String {
     let mut out = String::from("secscan scanners\n");
     for (name, install) in SCANNERS {
-        match crate::ecosystem::find_bin(name) {
+        match scanner_bin(name) {
             Some(path) => out.push_str(&format!("- {name}: {path}\n")),
             None => out.push_str(&format!("- {name}: not installed ({install})\n")),
         }
@@ -207,7 +231,7 @@ fn run(args: &Value, ctx: &ToolContext) -> Result<String> {
         if !wanted.is_empty() && !wanted.iter().any(|w| w == name) {
             continue;
         }
-        let Some(bin) = crate::ecosystem::find_bin(name) else {
+        let Some(bin) = scanner_bin(name) else {
             notes.push(format!("{name}: not installed ({install})"));
             continue;
         };
@@ -239,6 +263,16 @@ fn run(args: &Value, ctx: &ToolContext) -> Result<String> {
                 &root_s,
             ],
             "osv-scanner" => vec!["--format", "json", "--output", &report_s, "-r", &root_s],
+            "trivy" => vec!["config", "--format", "json", "--output", &report_s, &root_s],
+            "checkov" => vec![
+                "--directory",
+                &root_s,
+                "--output",
+                "json",
+                "--quiet",
+                "--soft-fail",
+            ],
+            "trufflehog" => vec!["filesystem", "--json", "--no-verification", &root_s],
             _ => vec![
                 "scan",
                 "--config",
@@ -253,22 +287,55 @@ fn run(args: &Value, ctx: &ToolContext) -> Result<String> {
             ],
         };
         // Exit codes mean "found something"; the report file is the result.
-        let run = crate::ecosystem::run_capture_cancelled(
-            &bin,
-            &args,
-            Some(&root),
-            SCANNER_TIMEOUT_MS,
-            &ctx.cancel,
-        );
-        match std::fs::read_to_string(&report) {
+        let sensitive_output = matches!(*name, "trivy" | "checkov" | "trufflehog");
+        let run = if sensitive_output {
+            crate::ecosystem::run_native_tool_capture(
+                &bin,
+                &args,
+                Some(&root),
+                SCANNER_TIMEOUT_MS,
+                &ctx.cancel,
+            )
+        } else {
+            crate::ecosystem::run_capture_cancelled(
+                &bin,
+                &args,
+                Some(&root),
+                SCANNER_TIMEOUT_MS,
+                &ctx.cancel,
+            )
+        };
+        let raw = if matches!(*name, "checkov" | "trufflehog") {
+            run.as_ref()
+                .map(|output| {
+                    if output == "(no output)" {
+                        String::new()
+                    } else {
+                        output.clone()
+                    }
+                })
+                .map_err(|_| ())
+        } else {
+            std::fs::read_to_string(&report).map_err(|_| ())
+        };
+        match raw {
+            Ok(raw) if !scanner_output_is_valid(name, &raw) => {
+                notes.push(format!("{name}: invalid or incomplete report"));
+            }
             Ok(raw) => {
                 let parsed = match *name {
                     "gitleaks" => parse_gitleaks(&raw, &source),
                     "osv-scanner" => parse_osv(&raw, &root),
+                    "trivy" => parse_trivy(&raw, &root),
+                    "checkov" => parse_checkov(&raw, &root),
+                    "trufflehog" => parse_trufflehog(&raw, &root),
                     _ => parse_semgrep(&raw, &root),
                 };
                 notes.push(format!("{name}: {} finding(s)", parsed.len()));
                 findings.extend(parsed);
+            }
+            Err(_) if sensitive_output => {
+                notes.push(format!("{name}: scan failed or produced no report"))
             }
             Err(_) => notes.push(format!(
                 "{name}: no report ({})",
@@ -482,6 +549,136 @@ fn parse_semgrep(raw: &str, root: &Path) -> Vec<Finding> {
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
                 s("/extra/message"),
+            )
+        })
+        .collect()
+}
+
+fn scanner_output_is_valid(name: &str, raw: &str) -> bool {
+    match name {
+        "trivy" => serde_json::from_str::<Value>(raw).is_ok_and(|doc| {
+            doc.get("Results").is_some_and(Value::is_array)
+                || doc.get("SchemaVersion").is_some_and(Value::is_number)
+        }),
+        "checkov" => serde_json::from_str::<Value>(raw).is_ok_and(|doc| match &doc {
+            Value::Array(reports) => reports
+                .iter()
+                .all(|report| report.get("results").is_some_and(Value::is_object)),
+            Value::Object(_) => doc.get("results").is_some_and(Value::is_object),
+            _ => false,
+        }),
+        "trufflehog" => raw
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .all(|line| {
+                serde_json::from_str::<Value>(line).is_ok_and(|item| {
+                    item.get("DetectorName").is_some_and(Value::is_string)
+                        && item.get("SourceMetadata").is_some_and(Value::is_object)
+                })
+            }),
+        _ => true,
+    }
+}
+
+fn parse_trivy(raw: &str, root: &Path) -> Vec<Finding> {
+    let Ok(doc) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for result in doc
+        .get("Results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let file = relative(
+            root,
+            result.get("Target").and_then(Value::as_str).unwrap_or(""),
+        );
+        for item in result
+            .get("Misconfigurations")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            findings.push(finding(
+                "trivy",
+                item.get("ID").and_then(Value::as_str).unwrap_or("?"),
+                item.get("Severity")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                file.clone(),
+                item.pointer("/CauseMetadata/StartLine")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                item.get("Title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("misconfiguration"),
+            ));
+        }
+    }
+    findings
+}
+
+fn parse_checkov(raw: &str, root: &Path) -> Vec<Finding> {
+    let Ok(doc) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
+    let reports: Vec<&Value> = match &doc {
+        Value::Array(items) => items.iter().collect(),
+        _ => vec![&doc],
+    };
+    let mut findings = Vec::new();
+    for report in reports {
+        for item in report
+            .pointer("/results/failed_checks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            findings.push(finding(
+                "checkov",
+                item.get("check_id").and_then(Value::as_str).unwrap_or("?"),
+                item.get("severity")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                relative(
+                    root,
+                    item.get("file_path").and_then(Value::as_str).unwrap_or(""),
+                ),
+                item.pointer("/file_line_range/0")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                item.get("check_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("misconfiguration"),
+            ));
+        }
+    }
+    findings
+}
+
+fn parse_trufflehog(raw: &str, root: &Path) -> Vec<Finding> {
+    raw.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .map(|item| {
+            let detector = item
+                .get("DetectorName")
+                .and_then(Value::as_str)
+                .unwrap_or("secret");
+            let source = item
+                .pointer("/SourceMetadata/Data/Filesystem")
+                .unwrap_or(&Value::Null);
+            finding(
+                "trufflehog",
+                detector,
+                "unknown",
+                relative(
+                    root,
+                    source.get("file").and_then(Value::as_str).unwrap_or(""),
+                ),
+                source.get("line").and_then(Value::as_u64).unwrap_or(0),
+                "potential secret",
             )
         })
         .collect()

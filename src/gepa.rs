@@ -367,7 +367,8 @@ pub async fn run_optimize(
             let mut results = Vec::new();
             let mut fails = Vec::new();
             for task in &tasks {
-                let r = bench::run_one(task, &cfg.model, &client, &cfg, &cwd, &c.instruction).await;
+                let r = bench::run_one(task, &cfg.model, &client, &cfg, &cwd, &c.instruction, true)
+                    .await;
                 match r {
                     Ok(r) => {
                         if !r.passed {

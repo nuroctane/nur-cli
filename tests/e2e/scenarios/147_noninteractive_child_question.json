@@ -1,0 +1,17 @@
+{
+  "description": "A noninteractive child cannot wait for a user question.",
+  "prompt": "Have a child inspect the fixture.",
+  "setup_home_files": {"config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[typesafe]\nenabled = false\n"},
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Inspect fixture", "prompt": "Inspect the fixture.", "subagent_type": "general"}}]},
+    {"tool_calls": [{"name": "question", "arguments": {"question": "Which track?", "options": [{"label": "Stable"}, {"label": "Preview"}]}}]},
+    {"text": "Child deferred the decision."},
+    {"text": "The child deferred the decision."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 4,
+    "tool_results": [{"request": 3, "contains": ["subagents cannot prompt the user", "BLOCKED:"]}],
+    "stdout_contains": ["The child deferred the decision."]
+  }
+}

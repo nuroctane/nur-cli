@@ -358,6 +358,7 @@ impl App {
             "/auth" => self.open_auth_manager(),
             "/logout" => self.cmd_logout(),
             "/goal" => self.cmd_goal(&arg),
+            "/loop" => self.cmd_loop(&arg),
             "/secrets" | "/secret" => self.cmd_secrets(&arg),
             "/autocontinue" => self.cmd_autocontinue(&arg),
             "/graph" => self.cmd_graph(),
@@ -1444,6 +1445,8 @@ impl App {
             &self.cwd.display().to_string(),
         );
         self.session_id = session.id.clone();
+        self.swarm_autoshow_seen_id = 0;
+        self.reset_transcript_interaction();
         let mut usage =
             UsageTracker::new(session.id.clone(), self.cfg.model.clone(), self.cwd.clone());
         usage.set_provider(self.cfg.provider.clone());
@@ -2750,6 +2753,8 @@ impl App {
                 loaded.cwd = self.cwd.display().to_string();
                 self.discard_pending_requests();
                 self.session_id = loaded.id.clone();
+                self.swarm_autoshow_seen_id = 0;
+                self.reset_transcript_interaction();
                 let mut tracker =
                     UsageTracker::new(loaded.id.clone(), self.cfg.model.clone(), self.cwd.clone());
                 tracker.set_provider(self.cfg.provider.clone());

@@ -303,6 +303,9 @@ fn apply_chat_effort(body: &mut Value, provider_id: &str, model: &str, effort: O
         return;
     }
     match provider_id {
+        "refuseless" if model.starts_with("deepseek-v4.1-flash-") && effort == "none" => {
+            body["reasoning_effort"] = json!("off");
+        }
         "openrouter" => {
             // Unified `reasoning.effort`; `none` semantics vary by underlying
             // model, so omit (OpenRouter default) instead of sending it.

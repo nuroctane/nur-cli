@@ -7,11 +7,14 @@ pub mod egaki_tool;
 pub mod enclave_tool;
 pub mod file_ledger;
 pub mod terminal_browser;
+pub mod desktop;
+pub mod debug_tool;
 pub use terminal_browser::is_read_only_action as terminal_browser_is_read_only;
 mod admission_tool;
 pub mod bg_tool;
 mod connectome_tool;
 mod context_tool;
+mod docs_context;
 pub mod dogwood_tool;
 pub mod fractal_tool;
 mod goal_tool;
@@ -53,6 +56,7 @@ mod multi_edit;
 pub mod plur;
 mod read_file;
 pub mod repo_map;
+pub mod worktree_tool;
 pub mod ruflo;
 mod rust_builder;
 mod sandbox;
@@ -133,10 +137,12 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "web_search",
     "browser",
     "terminal_browser",
+    "desktop",
     "look",
     "extract_frames",
     "git_status",
     "git_diff",
+    "worktree",
     // RLM / Prime / Shepherd / AnyDoc surfaces children need for long context
     "context",
     "anydoc",
@@ -145,6 +151,8 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "connectome",
     "repl",
     "mem",
+    "bg",
+    "typesafe",
     // Skills + OptMem: a subagent told to "load your playbook" or "check
     // memory" silently no-oped without these (session 5b30168a: three audit
     // subagents reported the skill tool missing and never loaded their SCA
@@ -165,6 +173,7 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
 /// because a tool set that differs between two requests of one session throws
 /// away the provider's cached prefix (schemas and everything after them).
 pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
+    "typesafe",
     "read_file",
     "list_dir",
     "write_file",
@@ -180,10 +189,12 @@ pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
     "web_search",
     "browser",
     "terminal_browser",
+    "desktop",
     "look",
     "extract_frames",
     "git_status",
     "git_diff",
+    "worktree",
     "context",
     "anydoc",
     "goal",
@@ -203,6 +214,7 @@ pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
 /// tool set that differs between two requests of one session throws away the
 /// provider's cached prefix.
 pub const CORE_PROFILE_TOOL_NAMES: &[&str] = &[
+    "typesafe",
     "read_file",
     "list_dir",
     "write_file",
@@ -331,6 +343,7 @@ impl ToolHost {
             Box::new(web_search::WebSearch),
             Box::new(browser::BrowserTool),
             Box::new(terminal_browser::TerminalBrowser),
+            Box::new(desktop::Desktop),
             Box::new(media::Look),
             Box::new(media::ExtractFrames),
             Box::new(git_status::GitStatus),
@@ -338,8 +351,10 @@ impl ToolHost {
             Box::new(slop_scan::SlopScan),
             Box::new(secscan::SecScan),
             Box::new(lsp_tool::Lsp),
+            Box::new(debug_tool::DebugTool),
             Box::new(mcp_tool::McpTool),
             Box::new(repo_map::RepoMap),
+            Box::new(worktree_tool::Worktree),
             Box::new(context_tool::ContextTool),
             Box::new(anydoc_tool::AnydocTool),
             Box::new(goal_tool::GoalTool),
@@ -543,14 +558,17 @@ impl ToolHost {
             "bash" => bash::Bash.execute(&args, ctx),
             "sgrep" => sgrep::Sgrep.execute(&args, ctx),
             "lsp" => lsp_tool::Lsp.execute(&args, ctx),
+            "debug" => debug_tool::DebugTool.execute(&args, ctx),
             "mcp" => mcp_tool::McpTool.execute(&args, ctx),
             "repo_map" => repo_map::RepoMap.execute(&args, ctx),
+            "worktree" => worktree_tool::Worktree.execute(&args, ctx),
             "grep" => grep::Grep.execute(&args, ctx),
             "glob" => glob::GlobTool.execute(&args, ctx),
             "web_fetch" => web_fetch::WebFetch.execute(&args, ctx),
             "web_search" => web_search::WebSearch.execute(&args, ctx),
             "browser" => browser::BrowserTool.execute(&args, ctx),
             "terminal_browser" => terminal_browser::TerminalBrowser.execute(&args, ctx),
+            "desktop" => desktop::Desktop.execute(&args, ctx),
             "look" => media::Look.execute(&args, ctx),
             "extract_frames" => media::ExtractFrames.execute(&args, ctx),
             "git_status" => git_status::GitStatus.execute(&args, ctx),
@@ -695,6 +713,14 @@ impl Tool for AgentStub {
                     "maxItems": 16,
                     "description": "Optional: names of your existing `context` store variables the child may read (read-only). Only these are shared; an unknown name fails the call."
                 },
+                "output_schema": {
+                    "type": "object",
+                    "description": "Optional JSON Schema for the child's final report. The child is asked for JSON and the result is validated before returning it. Remote schema references are not fetched."
+                },
+                "worktree": {
+                    "type": "string",
+                    "description": "Optional managed worktree name created by the worktree tool. The child runs inside it, isolated from the parent checkout."
+                },
                 "cost_mode": {
                     "type": "string",
                     "enum": ["default", "economy"],
@@ -743,7 +769,7 @@ pub(crate) fn arg_u64(args: &Value, key: &str) -> Option<u64> {
 
 /// Outcome of the shared commit path: `staged` carries the proposal-mode
 /// message (the write did NOT happen), `lsp_note` carries post-edit
-/// diagnostics when a language server for the file was already running.
+/// diagnostics from the language server for the edited file.
 pub(crate) struct CommitOutcome {
     pub staged: Option<String>,
     pub lsp_note: String,
@@ -777,9 +803,8 @@ pub(crate) fn commit_file_write(
     crate::config::atomic_write(full, updated.as_bytes())
         .map_err(|e| NurError::Tool(format!("write {}: {e}", full.display())))?;
     file_ledger::note_written(full, updated.as_bytes());
-    // Post-edit diagnostics: only when a language server for this file's
-    // language is ALREADY running (never a cold spawn inside an edit), so an
-    // edit that introduces a type error surfaces immediately.
+    // Post-edit diagnostics use the prewarmed server, or start it on the first
+    // edit when prewarming is enabled.
     Ok(CommitOutcome {
         staged: None,
         lsp_note: lsp_tool::post_edit_hook(full),
@@ -872,6 +897,8 @@ mod tests {
             "web_search",
             "browser",
             "terminal_browser",
+            "desktop",
+            "debug",
             "look",
             "extract_frames",
             "git_status",
@@ -881,6 +908,7 @@ mod tests {
             "lsp",
             "mcp",
             "repo_map",
+            "worktree",
             "context",
             "anydoc",
             "goal",

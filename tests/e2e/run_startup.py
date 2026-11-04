@@ -801,7 +801,7 @@ def tool_table_fits(binary):
     (home/'.nur/config.toml').write_text(
         f'provider = "vllm"\nmodel = "e2e-model"\nbase_url = "http://127.0.0.1:{server.server_port}/v1"\n'
         'ecosystem_auto_ensure = false\nauto_update = false\nnative_memory = false\n'
-        '[typesafe]\nenabled = false\n', encoding='utf-8')
+        '[typesafe]\nenabled = false\n[sandbox]\nmode = "off"\n', encoding='utf-8')
     term = None
     try:
         term = Terminal(binary, workspace, env, args=['--yes'])

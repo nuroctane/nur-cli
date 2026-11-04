@@ -1,0 +1,16 @@
+{
+  "description": "A long silent child shell command moves to the background after five seconds.",
+  "prompt": "Have a child run the slow fixture.",
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Run slow fixture", "prompt": "Run the slow command.", "subagent_type": "general"}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(8); print('finished')\""}}]},
+    {"text": "Child handed off the command."},
+    {"text": "The child handed off its command."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 4,
+    "tool_results": [{"request": 3, "contains": ["handed off", "bg job"]}],
+    "stdout_contains": ["The child handed off its command."]
+  }
+}

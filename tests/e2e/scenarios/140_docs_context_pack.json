@@ -1,0 +1,19 @@
+{
+  "description": "Registered documentation can be packed into a bounded response without losing session isolation.",
+  "prompt": "Register two documents and pack them into a small context budget.",
+  "script": [
+    {"tool_calls": [
+      {"name": "context", "arguments": {"action": "register", "name": "guide_a", "content": "ALPHA_DOCUMENT explains the first setting."}},
+      {"name": "context", "arguments": {"action": "register", "name": "guide_b", "content": "BETA_DOCUMENT explains the second setting."}}
+    ]},
+    {"tool_calls": [{"name": "context", "arguments": {"action": "pack", "names": ["guide_a", "guide_b"], "token_budget": 240}}]},
+    {"text": "Documentation packed."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "max_tool_result_chars": 240,
+    "tool_results": [{"request": 3, "contains": ["ALPHA_DOCUMENT", "BETA_DOCUMENT"]}],
+    "stdout_contains": ["Documentation packed."]
+  }
+}

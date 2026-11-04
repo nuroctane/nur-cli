@@ -1,0 +1,47 @@
+{
+  "description": "A rejected DAP launch is reported promptly rather than waiting for an initialized event.",
+  "setup_files": {
+    "reject_dap.py": "import json,sys\nwhile True:\n h={}\n while True:\n  line=sys.stdin.buffer.readline()\n  if not line: sys.exit(0)\n  if line in (b'\\r\\n',b'\\n'): break\n  key,value=line.decode().split(':',1);h[key.lower()]=value.strip()\n req=json.loads(sys.stdin.buffer.read(int(h['content-length'])))\n command=req['command']\n body={'seq':1,'type':'response','request_seq':req['seq'],'command':command,'success':command=='initialize','message':'launch rejected','body':{'supportsConfigurationDoneRequest':True}}\n payload=json.dumps(body).encode();sys.stdout.buffer.write(f'Content-Length: {len(payload)}\\r\\n\\r\\n'.encode()+payload);sys.stdout.buffer.flush()\n",
+    "sample.py": "pass\n"
+  },
+  "prompt": "Try launching the fixture.",
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "debug",
+          "arguments": {
+            "action": "start",
+            "session": "fixture",
+            "adapter": "python",
+            "adapter_args": [
+              "reject_dap.py"
+            ],
+            "launch": {
+              "program": "sample.py"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "text": "Launch was rejected."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "max_request_gap_seconds": 6,
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": [
+          "launch rejected"
+        ]
+      }
+    ],
+    "stdout_contains": [
+      "Launch was rejected."
+    ]
+  }
+}

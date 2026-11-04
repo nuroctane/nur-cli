@@ -75,7 +75,10 @@ impl std::fmt::Display for Ambiguity {
 /// Find `needle` in `haystack` under the loosest tier that matches uniquely.
 /// `Ok(None)` means no tier matched; `Err(Ambiguity)` means a tier matched
 /// more than once and the edit must be refused.
-pub fn find_unique(haystack: &str, needle: &str) -> Result<Option<(FuzzyHit, FuzzyTier)>, Ambiguity> {
+pub fn find_unique(
+    haystack: &str,
+    needle: &str,
+) -> Result<Option<(FuzzyHit, FuzzyTier)>, Ambiguity> {
     if needle.is_empty() {
         return Ok(None);
     }
@@ -107,7 +110,7 @@ pub fn find_unique(haystack: &str, needle: &str) -> Result<Option<(FuzzyHit, Fuz
         Ok(None) => {}
     }
     match line_match_unique(haystack, &needle_f, true) {
-        Err(amb) => return Err(amb),
+        Err(amb) => Err(amb),
         Ok(Some(hit)) => Ok(Some((hit, FuzzyTier::Indent))),
         Ok(None) => Ok(None),
     }
@@ -123,9 +126,9 @@ fn find_all_unique(
     while let Some(rel) = find(&hay[from..]) {
         let at = from + rel;
         hits.push(at);
-        // Advance one byte, not one needle: overlapping occurrences (abcab in
-        // abcabcab) are real ambiguities for an edit and must be counted.
-        from = at + 1;
+        // Advance one character, not one needle: overlapping occurrences are
+        // ambiguities, and a byte step could split a UTF-8 character.
+        from = at + hay[at..].chars().next().map(char::len_utf8).unwrap_or(1);
         if from > hay.len() || hits.len() > 1 {
             break;
         }
@@ -143,9 +146,16 @@ fn find_all_unique(
 /// Map a span in the folded text back to original byte offsets by char
 /// count: folding is 1:1 per char, so the char index of a folded byte
 /// offset identifies the same character in the original.
-fn span_to_original(original: &str, folded_text: &str, folded_start: usize, folded_len: usize) -> FuzzyHit {
+fn span_to_original(
+    original: &str,
+    folded_text: &str,
+    folded_start: usize,
+    folded_len: usize,
+) -> FuzzyHit {
     let chars_before = folded_text[..folded_start].chars().count();
-    let chars_in = folded_text[folded_start..folded_start + folded_len].chars().count();
+    let chars_in = folded_text[folded_start..folded_start + folded_len]
+        .chars()
+        .count();
     let mut start = original.len();
     let mut end = original.len();
     let mut seen = 0usize;
@@ -205,12 +215,15 @@ fn line_match_unique(
     }
     let mut hits: Vec<(usize, usize)> = Vec::new();
     for w in 0..=(hay_lines.len() - n) {
-        let ok = needle_lines.iter().zip(&hay_lines[w..w + n]).all(|(nl, hl)| {
-            let key_full = folded(hl);
-            let key = key_full.trim_end();
-            let key = if indent_flex { key.trim_start() } else { key };
-            key == nl.as_str()
-        });
+        let ok = needle_lines
+            .iter()
+            .zip(&hay_lines[w..w + n])
+            .all(|(nl, hl)| {
+                let key_full = folded(hl);
+                let key = key_full.trim_end();
+                let key = if indent_flex { key.trim_start() } else { key };
+                key == nl.as_str()
+            });
         if ok {
             hits.push((w, w + n - 1));
             if hits.len() > 1 {
@@ -250,7 +263,7 @@ pub fn apply_indent_delta(text: &str, delta: isize) -> String {
     if delta == 0 {
         return text.to_string();
     }
-    let mut out = String::with_capacity(text.len() + delta.unsigned_abs() as usize * 4);
+    let mut out = String::with_capacity(text.len() + delta.unsigned_abs() * 4);
     for (i, line) in text.split('\n').enumerate() {
         if i > 0 {
             out.push('\n');

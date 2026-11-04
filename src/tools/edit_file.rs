@@ -179,7 +179,6 @@ impl Tool for EditFile {
                     full.display()
                 ));
             }
-
         }
         // Fallback 3: tolerant matching - Unicode folds (smart quotes, dashes,
         // NBSP), per-line trailing-whitespace trim, then indent-flexible. The
@@ -187,10 +186,11 @@ impl Tool for EditFile {
         // span, so line endings and surrounding text are preserved verbatim.
         match super::fuzzy_edit::find_unique(&file_content, &old) {
             Err(_) => {
-                return Err(NurError::Tool(format!(
+                return Err(NurError::Tool(
                     "old_string matched more than once in the file under tolerant matching; \
                      make it unique (include more surrounding lines)"
-                )));
+                        .to_string(),
+                ));
             }
             Ok(Some((hit, tier))) => {
                 let matched = &file_content[hit.start..hit.end];
@@ -219,7 +219,6 @@ impl Tool for EditFile {
             }
             Ok(None) => {}
         }
-
 
         // Still not found — build a helpful diagnostic. Previous message
         // "old_string not found in file" left the model blind and the transcript

@@ -241,6 +241,9 @@ Small or single-step requests still get a direct answer; do not fan out work tha
 /// Python wake) as a session opens, so its first turn waits on neither, or
 /// only on whichever is still running. Later turns read their caches.
 pub fn prefetch_slow_sources(cwd: &Path, cfg: &crate::config::Config) {
+    if cfg.lsp.prewarm {
+        crate::lsp::prewarm(cwd);
+    }
     if cfg.poor_mode {
         return;
     }
@@ -470,7 +473,7 @@ impl PromptContext {
         // Product identity is always Nur. Backend provider/model are facts only.
         let role = if self.is_subagent {
             format!(
-                "You are a focused NurCLI SUBAGENT (backend: {} · model id: {}). Complete the delegated task and return a concise report. Do not ask the user questions.",
+                "You are a focused NurCLI SUBAGENT (backend: {} · model id: {}). Complete the delegated task and return a concise report. Ask through the question tool only when it is available and a human decision is necessary.",
                 self.provider, self.model
             )
         } else {

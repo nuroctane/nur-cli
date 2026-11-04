@@ -115,7 +115,7 @@ fn detail_rows(app: &App) -> Vec<DetailRow> {
             }
         }
         2 => {
-            for run in crate::agent::swarm::snapshot().iter().rev() {
+            for run in crate::agent::swarm::snapshot_for(&app.session_id).iter().rev() {
                 rows.push((
                     format!("{:?} · {}", run.state, run.task),
                     Some(Target::Agent(run.id)),

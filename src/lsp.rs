@@ -1,12 +1,11 @@
 //! Native LSP client: one language server per file extension, JSON-RPC over
-//! stdio, spawned lazily and killed on idle.
+//! stdio, prewarmed in the background and spawned on demand.
 //!
 //! opencode and Crush surface real diagnostics from language servers after
 //! edits; this module gives nur the same surface through one `lsp` tool with
 //! an op enum, plus an edit-tool hook that appends a compact diagnostics
-//! block when a server for the edited file's language is already running
-//! (servers are never spawned implicitly: rust-analyzer alone is a 30 s,
-//! multi-GB cold start).
+//! block after edits. Prewarming runs away from the UI thread; the first edit
+//! may still wait for a cold language server. It can be disabled in config.
 //!
 //! Wire shape: `Content-Length: N\r\n\r\n<json>` both ways (LSP spec 3.17).
 
@@ -15,6 +14,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -27,7 +27,6 @@ struct Server {
     next_id: i64,
     responses: Arc<Mutex<HashMap<i64, Value>>>,
     notifications: Arc<Mutex<Vec<Value>>>,
-    started: Instant,
     last_used: Mutex<Instant>,
     root: PathBuf,
 }
@@ -47,11 +46,65 @@ impl Drop for Server {
 
 /// Process-wide registry: extension -> server, plus the file URI each opened.
 static REGISTRY: OnceLock<Mutex<HashMap<String, RunningServer>>> = OnceLock::new();
+static PREWARM: AtomicBool = AtomicBool::new(true);
+static WARMED_ROOTS: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+
+pub fn set_prewarm(enabled: bool) {
+    PREWARM.store(enabled, Ordering::Relaxed);
+}
+
+/// Detect common project languages without walking the tree on the UI thread.
+pub fn prewarm(cwd: &Path) {
+    let cwd = cwd.to_path_buf();
+    let roots = WARMED_ROOTS.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    if !roots
+        .lock()
+        .map(|mut roots| roots.insert(cwd.clone()))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("nur-lsp-prewarm".into())
+        .spawn(move || {
+            let mut paths = Vec::new();
+            for (marker, representative) in [
+                ("Cargo.toml", "main.rs"),
+                ("pyproject.toml", "main.py"),
+                ("package.json", "index.ts"),
+                ("go.mod", "main.go"),
+            ] {
+                if cwd.join(marker).exists() {
+                    paths.push(cwd.join(representative));
+                }
+            }
+            if let Ok(entries) = std::fs::read_dir(&cwd) {
+                paths.extend(
+                    entries
+                        .flatten()
+                        .map(|entry| entry.path())
+                        .filter(|path| path.is_file()),
+                );
+            }
+            let mut seen = std::collections::HashSet::new();
+            for path in paths {
+                if !PREWARM.load(Ordering::Relaxed) {
+                    break;
+                }
+                let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+                    continue;
+                };
+                if seen.insert(ext.to_ascii_lowercase()) && command_for(ext).is_some() {
+                    let _ = ensure_running(&path);
+                }
+            }
+        });
+}
 
 struct RunningServer {
     server: Arc<Mutex<Server>>,
     /// Files the client didOpen'd, so didChange can be pushed after edits.
-    opened: Vec<String>,
+    opened: HashMap<String, i32>,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, RunningServer>> {
@@ -66,14 +119,23 @@ const DEFAULT_SERVERS: &[(&str, &[&str])] = &[
     ("tsx", &["typescript-language-server", "--stdio"]),
     ("js", &["typescript-language-server", "--stdio"]),
     ("jsx", &["typescript-language-server", "--stdio"]),
-    ("py", &["pyright-langserver", "--stdio", "basedpyright-langserver", "--stdio"]),
+    (
+        "py",
+        &[
+            "pyright-langserver",
+            "--stdio",
+            "basedpyright-langserver",
+            "--stdio",
+        ],
+    ),
     ("go", &["gopls"]),
 ];
 
 /// `[lsp] servers` from config: extension -> command words. A Mutex rather
 /// than a OnceLock because the table is re-set on every config load (and in
 /// tests, where several cases install different overrides).
-static CONFIG_OVERRIDES: OnceLock<Mutex<Option<HashMap<String, Vec<String>>>>> = OnceLock::new();
+type ServerOverrides = HashMap<String, Vec<String>>;
+static CONFIG_OVERRIDES: OnceLock<Mutex<Option<ServerOverrides>>> = OnceLock::new();
 
 pub fn set_config_overrides(map: Option<HashMap<String, Vec<String>>>) {
     let cell = CONFIG_OVERRIDES.get_or_init(|| Mutex::new(None));
@@ -116,9 +178,7 @@ fn command_for(ext: &str) -> Option<Vec<String>> {
     if !current.is_empty() {
         candidates.push(current);
     }
-    candidates
-        .into_iter()
-        .find(|cmd| which(&cmd[0]).is_some())
+    candidates.into_iter().find(|cmd| which(&cmd[0]).is_some())
 }
 
 /// Minimal PATH probe (no `which` crate dependency).
@@ -144,7 +204,9 @@ fn which(program: &str) -> Option<PathBuf> {
 
 /// JSON-RPC over stdio for one already-spawned child.
 fn spawn_server(cmd: &[String], root: &Path) -> std::result::Result<Server, String> {
-    let mut child = std::process::Command::new(&cmd[0])
+    let mut command = std::process::Command::new(&cmd[0]);
+    crate::tools::tool_env(&mut command);
+    let mut child = command
         .args(&cmd[1..])
         .current_dir(root)
         .stdin(std::process::Stdio::piped())
@@ -193,7 +255,6 @@ fn spawn_server(cmd: &[String], root: &Path) -> std::result::Result<Server, Stri
         next_id: 0,
         responses,
         notifications,
-        started: Instant::now(),
         last_used: Mutex::new(Instant::now()),
         root: root.to_path_buf(),
     })
@@ -224,28 +285,30 @@ fn read_message(reader: &mut impl BufRead) -> std::result::Result<Option<String>
     }
     let length = length.ok_or_else(|| "lsp: message without Content-Length".to_string())?;
     if length > 32 * 1024 * 1024 {
-        return Err(format!("lsp: message of {length} bytes over the 32 MiB cap"));
+        return Err(format!(
+            "lsp: message of {length} bytes over the 32 MiB cap"
+        ));
     }
     let mut buf = vec![0u8; length];
     reader
         .read_exact(&mut buf)
         .map_err(|e| format!("lsp read body: {e}"))?;
-    String::from_utf8(buf).map(Some).map_err(|e| format!("lsp body: {e}"))
+    String::from_utf8(buf)
+        .map(Some)
+        .map_err(|e| format!("lsp body: {e}"))
 }
 
 /// Encode one message with its Content-Length header.
 fn write_message(writer: &mut impl Write, body: &str) -> std::result::Result<(), String> {
-    write!(
-        writer,
-        "Content-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    )
-    .map_err(|e| format!("lsp write: {e}"))
+    write!(writer, "Content-Length: {}\r\n\r\n{}", body.len(), body)
+        .map_err(|e| format!("lsp write: {e}"))
 }
 
 /// File path -> LSP file URI (percent-encoded, forward slashes).
 pub fn file_uri(path: &Path) -> String {
+    if let Ok(url) = reqwest::Url::from_file_path(path) {
+        return url.into();
+    }
     let text = path.to_string_lossy().replace('\\', "/");
     let mut encoded = String::with_capacity(text.len() + 8);
     for byte in text.bytes() {
@@ -274,6 +337,13 @@ fn language_id(ext: &str) -> &str {
 }
 
 /// Ensure a server is running for `path`; spawn + initialize when needed.
+fn project_root(path: &Path) -> PathBuf {
+    path.parent()
+        .and_then(|p| p.ancestors().find(|a| a.join(".git").exists()))
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")).to_path_buf())
+}
+
 fn ensure_running(path: &Path) -> Result<Arc<Mutex<Server>>> {
     let ext = path
         .extension()
@@ -287,16 +357,16 @@ fn ensure_running(path: &Path) -> Result<Arc<Mutex<Server>>> {
              or set [lsp] servers.{ext}"
         ))
     })?;
-    let root = path
-        .parent()
-        .and_then(|p| p.ancestors().find(|a| a.join(".git").exists()))
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")).to_path_buf());
+    let root = project_root(path);
 
     let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(running) = reg.get_mut(&ext) {
         // Died servers (crash, exit) respawn on next use.
-        let alive = running.server.lock().map(|s| s.child.id() > 0).unwrap_or(false);
+        let alive = running
+            .server
+            .lock()
+            .map(|mut s| s.root == root && matches!(s.child.try_wait(), Ok(None)))
+            .unwrap_or(false);
         if alive {
             let server = running.server.clone();
             return Ok(server);
@@ -304,17 +374,14 @@ fn ensure_running(path: &Path) -> Result<Arc<Mutex<Server>>> {
         reg.remove(&ext);
     }
 
-    let mut server = Arc::new(
-        Mutex::new(
-            spawn_server(&cmd, &root)
-                .map_err(NurError::Tool)?,
-        ),
-    );
+    let server = Arc::new(Mutex::new(
+        spawn_server(&cmd, &root).map_err(NurError::Tool)?,
+    ));
 
     // initialize handshake; full-sync textDocuments (didSave carries text).
     let root_uri = file_uri(&root);
     let init = request(
-        &mut server,
+        &server,
         "initialize",
         serde_json::json!({
             "processId": std::process::id(),
@@ -329,12 +396,12 @@ fn ensure_running(path: &Path) -> Result<Arc<Mutex<Server>>> {
             init["error"]
         )));
     }
-    notify(&mut server, "initialized", serde_json::json!({}));
+    notify(&server, "initialized", serde_json::json!({}));
     reg.insert(
         ext,
         RunningServer {
             server: server.clone(),
-            opened: Vec::new(),
+            opened: HashMap::new(),
         },
     );
     Ok(server)
@@ -348,7 +415,9 @@ fn request(
     timeout: Duration,
 ) -> Result<Value> {
     let (id, payload) = {
-        let mut guard = server.lock().map_err(|_| NurError::Tool("lsp: server poisoned".into()))?;
+        let mut guard = server
+            .lock()
+            .map_err(|_| NurError::Tool("lsp: server poisoned".into()))?;
         let id = guard.next_id;
         guard.next_id += 1;
         let payload = serde_json::json!({
@@ -361,7 +430,9 @@ fn request(
         (id, payload)
     };
     {
-        let mut guard = server.lock().map_err(|_| NurError::Tool("lsp: server poisoned".into()))?;
+        let mut guard = server
+            .lock()
+            .map_err(|_| NurError::Tool("lsp: server poisoned".into()))?;
         write_message(&mut guard.stdin, &payload).map_err(NurError::Tool)?;
         guard.touch();
     }
@@ -413,6 +484,9 @@ fn diagnostics_for(server: &Arc<Mutex<Server>>, uri: &str) -> Vec<(u32, u32, Str
             if msg.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
             {
                 if msg.pointer("/params/uri").and_then(Value::as_str) == Some(uri) {
+                    // Each publication replaces the previous diagnostics for
+                    // this document, including an empty publication.
+                    out.clear();
                     if let Some(diags) =
                         msg.pointer("/params/diagnostics").and_then(Value::as_array)
                     {
@@ -449,7 +523,7 @@ fn diagnostics_for(server: &Arc<Mutex<Server>>, uri: &str) -> Vec<(u32, u32, Str
                         }
                     }
                 }
-                return false; // consumed
+                return msg.pointer("/params/uri").and_then(Value::as_str) != Some(uri);
             }
             true
         });
@@ -479,8 +553,8 @@ fn sync_document(server: &Arc<Mutex<Server>>, path: &Path, ext: &str, text: &str
         .lock()
         .map(|mut reg| {
             if let Some(running) = reg.get_mut(ext) {
-                if !running.opened.contains(&uri) {
-                    running.opened.push(uri.clone());
+                if !running.opened.contains_key(&uri) {
+                    running.opened.insert(uri.clone(), 1);
                     notify(
                         server,
                         "textDocument/didOpen",
@@ -492,11 +566,13 @@ fn sync_document(server: &Arc<Mutex<Server>>, path: &Path, ext: &str, text: &str
                         }),
                     );
                 } else {
+                    let version = running.opened.get_mut(&uri).unwrap();
+                    *version = version.saturating_add(1);
                     notify(
                         server,
                         "textDocument/didChange",
                         serde_json::json!({
-                            "textDocument": { "uri": uri, "version": 2 },
+                            "textDocument": { "uri": uri, "version": *version },
                             "contentChanges": [{ "text": text }],
                         }),
                     );
@@ -515,11 +591,7 @@ fn sync_document(server: &Arc<Mutex<Server>>, path: &Path, ext: &str, text: &str
 // ---------------------------------------------------------------------------
 
 /// Run an `lsp` operation. One tool, one op enum, matching opencode/Crush.
-pub fn run_op(
-    op: &str,
-    path: &Path,
-    extra: &Value,
-) -> Result<String> {
+pub fn run_op(op: &str, path: &Path, extra: &Value) -> Result<String> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -533,17 +605,21 @@ pub fn run_op(
             let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
             let removed = reg.remove(&ext);
             drop(reg);
-            return Ok(match removed {
+            Ok(match removed {
                 Some(_) => format!("stopped the {} language server", language_id(&ext)),
                 None => format!("no {} language server was running", language_id(&ext)),
-            });
+            })
         }
         "diagnostics" => {
             let server = ensure_running(path)?;
             sync_document(&server, path, &ext, &text);
             // Servers publish asynchronously; a short wait usually suffices.
             let wait = Duration::from_millis(
-                extra.get("wait_ms").and_then(Value::as_u64).unwrap_or(1500).min(10_000),
+                extra
+                    .get("wait_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1500)
+                    .min(10_000),
             );
             let deadline = Instant::now() + wait;
             loop {
@@ -570,11 +646,8 @@ pub fn run_op(
             let server = ensure_running(path)?;
             sync_document(&server, path, &ext, &text);
             let uri = file_uri(path);
-            let line = extra.get("line").and_then(Value::as_u64).unwrap_or(0) as u64;
-            let character = extra
-                .get("character")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as u64;
+            let line = extra.get("line").and_then(Value::as_u64).unwrap_or(0);
+            let character = extra.get("character").and_then(Value::as_u64).unwrap_or(0);
             let position = serde_json::json!({
                 "textDocument": { "uri": uri },
                 "position": { "line": line, "character": character },
@@ -585,7 +658,12 @@ pub fn run_op(
                 "references" => {
                     let mut p = position.clone();
                     p["context"] = serde_json::json!({ "includeDeclaration": true });
-                    let resp = request(&server, "textDocument/references", p, Duration::from_secs(20))?;
+                    let resp = request(
+                        &server,
+                        "textDocument/references",
+                        p,
+                        Duration::from_secs(20),
+                    )?;
                     return Ok(render_locations(&resp, "references"));
                 }
                 _ => "textDocument/documentSymbol",
@@ -605,7 +683,7 @@ pub fn run_op(
 }
 
 /// After-edit hook: append diagnostics when a server for this language is
-/// ALREADY running (never spawn implicitly). Returns "" otherwise.
+/// already running, or start it when prewarming is enabled.
 pub fn diagnostics_after_edit(path: &Path) -> String {
     let ext = path
         .extension()
@@ -616,11 +694,18 @@ pub fn diagnostics_after_edit(path: &Path) -> String {
         .lock()
         .map(|reg| {
             reg.get(&ext)
-                .map(|r| r.server.lock().map(|s| s.child.id() > 0).unwrap_or(false))
+                .map(|r| {
+                    r.server
+                        .lock()
+                        .map(|mut s| {
+                            s.root == project_root(path) && matches!(s.child.try_wait(), Ok(None))
+                        })
+                        .unwrap_or(false)
+                })
                 .unwrap_or(false)
         })
         .unwrap_or(false);
-    if !already_running {
+    if !already_running && !PREWARM.load(Ordering::Relaxed) {
         return String::new();
     }
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -633,19 +718,6 @@ pub fn diagnostics_after_edit(path: &Path) -> String {
     std::thread::sleep(Duration::from_millis(400));
     let diags = diagnostics_for(&server, &file_uri(path));
     render_diagnostics(&diags, 15)
-}
-
-/// True when a server for `ext` is running (for the tool's status output and
-/// tests). Not part of the tool schema.
-pub fn is_running(ext: &str) -> bool {
-    registry()
-        .lock()
-        .map(|reg| {
-            reg.get(ext)
-                .map(|r| r.server.lock().map(|s| s.child.id() > 0).unwrap_or(false))
-                .unwrap_or(false)
-        })
-        .unwrap_or(false)
 }
 
 fn render_hover(resp: &Value) -> String {
@@ -709,10 +781,7 @@ fn render_symbols(resp: &Value) -> String {
             }
             *budget -= 1;
             let name = s.get("name").and_then(Value::as_str).unwrap_or("?");
-            let kind = s
-                .get("kind")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
+            let kind = s.get("kind").and_then(Value::as_u64).unwrap_or(0);
             let line = s
                 .pointer("/range/start/line")
                 .and_then(Value::as_u64)
@@ -786,17 +855,27 @@ mod tests {
     #[test]
     fn file_uris_percent_encode_windows_paths() {
         let uri = file_uri(Path::new(r"C:\Users\david\my repo\src\main.rs"));
-        assert_eq!(
-            uri,
-            "file:///C:/Users/david/my%20repo/src/main.rs"
-        );
+        assert_eq!(uri, "file:///C:/Users/david/my%20repo/src/main.rs");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_file_uri_has_an_empty_authority_and_round_trips() {
+        let path = Path::new("/tmp/nur repo/a.rs");
+        let uri = file_uri(path);
+        let parsed = reqwest::Url::parse(&uri).unwrap();
+        assert_eq!(parsed.to_file_path().unwrap(), path);
+        assert!(uri.starts_with("file:///tmp/"));
     }
 
     #[test]
     fn diagnostics_render_with_one_based_positions() {
-        let diags = vec![
-            (3u32, 7u32, "error: expected `;`".to_string(), "rustc".to_string()),
-        ];
+        let diags = vec![(
+            3u32,
+            7u32,
+            "error: expected `;`".to_string(),
+            "rustc".to_string(),
+        )];
         let block = render_diagnostics(&diags, 15);
         assert!(block.contains("L4 C8 error: expected `;`"), "{block}");
         assert_eq!(render_diagnostics(&[], 15), "");

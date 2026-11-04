@@ -17,7 +17,10 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import shutil
+import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -428,6 +431,9 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
         for needle in rule.get("contains", []):
             if not any(needle in r for r in results):
                 failures.append(f"request {n} tool results lack {needle!r}: {results!r}"[:400])
+        for needle in rule.get("lacks", []):
+            if any(needle in r for r in results):
+                failures.append(f"request {n} tool results contain forbidden {needle!r}")
         # `last_result` looks only at the newest tool result in the request
         # (the one answering the previous turn's call); earlier results are
         # still in the transcript, so "lacks" would be meaningless over all.
@@ -463,16 +469,28 @@ def check(scenario, result, workspace, requests, mcp_requests=()):
 
 def remove_tree(path):
     """Delete a scenario's temp tree; return a locked path if something holds one."""
+    root = Path(path).resolve()
+    if root.parent != Path(tempfile.gettempdir()).resolve() or not root.name.startswith("nur-e2e-"):
+        raise ValueError(f"refusing to clean non-scenario directory: {root}")
+
+    def remove_readonly(func, name, error):
+        target = Path(name)
+        if isinstance(error[1], PermissionError) and not target.is_symlink() and target.resolve().is_relative_to(root):
+            os.chmod(target, stat.S_IREAD | stat.S_IWRITE)
+            func(name)
+            return
+        raise error[1]
+
     for _ in range(20):
         try:
-            shutil.rmtree(path)
+            shutil.rmtree(root, onerror=remove_readonly)
             return None
         except FileNotFoundError:
             return None
         except PermissionError as e:
             locked = e.filename
             time.sleep(0.25)
-    shutil.rmtree(path, ignore_errors=True)
+    shutil.rmtree(root, ignore_errors=True)
     return locked
 
 
@@ -509,6 +527,15 @@ def expand_workspace_paths(value, workspace):
 def run_scenario(binary, scenario_path):
     scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
     name = scenario_path.stem
+    if scenario.get("windows_only") and os.name != "nt":
+        return {"scenario": name, "skipped": "Windows only", "passed": True, "failures": [],
+                "model_requests": 0, "seconds": 0}
+    if scenario.get("linux_only") and not sys.platform.startswith("linux"):
+        return {"scenario": name, "skipped": "Linux only", "passed": True, "failures": [],
+                "model_requests": 0, "seconds": 0}
+    if scenario.get("requires_bwrap") and not shutil.which("bwrap"):
+        return {"scenario": name, "skipped": "bubblewrap unavailable", "passed": True, "failures": [],
+                "model_requests": 0, "seconds": 0}
     if scenario.get("skip"):
         # An open product decision, recorded as a scenario so it stays visible.
         return {"scenario": name, "skipped": scenario["skip"], "passed": True, "failures": [],
@@ -517,9 +544,19 @@ def run_scenario(binary, scenario_path):
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     tmp = Path(tempfile.mkdtemp(prefix=f"nur-e2e-{name}-"))
+    host_socket = None
+    host_datagram = None
     try:
         workspace = tmp / "workspace"
         workspace.mkdir()
+        if scenario.get("setup_host_socket"):
+            host_socket = socket.socket(socket.AF_UNIX)
+            host_socket.bind(str(workspace / "host.sock"))
+            host_socket.listen()
+            host_socket.setblocking(False)
+            host_datagram = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            host_datagram.bind(str(workspace / "host-dgram.sock"))
+            host_datagram.setblocking(False)
         for rel, text in scenario.get("setup_files", {}).items():
             (workspace / rel).parent.mkdir(parents=True, exist_ok=True)
             # newline="" keeps the scenario's line endings byte for byte, so a
@@ -528,6 +565,22 @@ def run_scenario(binary, scenario_path):
             # write_text keyword: that form needs Python 3.13.)
             with (workspace / rel).open("w", encoding="utf-8", newline="") as fh:
                 fh.write(text)
+        for rel in scenario.get("setup_executable_files", []):
+            path = workspace / rel
+            path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        for index in range(scenario.get("setup_empty_files", 0)):
+            directory = workspace / "generated-fixture"
+            directory.mkdir(exist_ok=True)
+            (directory / f"file-{index:04}.txt").touch()
+        if scenario.get("setup_native_desktop"):
+            source = workspace / "desktop_fixture.rs"
+            source.write_text('fn main() { println!("fixture:{}:{}", std::env::args().skip(1).collect::<Vec<_>>().join("|"), std::env::var("OPENAI_API_KEY").is_ok()); }', encoding="utf-8")
+            output = workspace / "desktop_fixture.exe"
+            if scenario.get("setup_native_desktop") == "npm":
+                arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
+                output = workspace / "npm" / "node_modules" / "agent-desktop" / "bin" / f"agent-desktop-win32-{arch}.exe"
+                output.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["rustc", str(source), "-o", str(output)], check=True, capture_output=True, timeout=60)
         script = expand_workspace_paths(scenario["script"], workspace) if scenario.get("workspace_paths") else scenario["script"]
         # `serve_files`: files the fake provider serves under /raw/ (a stand-in
         # for raw.githubusercontent.com and other plain file hosts).
@@ -542,8 +595,41 @@ def run_scenario(binary, scenario_path):
             k: v.replace("{port}", str(port))
             .replace("{home}", Path(env["NUR_HOME"]).as_posix())
             .replace("{workspace}", workspace.as_posix())
+            .replace("{python}", Path(sys.executable).as_posix())
             for k, v in scenario.get("env", {}).items()
         })
+        if scenario.get("setup_native_scanners"):
+            bindir = workspace / "scanner-bin"
+            bindir.mkdir()
+            scanner = bindir / f"trivy{EXE}"
+            subprocess.run(["rustc", str(HERE / "fake_secscan.rs"), "-o", str(scanner)], check=True, capture_output=True, timeout=60)
+            for scanner_name in ("checkov", "trufflehog"):
+                shutil.copy(scanner, bindir / f"{scanner_name}{EXE}")
+            for scanner_name in ("trivy", "checkov", "trufflehog"):
+                env[f"NUR_SECSCAN_{scanner_name.upper()}_BIN"] = str(bindir / f"{scanner_name}{EXE}")
+            env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
+        if scenario.get("setup_git"):
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            env["GIT_CONFIG_GLOBAL"] = os.devnull
+            git_env = {**env, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+            for git_args in (
+                ["-c", "init.templateDir=", "init", "-q"],
+                ["config", "maintenance.auto", "false"],
+                ["config", "gc.auto", "0"],
+                ["add", "."],
+                ["-c", "user.name=Nur E2E", "-c", "user.email=nur-e2e@example.test", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "-qm", "fixture"],
+            ):
+                subprocess.run(["git", *git_args], cwd=workspace, env=git_env, check=True, capture_output=True, timeout=60)
+        if scenario.get("setup_worktree_escape"):
+            outside = workspace / "outside"
+            outside.mkdir()
+            with (outside / "sentinel.txt").open("w", encoding="utf-8", newline="") as sentinel:
+                sentinel.write("safe\n")
+            link = Path(env["NUR_HOME"]) / "worktrees"
+            if os.name == "nt":
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True, capture_output=True, timeout=10)
+            else:
+                link.symlink_to(outside, target_is_directory=True)
         if scenario.get("provider"):
             provider_id = scenario["provider"]
             env["OPENAI_API_KEY"] = "e2e-isolated-key"
@@ -566,6 +652,12 @@ def run_scenario(binary, scenario_path):
             text = text.replace("{home}", nur_home.as_posix()).replace("{workspace}", workspace.as_posix()).replace("{port}",str(port)).replace("{mailbox_id}", mailbox_id)
             (nur_home / rel).parent.mkdir(parents=True, exist_ok=True)
             (nur_home / rel).write_text(text, encoding="utf-8")
+        # Most scenarios exercise unrelated tools and may write from bash.
+        # Dedicated sandbox scenarios supply their own policy explicitly.
+        config_path = nur_home / "config.toml"
+        config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        if "[sandbox]" not in config_text:
+            config_path.write_text(config_text + '\n[sandbox]\nmode = "off"\n', encoding="utf-8")
         setup_failures = []
         for command in scenario.get("setup_commands", []):
             # CLI steps a user runs first, e.g. `nur auth login --provider ...`.
@@ -581,6 +673,12 @@ def run_scenario(binary, scenario_path):
             for needle in spec.get("stderr_contains", []):
                 if needle not in done.stderr + done.stdout:
                     setup_failures.append(f"setup `nur {' '.join(args)}` output lacks {needle!r}")
+            for needle in spec.get("stdout_contains", []):
+                if needle not in done.stdout:
+                    setup_failures.append(f"setup `nur {' '.join(args)}` stdout lacks {needle!r}")
+            for needle in spec.get("stdout_lacks", []):
+                if needle in done.stdout:
+                    setup_failures.append(f"setup `nur {' '.join(args)}` exposed a forbidden value")
         try:
             # `global_args` go before the subcommand (`-v`), `run_args` after
             # it (`--output-format json`).
@@ -620,11 +718,28 @@ def run_scenario(binary, scenario_path):
         mcp_log = tmp / "mcp.jsonl"
         mcp_requests = [json.loads(line) for line in mcp_log.read_text(encoding="utf-8").splitlines() if line] if mcp_log.exists() else []
         failures = setup_failures + check(scenario, result, workspace, requests, mcp_requests)
+        if host_socket:
+            try:
+                connection, _ = host_socket.accept()
+                connection.close()
+                failures.append("sandbox connected to a host Unix socket")
+            except BlockingIOError:
+                pass
+        if host_datagram:
+            try:
+                host_datagram.recv(128)
+                failures.append("sandbox sent a datagram to a host Unix socket")
+            except BlockingIOError:
+                pass
         files = sorted(str(p.relative_to(workspace)) for p in workspace.rglob("*") if p.is_file())
         shutil.copy(log, out / "requests.jsonl")
         if mcp_log.exists():
             shutil.copy(mcp_log, out / "mcp_requests.jsonl")
     finally:
+        if host_socket:
+            host_socket.close()
+        if host_datagram:
+            host_datagram.close()
         leftover = remove_tree(tmp)
     if leftover:
         # A one-shot run must not leave a process behind holding its home.

@@ -5,8 +5,8 @@
 //! multi-select is on, Esc dismisses) and the picked labels come back as the
 //! tool result. Like OpenCode, this is for genuine forks the agent cannot
 //! resolve alone - unlike OpenCode it is fenced: goal-driven turns,
-//! subagents, and headless runs never interrupt the user (they get a
-//! redirect to the `BLOCKED:` protocol instead), and a Jev gate answers
+//! subagents without an interactive parent never interrupt the user (they get
+//! a redirect to the `BLOCKED:` protocol instead), and a Jev gate answers
 //! "resolve it yourself" first when the question needs no human at all.
 //!
 //! Execution lives in the agent loop (it must block on the TUI's answer), so
@@ -69,12 +69,11 @@ impl Tool for QuestionTool {
 
     fn execute(&self, _args: &Value, _ctx: &ToolContext) -> Result<String> {
         // The loop intercepts `question` first (it must block on the modal
-        // answer). Reaching dispatch means a subagent or headless path called
+        // answer). Reaching dispatch means no interactive runner intercepted
         // it: never invent a user answer, redirect instead.
         Err(NurError::Tool(
-            "only the root interactive turn can ask the user - subagents and \
-             headless runs must proceed with their best judgment or declare \
-             BLOCKED: <what is needed>"
+            "no interactive user is available - proceed with your best judgment \
+             or declare BLOCKED: <what is needed>"
                 .into(),
         ))
     }

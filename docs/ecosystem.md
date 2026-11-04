@@ -484,7 +484,7 @@ the ignore file is stale, or a present mirror file has drifted from its pin.
 `nur ecosystem install <name>` shows the plan (source, pin, target directory)
 and does nothing without `--yes`. Known names: `penecho`, `sgrep`, `dogwood`,
 `headroom`, `graphjin`, `egaki`, `akarso`, `ruflo`, `plur`, `executor`,
-`agent-browser`, `excalidraw`, `skills`, `akm`, `omp`, `graphify`, `fractal`,
+`agent-browser`, `excalidraw`, `skills`, `akm`, `graphify`, `fractal`,
 the skill-pack labels (`web3-skills`, `infinite-headcount`, …) and catalog
 plugin ids (`superpowers`, `fable`, …).
 

@@ -1,6 +1,6 @@
 # Provider setup and conformance matrix
 
-This is the user-facing mirror of the 71-entry `PROVIDERS` catalog in
+This is the user-facing mirror of the 72-entry `PROVIDERS` catalog in
 [`src/providers.rs`](https://github.com/nuroctane/nur-cli/blob/main/src/providers.rs). The base URL, request style, default
 model, and environment variable below are the exact current catalog values, not
 recommendations inferred from a vendor's marketing page.
@@ -32,6 +32,7 @@ capability for this exact Nur route/model, so Nur must treat it as unverified.
 
 | ID / provider | Auth, exact route, default model | First-party docs | Tool / stream / usage caveat | Setup note |
 |---|---|---|---|---|
+| `refuseless` - Refuseless | `REFUSELESS_API_KEY`; `https://api.refuseless.com/v1`; CC; `glm-5.3-abliterated` | [Refuseless API](https://docs.refuseless.com/introduction) | The API documents streaming and tools; availability varies by model. | Create an API key, then use `/login refuseless` or set the environment variable. `/model` queries the live catalog. |
 | `meta` - Meta Model API | `META_API_KEY` / `MODEL_API_KEY`; `https://api.meta.ai/v1`; R; `muse-spark-1.2` | [Meta Model API models](https://dev.meta.ai/docs/models) | Muse Spark is multimodal (text, image, video, PDF); verify tools/stream/usage for your account. | Catalog default vendor. Browser: Muse Code (`muse login`) or paste a key. `/model` lists `muse-spark-1.1`, `muse-spark-1.2`, `muse-spark-1.2-contributor`. |
 | `openai` - OpenAI | `OPENAI_API_KEY`; `https://api.openai.com/v1`; R; `gpt-5.5` | [OpenAI API](https://platform.openai.com/docs/api-reference/responses) | Official Responses docs cover streaming, tools, and usage, subject to model availability. | API key or Nur's ChatGPT OAuth login. |
 | `openai-cc` - OpenAI (Chat Completions) | `OPENAI_API_KEY`; `https://api.openai.com/v1`; CC; `gpt-5.5` | [Chat Completions](https://platform.openai.com/docs/api-reference/chat) | Chat route is retained for compatibility; feature availability is model-specific. | Same key as `openai`; prefer `openai` unless a Chat-only endpoint is required. |
@@ -143,7 +144,7 @@ asserts the stable prefix across a whole turn.
 
 ## Catalog conformance check
 
-The matrix must have exactly 71 data rows, matching `PROVIDERS.len()`. A row
+The matrix must have exactly 72 data rows, matching `PROVIDERS.len()`. A row
 is a catalog contract, not a promise that a remote model is available to every
 account. The primary expected catalog mismatches are intentional placeholders:
 

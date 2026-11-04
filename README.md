@@ -10,7 +10,7 @@ The harness supersedes stale duplicate reads, spills large tool results, preserv
 
 Tool-result previews include their spill path in the size budget, including long paths and tiny limits.
 
-[TypeSafe · Jev](https://docs.typesafe.ai) judgments run inside the harness rather than beside it: one batched request decides which tool calls are still worth their tokens, whether a result actually worked, and what a fresh context can drop - so compaction writes no summary, survivors stay verbatim, and the frontier model is never paid to answer an if-statement. Provider-agnostic (one key lifts every model), and keyless on this machine through three supported local engines - openJev-verdict-2.0, Bespoke-Nimble-9B, and Laya Core ML ([docs/jev-local.md](./docs/jev-local.md)). Native failover and cross-provider subagents report their actual token and cost impact in Nur's session budgets and `/usage` totals.
+[TypeSafe · Jev](https://docs.typesafe.ai) judgments run inside the harness: batched decisions help assess tool calls and results and prune context. Models can request compaction using `typesafe` with `action = "compact"`; automatic context recovery also tries the configured decision engine first and summarizes if needed. Provider-agnostic, with supported local engines including openJev-verdict-2.0, Bespoke-Nimble-9B, and Laya Core ML ([docs/jev-local.md](./docs/jev-local.md)). Native failover and cross-provider subagents report their actual token and cost impact in Nur's session budgets and `/usage` totals.
 
 </div>
 
@@ -66,8 +66,9 @@ nur                 # open the TUI
 nur doctor          # health check
 ```
 
-Or run `nur` and use **`/provider`** in the TUI (`/login` remains an alias): pick any of **71 providers**
-(OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, Requesty, local Ollama/LM Studio, Meta Model API, and so on).
+Or run `nur` and use **`/provider`** in the TUI (`/login` remains an alias): pick any of **72 providers**
+(OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, Refuseless, local Ollama/LM Studio, Meta Model API, and so on).
+For Refuseless, set `REFUSELESS_API_KEY` or run `nur auth login --provider refuseless`; `/model` lists its available models.
 For **OpenAI, Anthropic, xAI, Kimi Code, Google Gemini, Azure OpenAI, GitHub Models, GitHub Copilot, Cursor, Factory Droid, Cline, Muse Code, DeepSeek Harness, and ZCode (GLM)** you can **sign in with a browser or an official CLI session** (or import an existing Codex / Claude Code / Grok / Kimi / Cursor Agent / Droid / Cline / Muse / `dsh` / ZCode session) instead of pasting an API key. `nur auth login --provider muse --browser` (and the same for `deepseek` / `zcode`) is the CLI equivalent of TUI `/login`. OAuth sessions refresh before use, retry once after an authentication rejection, and `/model` detects the models available to the active credential. Cursor uses `cursor-agent login` and runs chat through the Agent CLI (no API key required); Factory Droid works the same way through `droid exec` (`NUR_DROID_BIN` when the launcher is outside `PATH`). DeepSeek's official harness is API-key only (`$DSH_HOME/.credentials.yaml`). No credential on launch and login opens automatically.
 
 Long turns are safe on every provider: no clock cuts off a response that is still streaming, and a dropped connection (reset, stale keep-alive, edge restart, or 300s of silence, `NUR_PROVIDER_IDLE_TIMEOUT_SECS`) reconnects and replays the request with backoff, retracting any partial text first. Esc cancels immediately; `NUR_PROVIDER_TURN_TIMEOUT_SECS` sets an optional hard cap. On Windows, Nur also recovers successful Cursor Agent turns from Cursor's durable transcript when affected CLI builds emit no redirected stdout.
@@ -123,7 +124,7 @@ cd nur-cli
 **4. Manual cargo build**
 
 ```bash
-git clone https://github.com/nuroctane/nur-cli.git
+git clone --depth 1 https://github.com/nuroctane/nur-cli.git
 cd nur-cli
 cargo build --release
 ./target/release/nur install   # Windows: .\target\release\nur.exe install
@@ -210,7 +211,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 ## Feature map
 
 ### Agent harness
-- **Multi-provider** via `/login` (71); Responses or Chat Completions adapter
+- **Multi-provider** via `/login` (72); Responses or Chat Completions adapter
 - **Rotating API keys** per provider (`nur auth pool add`, or `<ENV_KEY>S=k1,k2`): a rate-limited, empty or refused key steps aside and the next one takes the request at once
 - **Advisor** (`[advisor]`): a second model reviews each answer before the turn ends and leaves one note the agent acts on ([docs/configuration.md](docs/configuration.md#advisor))
 - **Stream rules** (`[[stream_rules]]`, `.nur/stream-rules.toml`): an answer or tool call that matches a rule's pattern is stopped mid-stream and asked again with the rule in view
@@ -233,7 +234,8 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 - **`--continuous`** — sovereign/autonomous mode: loop headless turns toward a goal until `DONE` or Ctrl+C
 - **`/local`** — run a model locally with **bundled llama.cpp** (auto-fetch `llama-server` + a GGUF sized to your RAM); no API key
 - **`/bench`** — benchmark models on your own tasks, replayed in isolated git worktrees and scored
-- **`nur gateway --chat <id>`** — run headless as a Telegram bot answering one chat; each message is an agent turn in your project (without `--chat` it only pairs: it replies with your chat id and runs nothing; a group chat also needs `--user <id>`, the one sender it obeys)
+- **`nur gateway --chat <id>`** - run a Telegram bot for one chat; use `/inbox` and `/answer` for questions and required approvals. Without `--chat` it only pairs; a group also needs `--user <id>` for the one sender it obeys.
+- **`nur acp`** - connect compatible editors over ACP with per-session workspaces, permissions, and stdio MCP servers.
 
 ### Tools (native)
 
@@ -246,18 +248,21 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | web | `web_search` `web_fetch` (treg fallback for blocked or JavaScript-only pages with `TREG_TOKEN`) |
 | browser | real default browser via agent-browser-cli |
 | terminal_browser | in-terminal Chromium ([terminal-browser.com](https://terminal-browser.com/)); Windows host fallback |
+| desktop | native accessibility snapshots and actions through [agent-desktop](https://github.com/vercel-labs/agent-desktop) |
 | git | `git_status` `git_diff` |
+| writer isolation | `worktree` creates a managed Git worktree for an `agent` child |
 | quality | `slop_scan` (structural slop candidates: god files, duplicated blocks, change coupling, pass-through wrappers) |
 | knowledge | `graphify` `graphjin` `plur` `ruflo` `executor` `skill` `memory` |
 | diagrams | `excalidraw` (hand-drawn `.excalidraw` via excalidraw-cli) · `tldraw` (offline desktop boards) · `penecho` (20k canvas: ink, MathJax, plots) |
 | judgments | `typesafe` (System One typed decisions: gate a call, judge a result, rank, route) |
-| security | `enclave` ([Enclave](https://enclave.ai) security agents over native MCP: pentests, code security review, findings) · `secscan` (gitleaks, osv-scanner and semgrep when installed; secret values never shown) |
+| security | `enclave` ([Enclave](https://enclave.ai) security agents over native MCP: pentests, code security review, findings) · `secscan` (gitleaks, osv-scanner, semgrep, trivy, checkov and trufflehog when installed; secret values never shown) |
 | memory | `optmem` (permanent, `~/.optmem`) · `connectome` (hierarchical + chronicle) · `mem` (vector/graph router) · `memory` · `plur` `ruflo` |
 | policy | `dogwood` (Cedar + temporal policy over an agent event stream) |
 | context | `context` (RLM store: register/peek/slice/search) · `anydoc` (PDF/DOCX/XLSX → markdown) |
 | background | `bg` (jobs that outlive the turn) · `admission` (async subagent handles) · `goal` · `proposal` (staged outputs) · `message` (peer mail) |
 | python | `repl` (long-lived kernel; state survives compaction) |
-| agent | `todo_write` `submit_plan` `agent` `omp` · `skill` `harness` · `codemode` (one JS script, several read-only tool calls, one model round) · `tool_search` (loads the ecosystem tools the default `lean` profile keeps out of every request) · `hashline_edit` (edit by line number or by block, `N*`, against the `[path#TAG]` snapshot `read_file` prints; a stale tag is refused) |
+| agent | `todo_write` `submit_plan` `agent` · `skill` `harness` · `codemode` (one JS script, several read-only tool calls, one model round) · `tool_search` (loads deferred tools) · `hashline_edit` (edits against a tagged `read_file` snapshot) |
+| code intelligence | `lsp` (language-server queries and post-edit diagnostics) · `debug` (DAP debugging) · `repo_map` (ranked file and declaration overview) |
 
 ### Vision
 
@@ -361,6 +366,7 @@ nur -c                      # continue last session in this directory
 nur -r <session-id>         # resume a session
 nur --mode plan "..."       # plan mode
 nur run "..." -y            # headless + auto-approve
+nur acp                     # editor integration over stdio
 nur sessions
 nur usage
 nur auth status
@@ -410,7 +416,7 @@ Launching from a drive root (`C:\`) auto-picks a safe workspace (git / last sess
 | `/auth` `/logout` | Manage all provider credentials / clear active provider |
 | `/model` | Show and switch models for the active provider |
 | `/plugins` | Browse and install marketplace plugins (provider-picker UX) |
-| `/goal` `/btw` | Session goal / one-off note |
+| `/goal` `/loop` `/btw` | Session goal / recurring prompt / one-off note |
 | `/bro` | Chill mode: plain words, straight answers (toggle) |
 | `/adhd` | Sticky ADHD-friendly output (toggle) |
 | `/<skill>` | Any installed skill — sticky, or `/<skill> <prompt>` one-shot |

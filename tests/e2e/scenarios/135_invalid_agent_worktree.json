@@ -1,0 +1,14 @@
+{
+  "description": "An invalid worktree argument cannot silently run a writer in the parent checkout.",
+  "prompt": "Start a child in an invalid worktree.",
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "invalid worktree", "prompt": "Edit a file.", "worktree": 123}}]},
+    {"text": "The invalid worktree was rejected."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["agent.worktree must be"]}],
+    "stdout_contains": ["The invalid worktree was rejected."]
+  }
+}

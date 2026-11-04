@@ -1,0 +1,7 @@
+OpenAI Codex
+Copyright 2025 OpenAI
+
+The Linux sandbox design and syscall policy are adapted from the Apache-2.0
+OpenAI Codex Linux sandbox at commit 1a604d58da344c84528fecd5b5154105f597d70b.
+Nur adds a Landlock layer and blocks addressed Unix datagrams.
+The upstream license is in openai-codex-LICENSE.

@@ -1,0 +1,16 @@
+{
+  "description": "A tightly packed document reports truncation and stays within its output budget.",
+  "prompt": "Register and pack the document with a small budget.",
+  "script": [
+    {"tool_calls": [{"name": "context", "arguments": {"action": "register", "name": "guide", "content": "A very long documentation passage with enough detail to exceed the deliberately small context budget. It continues with examples and explanations."}}]},
+    {"tool_calls": [{"name": "context", "arguments": {"action": "pack", "names": ["guide"], "token_budget": 90}}]},
+    {"text": "The packed document is truncated."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "max_tool_result_chars": 90,
+    "tool_results": [{"request": 3, "contains": ["[truncated]"]}],
+    "stdout_contains": ["The packed document is truncated."]
+  }
+}

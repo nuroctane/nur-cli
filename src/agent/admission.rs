@@ -158,12 +158,33 @@ pub fn render(a: &Admission) -> String {
     s
 }
 
+/// Run disk-writing admission tests in a child with its own Nur home.
+#[cfg(test)]
+pub(crate) fn isolated_test(name: &str) -> bool {
+    if std::env::var("NUR_TEST_ADMISSION_CHILD").as_deref() == Ok(name) {
+        return false;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture"])
+        .env("NUR_TEST_ADMISSION_CHILD", name)
+        .env("NUR_HOME", home.path().join(".nur"))
+        .env_remove("NUR_SESSION_ID")
+        .status()
+        .unwrap();
+    assert!(status.success(), "isolated admission test failed");
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn admit_get_finish() {
+        if isolated_test("agent::admission::tests::admit_get_finish") {
+            return;
+        }
         let sid = format!("adm-{}", uuid::Uuid::new_v4().simple());
         let id = admit(&sid, "review auth");
         let a = get(&sid, id).unwrap();
@@ -177,6 +198,9 @@ mod tests {
 
     #[test]
     fn failed_admission_records_error() {
+        if isolated_test("agent::admission::tests::failed_admission_records_error") {
+            return;
+        }
         let sid = format!("adm2-{}", uuid::Uuid::new_v4().simple());
         let id = admit(&sid, "audit");
         finish(&sid, id, "partial", false);

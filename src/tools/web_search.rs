@@ -77,7 +77,6 @@ impl Tool for WebSearch {
         }
 
         let client = reqwest::blocking::Client::builder()
-
             .timeout(std::time::Duration::from_secs(20))
             .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
             .build()
@@ -154,7 +153,11 @@ fn render_results(query: &str, via: &str, rows: &[SearchResult]) -> String {
 
 /// Exa neural search (`POST /search`), best for technical/natural-language
 /// queries. Key: EXA_API_KEY (https://exa.ai).
-fn search_exa(key: &str, query: &str, max: usize) -> std::result::Result<Vec<SearchResult>, String> {
+fn search_exa(
+    key: &str,
+    query: &str,
+    max: usize,
+) -> std::result::Result<Vec<SearchResult>, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
@@ -196,12 +199,16 @@ fn search_exa(key: &str, query: &str, max: usize) -> std::result::Result<Vec<Sea
         let snippet = row
             .get("text")
             .and_then(Value::as_str)
-            .map(|s| clean_text(s))
+            .map(clean_text)
             .unwrap_or_default();
         if url.is_empty() {
             continue;
         }
-        out.push(SearchResult { title, url, snippet });
+        out.push(SearchResult {
+            title,
+            url,
+            snippet,
+        });
         if out.len() >= max {
             break;
         }
@@ -211,7 +218,11 @@ fn search_exa(key: &str, query: &str, max: usize) -> std::result::Result<Vec<Sea
 
 /// Brave Search API (`GET /res/search`), 1 query/sec free tier.
 /// Key: BRAVE_API_KEY (https://brave.com/search/api).
-fn search_brave(key: &str, query: &str, max: usize) -> std::result::Result<Vec<SearchResult>, String> {
+fn search_brave(
+    key: &str,
+    query: &str,
+    max: usize,
+) -> std::result::Result<Vec<SearchResult>, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
@@ -254,7 +265,11 @@ fn search_brave(key: &str, query: &str, max: usize) -> std::result::Result<Vec<S
         if url.is_empty() {
             continue;
         }
-        out.push(SearchResult { title, url, snippet });
+        out.push(SearchResult {
+            title,
+            url,
+            snippet,
+        });
         if out.len() >= max {
             break;
         }

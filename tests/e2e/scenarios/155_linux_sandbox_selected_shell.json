@@ -1,0 +1,22 @@
+{
+  "description": "A sandboxed command uses the shell selected by NUR_SHELL.",
+  "linux_only": true,
+  "requires_bwrap": true,
+  "prompt": "Run the selected shell check.",
+  "env": {"NUR_SHELL": "{workspace}/custom-bash"},
+  "setup_files": {"custom-bash": "#!/bin/sh\nprintf 'CUSTOM_SHELL\\n'\nexec /bin/bash \"$@\"\n"},
+  "setup_executable_files": ["custom-bash"],
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[sandbox]\nenabled = true\nmode = \"workspace-write\"\n"
+  },
+  "script": [
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "[[ 2 -gt 1 ]] && printf SELECTED_SHELL"}}]},
+    {"text": "Selected shell checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": ["Selected shell checked."],
+    "tool_results": [{"request": 2, "contains": ["CUSTOM_SHELL", "SELECTED_SHELL"]}]
+  }
+}

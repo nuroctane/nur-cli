@@ -167,8 +167,11 @@ Unlike approval, `Enter` **does** confirm here - picking is reversible
 conversation, not a side effect. An empty multi-select confirm is ignored so
 `Enter` never submits nothing. Dismissed questions come back as guidance text
 (proceed, defer, or declare `BLOCKED:`), never as an invented answer. Goal
-turns, subagents, and headless runs never open this modal; a Jev gate resolves
-the question silently first when context or a safe default suffices.
+turns and noninteractive runs do not open this modal. Subagents can request a
+necessary decision in the TUI or gateway; their requests stay with the parent
+session and wait if another dialog is open. Pending requests are held in memory
+while Nur runs. A Jev gate resolves the question silently first when context or
+a safe default suffices.
 
 ---
 
@@ -227,7 +230,8 @@ run in parallel (up to 4 at a time), so the card usually shows more than one
 live pane. Approval for the whole batch is collected up front, one prompt at a
 time, so concurrent children never race you for the approval dialogue.
 
-The card re-arms itself on each new turn and freezes when the turn ends.
+The card re-arms itself on each new turn; an admitted asynchronous child can
+continue after its parent replies.
 `/swarm detail` adds a status row, `/swarm off` freezes it, `/swarm clear`
 forgets finished runs, `/swarm hide` removes the card.
 
@@ -388,6 +392,7 @@ The note is appended to your persistent memory file and recalled automatically i
 | `/login` | Multi-provider sign-in (see below) |
 | `/logout` | Sign out of the active provider (clears its credential, saved copies and rotation-pool keys; the next `/login` signs in fresh instead of reusing a vendor CLI session; other providers keep theirs) |
 | `/goal` | Standing session goal (see below) |
+| `/loop 10m prompt` | Repeat a prompt in this session; `/loop off` stops it |
 | `/secrets` | Saved credentials: `/secrets` lists names, `/secrets add [NAME]` opens the masked modal, `/secrets remove NAME` (see below) |
 | `/autocontinue` | Continue sessions stopped by a usage limit once it lifts: no argument toggles, `on` / `off` / `now` (see below) |
 | `/bro` | Chill mode: plain words, no jargon, no preamble — toggle (see below) |
@@ -411,7 +416,7 @@ The note is appended to your persistent memory file and recalled automatically i
 /login
 ```
 
-Scrollable, **type-to-filter** catalog of 71 providers → browser / official
+Scrollable, **type-to-filter** catalog of 72 providers → browser / official
 harness sign-in when available (including Muse Code, DeepSeek Harness, ZCode,
 Cline) or a masked key → writes `provider` / `base_url` / `model` to config and
 hot-swaps the HTTP client.

@@ -1,0 +1,23 @@
+{
+  "description": "A managed worktree becomes available again after its background command finishes.",
+  "setup_git": true,
+  "setup_files": {"note.txt": "original\n"},
+  "prompt": "Create a worktree, wait for its background job, then reuse it.",
+  "script": [
+    {"tool_calls": [{"name": "worktree", "arguments": {"action": "create", "name": "writer1"}}]},
+    {"match_child": false, "tool_calls": [{"name": "agent", "arguments": {"description": "first writer", "prompt": "Run the slow command.", "subagent_type": "general", "worktree": "writer1"}}]},
+    {"match_child": true, "tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(7); print('finished')\""}}]},
+    {"match_child": true, "text": "The background job is running."},
+    {"match_child": false, "tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(4)\""}}]},
+    {"match_child": false, "tool_calls": [{"name": "agent", "arguments": {"description": "second writer", "prompt": "Report when ready.", "subagent_type": "general", "worktree": "writer1"}}]},
+    {"match_child": true, "text": "Second writer acquired the worktree."},
+    {"match_child": false, "text": "Worktree reused."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "min_requests": 8,
+    "requests_contain": ["Second writer acquired the worktree."],
+    "requests_lack": ["worktree is already in use"],
+    "stdout_contains": ["Worktree reused."]
+  }
+}

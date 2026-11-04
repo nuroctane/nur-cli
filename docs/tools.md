@@ -10,7 +10,7 @@ within that budget. If the path cannot fit, the result is truncated without a sp
 
 | Family | Tools | Colour |
 |--------|-------|--------|
-| **read** | `read_file` `list_dir` `sgrep` `grep` `glob` `slop_scan` | sky |
+| **read** | `read_file` `list_dir` `sgrep` `grep` `glob` `slop_scan` `lsp` `repo_map` | sky |
 | **edit** | `write_file` `edit_file` `multi_edit` `apply_patch` `hashline_edit` | violet |
 | **shell** | `bash` | amber |
 | **vision** | `look` `extract_frames` | pink |
@@ -18,7 +18,6 @@ within that budget. If the path cannot fit, the result is truncated without a sp
 | **git** | `git_status` `git_diff` | cyan |
 | **browser** | `browser` `terminal_browser` | teal |
 | **knowledge** | `graphify` `graphjin` `plur` `ruflo` `akarso` `executor` `skill` `memory` | indigo / orange |
-| **delegate** | `omp` | - |
 | **agent** | `todo_write` `submit_plan` `agent` `harness` `codemode` `tool_search` | - |
 | **memory** | `optmem` `connectome` `mem` `memory` `plur` `ruflo` | indigo |
 | **judgments** | `typesafe` | violet |
@@ -31,9 +30,9 @@ within that budget. If the path cannot fit, the result is truncated without a sp
 
 Which schemas ride on every request depends on `[tools] profile`:
 
-- **`lean` (default):** the editing shell and session tools are always offered (`read_file`, `list_dir`, the edit tools, `bash`, `sgrep`/`grep`/`glob`, `web_search`/`web_fetch`, `look`, `git_status`/`git_diff`, `context`, `goal`, `message`, `bg`, `skill`, `memory`, `question`, `secret`, `todo_write`, `submit_plan`, `agent`, `codemode`, `tool_search`). Every other tool is listed by name and one line in the system prompt and loads through `tool_search`; from the next request on the model calls it by its real name, so permissions, approvals and plan mode see the real tool. The loaded set is read back from the conversation, so `/resume` keeps it. About 6k tool-schema tokens per request instead of 15k.
+- **`lean` (default):** the editing shell and session tools are always offered (`read_file`, `list_dir`, the edit tools, `bash`, `sgrep`/`grep`/`glob`, `web_search`/`web_fetch`, `look`, `git_status`/`git_diff`, `context`, `goal`, `message`, `bg`, `skill`, `memory`, `question`, `secret`, `todo_write`, `submit_plan`, `agent`, `codemode`, `typesafe`, `tool_search`). Every other tool loads through `tool_search`; from the next request on the model calls it by its real name. The loaded set is read back from the conversation, so `/resume` keeps it.
 - **`full`:** every schema on every request.
-- **`core`:** 16 local tools, no ecosystem tools.
+- **`core`:** 17 tools: the minimal editing shell and `typesafe`.
 
 Capability flags (read-only / concurrency-safe / destructive) drive parallel batching and approvals.
 
@@ -45,6 +44,19 @@ Capability flags (read-only / concurrency-safe / destructive) drive parallel bat
 ---
 
 ## Read tools
+
+### `lsp`
+
+Queries a configured or detected language server for diagnostics, hover,
+definitions, references, and document symbols. Nur prewarms detected servers
+in the background and includes available diagnostics after edits. A first edit
+may wait for a cold server. Set `[lsp] prewarm = false` to start servers only
+through the `lsp` tool; configure command overrides under `[lsp.servers]`.
+
+### `repo_map`
+
+Lists source files ranked by declaration count with a bounded selection of
+signatures. Use it to choose files to inspect; it does not replace reading them.
 
 ### `read_file`
 
@@ -134,7 +146,7 @@ Apply a unified diff patch to a file. `@@ -N,0 +M,k @@` inserts after line N; hu
 
 ### `bash`
 
-Execute shell commands in the workspace cwd (cwd-scoped, not a full OS sandbox). With
+Execute shell commands in the workspace cwd. Linux and macOS use the configured OS sandbox; Windows defaults to no OS sandbox. With
 `[tools] rust_builder = "blaze"` or `"auto"`, a plain `cargo build|check|test|run` runs on
 blaze and falls back to cargo when blaze refuses (see [Configuration](configuration.md)).
 Hardened with:
@@ -150,6 +162,29 @@ Hardened with:
 
 !!! note "Shell backend"
     NurCLI uses Git Bash on Windows when available, otherwise falls back to PowerShell. On macOS/Linux it uses Bash. Check with `nur doctor`. Prefer `list_dir` / `read_file` / `sgrep` / `grep` / `glob` over shell for file IO and search. Pipelines, `&&` chains and redirections are fine; what is refused is the denylist, hang-prone interactive commands, and repeats of a command that already hung.
+
+---
+
+## Debugging
+
+### `debug`
+
+Launch a Debug Adapter Protocol adapter, set source breakpoints, inspect its
+events and send debugger requests. Install an adapter such as `debugpy` or
+`lldb-dap` first; Nur does not install one automatically. For example, a model
+can call `debug` with `action=start`, `session=app`, an adapter executable and
+arguments, `launch={"program":"app.py"}`, and `breakpoints` containing a
+workspace path and line numbers. It can then use `action=request` for DAP
+commands such as `threads`, `stackTrace`, `scopes`, `variables`, `continue`,
+`next`, or `evaluate`, read `action=events`, and finish with `action=stop`.
+
+Sessions are isolated by agent session. Their owned processes are stopped when
+an in-flight debugger operation is cancelled, on stop, or on normal exit. Starting and controlling the debugger is
+approval-gated in manual mode. Program and initial breakpoint paths must be in
+the workspace. The adapter and debuggee run inside the configured OS sandbox;
+an adapter that needs network access or writes outside the workspace requires
+an appropriate sandbox configuration. Attach and adapter-initiated terminal
+requests are not supported.
 
 ---
 
@@ -186,7 +221,7 @@ Extract keyframes from video via ffmpeg. Output goes to `.nur/frames/<name>/`.
 
 ### `web_search`
 
-Search the web (DuckDuckGo). With `TREG_TOKEN` set, [treg](https://treg.to/web-access)'s free routed search runs first and DuckDuckGo is the fallback.
+Search the web. When configured, [treg](https://treg.to/web-access) runs first, followed by Exa (`EXA_API_KEY`) and Brave (`BRAVE_API_KEY`). Empty or failed results fall through to the next configured service, then DuckDuckGo.
 
 ### `web_fetch`
 
@@ -199,6 +234,31 @@ Fetch a public URL (SSRF-checked on every redirect hop). With `TREG_TOKEN` set, 
 Loads deferred tools in the `lean` profile. Pass `names` (exact tool names from the system prompt's "Loaded on demand" list) or a `query` describing the job; the result carries each tool's full schema, and the tool joins the request from the next step on. Read-only and free in plan mode.
 
 ---
+
+### `mcp`
+
+The `mcp` tool lists configured servers and calls their tools. Stdio servers
+start on demand; remote servers use Streamable HTTP. For example:
+
+```toml
+[mcp.servers.local]
+command = "my-mcp-server"
+args = ["--stdio"]
+
+[mcp.servers.remote]
+url = "https://example.com/mcp"
+bearer_env = "MY_MCP_TOKEN"
+```
+
+`read_only = true` treats calls to that server as read-only. Set it only for a
+server whose tools cannot change state. The model can use `mcp` with
+`action=login`, `server`, and `url` for the supported OAuth login flow. Tokens
+are bound to that URL; after a URL change or an upgrade from an older unbound
+token, log in again. OAuth discovery follows the server's challenge and supports
+separate authorization servers. Expiring tokens are refreshed, and a token
+rejected with HTTP 401 is refreshed once and retried. Saved access and
+refresh tokens are redacted from tool output. Some authorization server
+configurations are not yet supported.
 
 ## Git tools
 
@@ -220,9 +280,13 @@ Runs the security scanners installed on the machine and returns normalized
 findings (id, scanner, severity, `file:line`, rule, message), most severe first:
 **gitleaks** for secrets in the working tree (values are redacted and never
 read into a finding), **osv-scanner** for vulnerable dependencies, **semgrep**
-(`p/default`, metrics off) for code patterns. nur never installs them; `status`
+(`p/default`, metrics off) for code patterns, **trivy** and **checkov** for
+infrastructure configuration, and **trufflehog** for filesystem secrets without
+remote verification. Nur never installs them; `status`
 lists which are present with install links, and a missing one is skipped with a
-note. Each scanner writes its JSON report under `.nur/scratch/secscan/`, which
+note. Set `NUR_SECSCAN_<NAME>_BIN` to choose a specific executable (replace
+hyphens in the scanner name with underscores). Captured reports over 2 MB are
+reported as failures. File-based reports go under `.nur/scratch/secscan/`, which
 is parsed and deleted. Actions: `run` (default, approval-gated like a shell
 command), `status` (read-only), `baseline` (records finding ids the user
 accepts as noise, with a reason, in `.nur/secscan-baseline.json`; later runs
@@ -333,11 +397,10 @@ missing install no-ops. Also `/headroom`.
 ### `context`
 
 RLM prompt-as-variable store. Perception actions (`list` · `peek` · `slice` ·
-`search` · `inventory`) are read-only; **`register` and `delete` write and remove
+`search` · `pack` · `inventory`) are read-only; **`register` and `delete` write and remove
 files under `~/.nur/context-store`, so they need approval** (Manual mode asks,
-Plan mode blocks) rather than riding the read-only shortcut. `anydoc` splits the
-same way: `convert`/`read`/`status` are perception, anything that registers a
-converted document is not.
+Plan mode blocks) rather than riding the read-only shortcut. `anydoc` is read-only
+only when its `register` option is explicitly false.
 
 The store is bound to the calling session (the one that registered the
 variables, also after `/new`, `/resume`, a fork or inside a subagent); there is
@@ -351,6 +414,12 @@ are never registered. `peek`/`slice` honour `max_chars` up to the inline limit
 (`tool_result_max_chars` minus a small header), so a window of that size arrives
 intact; the header ends with `next_offset=N` or `(end)`.
 
+Use `web_search` to discover docs and `web_fetch` to retrieve approved pages,
+then register their text. `context` action `pack` takes `names` and a
+`token_budget`, divides the budget among the documents, and marks truncated
+content. The budget counts JSON-encoded bytes conservatively because providers
+use different tokenizers; this can leave unused tokens.
+
 
 ### `anydoc`
 
@@ -358,15 +427,14 @@ Convert PDF/DOCX/PPTX/XLSX/ODT/RTF/EPUB/CSV (and more) to clean GitHub-Flavored
 Markdown via [Firecrawl anydoc](https://github.com/firecrawl/anydoc) - the local
 `anydoc` Rust crate when built with `--features anydoc`, else an `anydoc` /
 `firecrawl-anydoc` CLI on PATH. Actions: `convert` - the only action, and the
-single dispatch path (`path` is required; the tooled `action` field is read but
-never matched, so any value still converts). `register` (default true) stores the
+single dispatch path (`path` is required; the `action` field is ignored, so any
+value still converts). `register` (default true) stores the
 markdown in the RLM context store as a `document` var (default name
 `doc_<stem>`); `max_chars` caps the inline return only (default 12000) - the full
 text stays in the store. Scanned-image PDFs are not supported (local text
 extraction only; `pdf-inspector` errors as unsupported) - they need Firecrawl
-hosted `/parse` OCR. Read-only and free in `capabilities` when `action` is
-`convert` (the allowlist also names `read`/`status`, neither of which the tool
-implements).
+hosted `/parse` OCR. A conversion is treated as read-only when `register` is
+explicitly false; registering the output changes the context store.
 
 <!-- src/tools/anydoc_tool.rs:47 actions: convert (action field ignored; only conversion implemented) -->
 
@@ -377,7 +445,8 @@ for the decisions an agent loop is already making: which tool or model, how risk
 is this relevant, did that work, does this need a human. Actions: `ask` (batched -
 any mix of `choice` / `noul` / `score` in one request) · `choice` · `noul` · `score`
 · `pick` · `rank` · `classify` · `risk` · `verify` · `prune` · `spam` ·
-`needs_human` · `route` · `reset` · `status`. Also `/typesafe` · `/jev`.
+`needs_human` · `route` · `reset` · `status` · `compact`. `compact` operates on
+the live session after the current tool batch finishes. Also `/typesafe` · `/jev`.
 
 Options come from code (the caller's candidate list), answers come back with
 probabilities, and a `confidence` below `[typesafe] escalate_confidence` is an
@@ -498,6 +567,12 @@ surface is the agent-browser-compatible `terminal-browser action` CLI.
 
 Slash: `/tb` · `/terminal-browser`. Skill: `terminal-browser`.
 
+### `desktop`
+
+The `desktop` tool reads native accessibility trees and operates their elements through [agent-desktop](https://github.com/vercel-labs/agent-desktop). Install its native release or npm package and add it to `PATH`, or set `NUR_AGENT_DESKTOP_BIN` to the executable. On Windows, Nur resolves the npm shim to its packaged native `.exe` and does not run shell launchers. Platform accessibility permissions may be required.
+
+Start with `status`, `list_apps`, and `snapshot`; use the returned qualified refs for actions and take a fresh snapshot after a change. Observation is read-only. Actions such as `click`, `set_value`, and `press` use the normal approval policy and can affect real applications. Accessibility snapshots can contain private desktop content.
+
 ### `skill`
 
 List or load a skill pack (`SKILL.md`) into context.
@@ -575,13 +650,14 @@ no filesystem, network, timer or process bindings, so the tool bridge is the
 only way out. The bridge admits a nested call only when the permission layer
 classifies it as read-only (the same `is_read_only` rule the approval gate and
 the parallel batch use, not a second allowlist), and never `codemode`, `agent`,
-`question`, `submit_plan`, `message`, `admission`, `bg`, `fractal` or `omp`. A
+`question`, `submit_plan`, `message`, `admission`, `bg` or `fractal`. A
 script therefore cannot write a file, run a shell command or spawn a subagent;
 `codemode` itself is classified read-only, so it is free in plan mode and needs
 no approval in manual mode. Limits: 64 nested calls per script, 1 MB of printed
 output, 256 KB per stored value (1 MB per session), ten million loop iterations
-and a 400-deep call stack. Nested calls run one after another; `await` and
-`Promise.all` work but do not overlap. Subagents are not offered the tool.
+and a 400-deep call stack. Use `tools.parallel([{tool, args}, ...])` to run a
+read-only batch concurrently and receive results in order. Subagents can use
+the same read-only bridge.
 Cargo feature `codemode` (default on). E2E scenario 32.
 
 ### `agent`
@@ -595,10 +671,23 @@ catalog. Nested delegation and OMP are intentionally absent, so a failed child
 cannot recurse or silently substitute OMP. Partial output from a failed child is
 preserved in the error but never marked successful.
 
-Native fan-out runs at most four children concurrently. Cancellation interrupts
-children waiting for approval, the shared approval prompt, and concurrency
-permits, then aborts every queued or running child so no detached task can begin
-credential resolution, edits, or token spend after the parent turn ends.
+Pass `output_schema` as a JSON Schema object to request a JSON report. Nur
+validates the child's final response against it before returning the report;
+invalid JSON or schema violations return a tool error. Remote schema references
+are not fetched. This also applies to asynchronously admitted children.
+
+Native fan-out runs at most four children concurrently. Cancelling a turn
+interrupts its children, including those waiting for approval. An explicitly
+asynchronous child can continue after a successful parent reply. In the TUI
+and Telegram gateway, it can request a necessary human decision; questions and
+approvals wait for their parent session and do not overwrite another dialog.
+Noninteractive runs direct children to report what they need instead.
+
+Child shell commands move to a background job after five seconds by default,
+including quiet commands. The child or parent can inspect the job with `bg`;
+turn cancellation also cancels automatically handed-off child commands. Set
+`tools.worker_background_secs = 0` to disable the automatic handoff, or provide
+an explicit `timeout_ms` for a particular command.
 
 **Economy children.** `cost_mode: "economy"` runs the child on a cheap model
 with low reasoning effort: `economy_model` from config when the child stays on
@@ -645,6 +734,16 @@ agent({
 })
 ```
 
+
+### `worktree`
+
+Use `worktree` with `action=create` and a name to create an isolated Git
+worktree on a new branch under Nur's home. Pass that name as `agent.worktree`
+to run a child in it. It starts from committed HEAD; uncommitted changes in the
+parent checkout are not copied. `action=list` shows the repository's worktrees.
+Only one child can hold a managed worktree at a time; background commands retain
+the lease until they finish. Review and integrate the branch before cleaning it
+up with Git.
 
 ### `goal`
 

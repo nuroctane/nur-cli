@@ -1,0 +1,15 @@
+#!/bin/sh
+# Optional local check. Enable with: git config core.hooksPath scripts/hooks
+set -eu
+
+if ! command -v cargo-nextest >/dev/null 2>&1; then
+    printf '%s\n' 'Install cargo-nextest before using this optional pre-push hook.' >&2
+    exit 1
+fi
+
+export CARGO_BUILD_JOBS=4
+if command -v powershell.exe >/dev/null 2>&1 && [ -n "${USERPROFILE:-}" ]; then
+    powershell.exe -NoProfile -File "$USERPROFILE\.agents\lowcpu.ps1" cargo nextest run --bin nur --locked -j 4
+else
+    cargo nextest run --bin nur --locked -j 4
+fi

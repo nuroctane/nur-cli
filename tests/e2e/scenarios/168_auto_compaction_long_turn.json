@@ -1,0 +1,21 @@
+{
+  "description": "Automatic compaction stays available beyond eight compactions in one long turn.",
+  "provider": "openai-cc",
+  "model": "gpt-5.6",
+  "env": {"OPENAI_API_KEY": "e2e-isolated-key"},
+  "setup_home_files": {"config.toml": "provider=\"openai-cc\"\nbase_url=\"http://127.0.0.1:{port}/v1\"\nmodel=\"gpt-5.6\"\ncontext_window=1000000\nnative_memory=false\n[typesafe]\nenabled=false\n"},
+  "prompt": "Keep inspecting the workspace until the task is done.",
+  "script": [
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280000, "completion_tokens": 5, "total_tokens": 280005}}, {"text": "Preserved 1."},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280001, "completion_tokens": 5, "total_tokens": 280006}}, {"text": "Preserved 2."},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280002, "completion_tokens": 5, "total_tokens": 280007}}, {"text": "Preserved 3."},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280003, "completion_tokens": 5, "total_tokens": 280008}}, {"text": "Preserved 4."},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280004, "completion_tokens": 5, "total_tokens": 280009}}, {"text": "Preserved 5."},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280005, "completion_tokens": 5, "total_tokens": 280010}}, {"text": "Preserved 6."},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280006, "completion_tokens": 5, "total_tokens": 280011}}, {"text": "Preserved 7."},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280007, "completion_tokens": 5, "total_tokens": 280012}}, {"text": "Preserved 8."},
+    {"tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}], "usage": {"prompt_tokens": 280008, "completion_tokens": 5, "total_tokens": 280013}}, {"text": "Preserved 9."},
+    {"text": "Finished after nine compactions."}
+  ],
+  "expect": {"exit_code": 0, "requests": 19, "stdout_contains": ["Finished after nine compactions."], "request_contains": [{"request": 18, "contains": ["Summarize this conversation"]}]}
+}

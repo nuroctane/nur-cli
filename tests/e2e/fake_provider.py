@@ -83,7 +83,11 @@ class State:
                 reserve = body.get("max_output_tokens", body.get("max_tokens", body.get("max_completion_tokens",0))) or 0
                 if len(json.dumps(body,ensure_ascii=False)) + reserve*4 > ceiling:
                     return {"status":400,"error":"context window exceeded: request and output reservation are too large"}
-            return self.replies.pop(0) if self.replies else {"text": EXHAUSTED}
+            child_request = "[SUBAGENT:" in json.dumps(body, ensure_ascii=False)
+            for index, reply in enumerate(self.replies):
+                if "match_child" not in reply or reply["match_child"] == child_request:
+                    return self.replies.pop(index)
+            return {"text": EXHAUSTED}
 
 
 class FakeMcp:
@@ -93,7 +97,9 @@ class FakeMcp:
     (tool name -> CallToolResult), page_size (tools/list pagination), sse
     (stream tools/call with a progress notification and a server ping first),
     instructions, forget_session_on (answer the first such method with 404 so
-    the client must open a new session). Every request is logged.
+    the client must open a new session), reject_method_once, and refresh
+    (the scripted OAuth refresh token, client id and optional new key).
+    Every request is logged.
     """
 
     def __init__(self, spec, log_path):
@@ -104,6 +110,8 @@ class FakeMcp:
         self.sessions = set()
         self.opened = 0
         self.forgot = False
+        self.active_key = spec["key"]
+        self.rejected_once = False
 
     def handle(self, handler, body):
         headers = handler.headers
@@ -116,9 +124,21 @@ class FakeMcp:
                 "protocol": headers.get("mcp-protocol-version", ""),
                 "params": body.get("params") if isinstance(body, dict) else None,
             }) + "\n")
-        if headers.get("authorization") != "Bearer " + self.spec["key"]:
-            handler._json(401, {"error": "Unauthorized", "message": "Missing or invalid Authorization header"},
+        with self.lock:
+            active_key = self.active_key
+        if headers.get("authorization") != "Bearer " + active_key:
+            message = "Missing or invalid Authorization header"
+            if self.spec.get("echo_rejected_bearer"):
+                message += ": " + headers.get("authorization", "").removeprefix("Bearer ")
+            handler._json(self.spec.get("auth_status", 401), {"error": "Unauthorized", "message": message},
                           {"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'})
+            return
+        with self.lock:
+            reject = self.spec.get("reject_method_once") == method and not self.rejected_once
+            if reject:
+                self.rejected_once = True
+        if reject:
+            handler._json(401, {"error": "Unauthorized", "message": "Token expired"})
             return
         if method == "initialize":
             with self.lock:
@@ -158,8 +178,20 @@ class FakeMcp:
                 page["nextCursor"] = str(start + size)
             self._reply(handler, body["id"], result=page)
         elif method == "tools/call":
+            if self.spec.get("delay_call_seconds"):
+                (Path(self.log_path).parent / "workspace" / "started").write_text("yes", encoding="utf-8")
+                time.sleep(self.spec["delay_call_seconds"])
             name = body["params"]["name"]
             result = self.spec.get("results", {}).get(name)
+            rotation = self.spec.get("rotate_store_on_call")
+            if rotation:
+                store_path = Path(self.log_path).parent / "home" / ".nur" / "mcp-tokens.json"
+                store = json.loads(store_path.read_text(encoding="utf-8"))
+                store[rotation["server"]]["access_token"] = rotation["access_token"]
+                store[rotation["server"]]["refresh_token"] = rotation["refresh_token"]
+                replacement = store_path.with_suffix(".test-new")
+                replacement.write_text(json.dumps(store), encoding="utf-8")
+                os.replace(replacement, store_path)
             if result is None:
                 self._reply(handler, body["id"], error={"code": -32602, "message": f"unknown tool {name}"})
             else:
@@ -265,13 +297,36 @@ def make_handler(state, mcp=None):
 
         def do_POST(self):
             length = int(self.headers.get("content-length", "0"))
-            body = json.loads(self.rfile.read(length) or b"{}")
+            raw = self.rfile.read(length)
             path = self.path.rstrip("/")
+            if mcp and path == "/mcp-token" and "refresh" in mcp.spec:
+                from urllib.parse import parse_qs
+                form = parse_qs(raw.decode("utf-8"))
+                refresh = mcp.spec["refresh"]
+                expected_resource = f"http://127.0.0.1:{self.server.server_port}{mcp.path}"
+                if (form.get("grant_type") != ["refresh_token"]
+                        or form.get("refresh_token") != [refresh["token"]]
+                        or form.get("client_id") != [refresh["client_id"]]
+                        or form.get("resource") != [expected_resource]):
+                    return self._json(400, {"error": "invalid_grant"})
+                with mcp.lock:
+                    mcp.active_key = refresh.get("new_key", mcp.spec["key"])
+                    access = mcp.active_key
+                return self._json(200, {"access_token": access, "refresh_token": "rotated-refresh",
+                                        "token_type": "Bearer", "expires_in": 3600})
+            body = json.loads(raw or b"{}")
             if path.startswith("/console/"):
                 return self._console(path, body)
             if mcp and path == mcp.path:
                 mcp.handle(self, body)
                 return
+            if path == "/e2e-jev":
+                answers = {
+                    key: {"type": "noul", "noul": 0.01}
+                    for key in body.get("questions", {})
+                }
+                return self._json(200, {"model": "e2e-jev", "answers": answers,
+                                        "usage": {"input_tokens": 5, "output_tokens": 1}})
             if path.startswith("/call/"):
                 self._treg(path[len("/call/"):], body)
                 return
@@ -282,6 +337,12 @@ def make_handler(state, mcp=None):
             # affinity and client identity are wire facts a body check misses.
             headers = {name.lower(): value for name, value in self.headers.items()}
             reply = state.next_reply({**body, "_path": path, "_headers": headers})
+            if "write_mcp_store" in reply:
+                store_path = Path(state.log_path).parent / "home" / ".nur" / "mcp-tokens.json"
+                store = reply["write_mcp_store"]
+                for entry in store.values():
+                    entry["resource"] = entry["resource"].replace("{port}", str(self.server.server_port))
+                store_path.write_text(json.dumps(store), encoding="utf-8")
             n = state.count
             drop = reply.get("drop")
             if drop == "before_response":
@@ -309,8 +370,8 @@ def make_handler(state, mcp=None):
                 return
             calls = tool_calls_of(reply, n)
             text = reply.get("text", "")
-            finish = "tool_calls" if calls else "stop"
-            usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            finish = reply.get("finish_reason", "tool_calls" if calls else "stop")
+            usage = reply.get("usage", {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
             if body.get("stream"):
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream")

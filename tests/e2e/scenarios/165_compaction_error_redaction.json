@@ -1,0 +1,21 @@
+{
+  "description": "A provider error during model-requested compaction cannot expose a saved secret to the model or transcript.",
+  "prompt": "Compact the session and continue.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[typesafe]\nenabled = false\n",
+    "secrets.json": "{\"secrets\": {\"DEMO_TOKEN\": {\"value\": \"compact-secret-XYZ987\", \"added_at\": \"2026-10-30T00:00:00Z\"}}}\n"
+  },
+  "script": [
+    {"tool_calls": [{"name": "typesafe", "arguments": {"action": "compact"}}]},
+    {"status": 400, "error": "invalid request: compact-secret-XYZ987"},
+    {"text": "Continuing after compaction failed."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "stdout_contains": ["Continuing after compaction failed."],
+    "stdout_lacks": ["compact-secret-XYZ987"],
+    "requests_lack": ["compact-secret-XYZ987"],
+    "tool_results": [{"request": 3, "contains": ["[secret:DEMO_TOKEN]"], "lacks": ["compact-secret-XYZ987"]}]
+  }
+}

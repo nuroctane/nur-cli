@@ -74,6 +74,7 @@ struct JobRecord {
     notify_model: bool,
     /// Set once the agent loop has told the model this job finished.
     reported: bool,
+    owner_session: Option<String>,
 }
 
 /// Job kinds started by the model (shell handoff, `bg(action=run)`).
@@ -137,6 +138,20 @@ where
         + Send
         + 'static,
 {
+    spawn_scoped(label, kind, None, work)
+}
+
+pub fn spawn_scoped<F>(
+    label: impl Into<String>,
+    kind: impl Into<String>,
+    owner_session: Option<String>,
+    work: F,
+) -> u64
+where
+    F: FnOnce(Arc<std::sync::atomic::AtomicBool>) -> std::result::Result<String, String>
+        + Send
+        + 'static,
+{
     let label = label.into();
     let kind = kind.into();
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -164,6 +179,7 @@ where
                 cancel,
                 notify_model: kind_reports_to_model(&kind),
                 reported: false,
+                owner_session,
             },
         );
         id
@@ -312,13 +328,23 @@ pub fn list_jobs() -> Vec<JobInfo> {
 
 /// Jobs that finished since the last call, oldest first. Each is returned
 /// once, so the agent loop can tell the model about completions exactly once.
+#[cfg(test)]
 pub fn take_unreported_completions() -> Vec<JobInfo> {
+    take_completions_for(None)
+}
+
+fn take_completions_for(session: Option<&str>) -> Vec<JobInfo> {
     let reg = registry();
     let mut g = reg.lock().unwrap_or_else(|e| e.into_inner());
     let mut done: Vec<JobInfo> = g
         .jobs
         .values_mut()
-        .filter(|r| r.notify_model && !r.reported && r.info.state != JobState::Running)
+        .filter(|r| {
+            r.notify_model
+                && !r.reported
+                && r.info.state != JobState::Running
+                && (r.owner_session.is_none() || r.owner_session.as_deref() == session)
+        })
         .map(|r| {
             r.reported = true;
             r.info.clone()
@@ -330,8 +356,13 @@ pub fn take_unreported_completions() -> Vec<JobInfo> {
 
 /// One compact note for the model about finished background jobs, or `None`
 /// when nothing new finished.
+#[cfg(test)]
 pub fn completion_note() -> Option<String> {
-    let done = take_unreported_completions();
+    completion_note_for(None)
+}
+
+pub fn completion_note_for(session: Option<&str>) -> Option<String> {
+    let done = take_completions_for(session);
     if done.is_empty() {
         return None;
     }
@@ -369,13 +400,17 @@ pub fn completion_note() -> Option<String> {
 /// compaction: the summary may drop the `bg` call that started a job, but the
 /// model must still know what is in flight so it can wait or poll for it (the
 /// finished result still arrives through `completion_note`).
-pub fn running_note() -> Option<String> {
+pub fn running_note(session: &str) -> Option<String> {
     let reg = registry();
     let g = reg.lock().unwrap_or_else(|e| e.into_inner());
     let mut running: Vec<&JobInfo> = g
         .jobs
         .values()
-        .filter(|r| r.notify_model && r.info.state == JobState::Running)
+        .filter(|r| {
+            r.notify_model
+                && r.info.state == JobState::Running
+                && (r.owner_session.is_none() || r.owner_session.as_deref() == Some(session))
+        })
         .map(|r| &r.info)
         .collect();
     if running.is_empty() {

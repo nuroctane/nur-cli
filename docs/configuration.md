@@ -111,8 +111,10 @@ auto_update = true
 | `request_output_reserve_tokens` | integer | `8192` | Conservative per-request completion ceiling/reservation. Nur preflights estimated input + this reserve against context and session budgets, then sends the matching provider output-limit field where supported. `0` uses the provider default and is intentionally less safe. |
 | `stream` | bool | `true` | Stream API responses |
 | `context_window` | integer | `1000000` | Fallback context window in tokens (range: 1000–2000000). The models.dev catalog is authoritative when it knows the active provider/model; this value is used only when it does not. Auto-compaction keeps an OMP-style response/tool reserve: the larger of 15% or 16,384 tokens on large windows, with a proportional safety clamp on small windows. A local stored-context estimate is used when provider usage is absent or under-reported. |
+| `avoid_long_context_pricing` | bool | `true` | On OpenAI API-key GPT-5.6 Sol routes, proactively compact before the [272k input price tier](https://developers.openai.com/api/docs/models/gpt-5.6-sol). This is an estimate, not a hard limit or a billing guarantee; set it to `false` to use the full context without this price target. Subscription sessions are excluded. |
 | `tool_result_max_chars` | integer | `12000` | Max inline tool output chars; larger results spill to disk with a head+tail preview (`0` = unlimited) |
 | `shell_timeout_handoff` | bool | `true` | A `bash` command still producing output at its timeout moves to a `bg` job (the model gets a "still running" placeholder with the job id) instead of being killed. `false` restores kill-on-timeout |
+| `tools.worker_background_secs` | integer | `5` | Automatically hand off a child agent's shell command after this many seconds; `0` disables it. An explicit `timeout_ms` or `background` choice takes precedence |
 | `compact_keep_user_turns` | integer | `4` | Recent user turns kept after compaction |
 | `compact_tool_body_max_chars` | integer | `800` | When compacting, truncate older tool bodies to this many chars (`0` = leave intact) |
 | `kv_stable_compact` | bool | `true` | `true` preserves the recent working edge verbatim after a stable summary for provider prompt-cache reuse. `false` uses a classic reconstructed working-tail order. Compaction status reports the active strategy. |
@@ -187,13 +189,14 @@ auto_update = true
 | `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via npx / one-liner / EXE / `nur install\); set `false` to skip repair |
 | `economy_model` | string | unset | Model for `agent` calls with `cost_mode: economy` that stay on this provider, and for prewalk when `[prewalk] into` is unset. Unset: an economy child runs on the cheapest tool-capable model the account lists that models.dev prices |
 | `skills.auto_activate` | bool | `false` | Natural-language skill activation ("think like fable" injects the skill body). Off by default; explicit `/skill-name` and the `skill` tool always work. See [natural-language skill activation](./ecosystem.md#natural-language-skill-activation) |
-| `tools.profile` | string | `lean` | `lean` = the editing shell and session tools up front, every ecosystem tool loaded on demand through `tool_search` (about 6.1k tool-schema tokens before the v0.61 additions; 29 tools in the default build, plus the system prompt; a loaded tool joins the end of the roster from the next request on). `full` = every tool up front. `core` = minimal local editing shell (16 tools: read/list/write/edit/multi_edit/apply_patch/hashline_edit, bash, sgrep/grep/glob, web_fetch/web_search, question, todo_write, submit_plan) with no ecosystem tools or prose. Restart to change. Unknown values fall back to `lean`. Measured per-request overhead on the E2E harness (chars/4, no PLUR or OptMem installed): `full` about 3.9k system-prompt + 15.4k tool-schema tokens (54 tools), `core` about 1.8k + 2.8k (15 tools). Measured before the code-shape block (about 280 tokens, in `lean` and `full` only) and the `slop_scan` and `secscan` tools were added |
+| `tools.profile` | string | `lean` | `lean` = the editing shell and session tools up front, every ecosystem tool loaded on demand through `tool_search` (about 6.1k tool-schema tokens before the v0.61 additions; 30 tools in the default build, plus the system prompt; a loaded tool joins the end of the roster from the next request on). `full` = every tool up front. `core` = minimal editing shell (17 tools: typesafe, read/list/write/edit/multi_edit/apply_patch/hashline_edit, bash, sgrep/grep/glob, web_fetch/web_search, question, todo_write, submit_plan) with no ecosystem prose. Restart to change. Unknown values fall back to `lean`. Measured per-request overhead on the E2E harness (chars/4, no PLUR or OptMem installed): `full` about 3.9k system-prompt + 15.4k tool-schema tokens (54 tools), `core` about 1.8k + 2.8k (15 tools). Measured before the code-shape block (about 280 tokens, in `lean` and `full` only) and the `slop_scan` and `secscan` tools were added |
 | `tools.sgrep_first` | bool | `true` | Semantic search is enforced, not suggested: a `grep` whose pattern is a description is answered by `sgrep`, a `grep` past its default cap comes back reranked by `sgrep` (an explicit `max_matches` is honored), and shell searches (`grep`/`rg`/`findstr`/`Select-String` as the command) are refused. Needs sgrep installed to change anything; see [Tools](tools.md#sgrep) |
 | `tools.pass_provider_keys` | bool | `false` | Model-provider keys (`OPENAI_API_KEY`, `NUR_API_KEY`, and the rest of the catalog's key variables) are removed from the environment of commands that tools run, so `printenv` or an injected `curl` cannot leak them. `GITHUB_TOKEN`, `HF_TOKEN`, `CLOUDFLARE_API_TOKEN` and `AWS_BEARER_TOKEN_BEDROCK` pass through for your own tools. `true` passes every key, for scripts that call a provider themselves |
 | `tools.rust_builder` | string | `"cargo"` | `"blaze"` or `"auto"` runs plain `cargo build`/`check`/`test`/`run` through [blaze](https://github.com/indexable-inc/blaze), the incremental Rust compiler (`auto` only on Linux x86-64/aarch64 and macOS arm64 with blaze installed; `NUR_BLAZE_BIN` overrides the binary). `--release`, `+toolchain`, compound shell lines and flags blaze refuses stay on cargo, a blaze refusal reruns the command on cargo, and every blaze result reminds the agent to run `cargo check` once (blaze's borrow checker is partial). nur never installs blaze |
+| `lsp.prewarm` | bool | `true` | Start detected language servers in the background and on first edit; `false` starts them only through the `lsp` tool |
 | `lsp.servers` | table | built-in list | Extension → language-server command, e.g. `rs = "rust-analyzer"` or `py = "basedpyright-langserver --stdio"`. Built-ins are detected on PATH (rust-analyzer, typescript-language-server, pyright, gopls); an extension with no entry has no server, and the `lsp` tool says so instead of spawning anything |
-| `sandbox.enabled` | bool | `true` (Linux/macOS) | Wrap `bash` commands in the OS jail: bubblewrap on Linux (read-only filesystem, private `/tmp`, no network) and Seatbelt on macOS. A missing wrapper binary degrades to an unsandboxed run with a note, never an error. Windows has no jail this cycle |
-| `sandbox.mode` | string | `read-only` | `read-only` (filesystem read-only outside a private `/tmp`, network off), `workspace-write` (adds a writable workspace), or `off`. Approval still gates whether a command runs; this decides what it can reach |
+| `sandbox.enabled` | bool | `true` | Wrap `bash` commands in the OS jail: bubblewrap, Landlock and seccomp on Linux, and Seatbelt on macOS. If the requested jail is unavailable, the command fails; set `sandbox.mode = "off"` to run without it. Windows defaults to `off` |
+| `sandbox.mode` | string | `read-only` on Linux/macOS, `off` on Windows | `read-only` (filesystem read-only outside a private `/tmp`, network off), `workspace-write` (adds a writable workspace), or `off`. Approval still gates whether a command runs; this decides what it can reach |
 | `auto_update` | bool | `true` | On **every** launch (bare TUI, `nur "prompt"`, `nur run …`, gateway), check [GitHub Releases](https://github.com/nuroctane/nur-cli/releases/latest) and install a newer binary when available; it runs on a background thread so it never delays or breaks a run, and the new binary is picked up on the next launch. A 60s floor between network checks stops a script that loops `nur` from hammering the API — tune it with `NUR_AUTO_UPDATE_TTL_SECS` (`0` = check every run). Opt out with `false` or env `NUR_SKIP_AUTO_UPDATE=1`. Verify with `nur update --check`; `nur update` always runs the full update path |
 
 ### Personal accent (theme setup)
@@ -444,6 +447,13 @@ files, pass-through wrappers and the rest; see the `codebase-slop` skill).
 
 ---
 
+## Notifications
+
+`[notifications] chime = true` signals a completed turn with a terminal bell.
+Terminal and multiplexer bell settings determine whether it is audible. Set
+`chime = false` to disable it, or set `command` to a sound command to run
+instead of the bell.
+
 ## Auto-continue
 
 A turn that stops on a usage limit (429, "usage limit reached", a quota with a
@@ -516,6 +526,8 @@ In `stream-json` output a stopped answer shows as a `stream_restart` event.
 | Variable | Purpose |
 |----------|---------|
 | `TREG_TOKEN` | Token from [treg](https://treg.to/web-access) (`treg login`). Turns on treg as `web_search`'s first backend and `web_fetch`'s fallback for blocked or JavaScript-only pages; each call prefers the free vendor and is capped at $0.02. `NUR_TREG_BASE` points at a self-hosted treg. |
+| `EXA_API_KEY` | Enables Exa as a `web_search` backend after treg. |
+| `BRAVE_API_KEY` | Enables Brave as a `web_search` backend after Exa. |
 | `NUR_SCRATCH` | Set by nur for every shell command: `<workspace>/.nur/scratch`, the model's scratch folder (created on demand with a `.gitignore` of `*`). Not read from your environment. |
 | `NUR_PROVIDER_IDLE_TIMEOUT_SECS` | How long a provider connection may stay completely silent (no bytes, headers included) before Nur treats it as dead and reconnects (default `300`). A response that is still streaming is never cut off |
 | `NUR_PROVIDER_TURN_TIMEOUT_SECS` | Optional hard cap on one provider request, every transport including the Cursor Agent and Droid CLIs. Unset (the default) means no cap |
@@ -640,3 +652,7 @@ loaded each turn, for subagents too, ahead of the project's instructions, so pro
 rules can refine it. Use it for machine-wide constraints such as CPU limits for builds.
 It can import shared rules kept elsewhere under your home, e.g. a line
 `@~/.agents/AGENTS.md`.
+## Inspecting the effective configuration
+
+Run `nur config --dump` to print the effective configuration as JSON with
+credential-bearing fields redacted.

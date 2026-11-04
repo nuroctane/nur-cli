@@ -33,7 +33,7 @@ impl Tool for ContextTool {
     fn description(&self) -> &str {
         "RLM context store (Recursive Language Models / Prime Agent pattern): \
          large working context as named variables outside the model window. \
-         Actions: list | peek | slice | search | register | delete | inventory. \
+         Actions: list | peek | slice | search | pack | register | delete | inventory. \
          Use when handling long docs, big tool dumps, or multi-file corpora - \
          variables survive compaction. Prefer register+peek over re-pasting."
     }
@@ -44,8 +44,8 @@ impl Tool for ContextTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "peek", "slice", "search", "register", "delete", "inventory"],
-                    "description": "list/inventory: show vars; peek/slice/search: read; register: store text; delete: drop"
+                    "enum": ["list", "peek", "slice", "search", "pack", "register", "delete", "inventory"],
+                    "description": "list/inventory: show vars; peek/slice/search: read; pack: budget document context; register: store text; delete: drop"
                 },
                 "name": {"type": "string", "description": "Variable name"},
                 "content": {"type": "string", "description": "For register: full text to store"},
@@ -55,7 +55,9 @@ impl Tool for ContextTool {
                 "start": {"type": "integer", "description": "For slice: start char"},
                 "end": {"type": "integer", "description": "For slice: end char (exclusive)"},
                 "pattern": {"type": "string", "description": "For search: substring (case-insensitive)"},
-                "max_hits": {"type": "integer", "description": "For search: max lines (default 20)"}
+                "max_hits": {"type": "integer", "description": "For search: max lines (default 20)"},
+                "names": {"type": "array", "items": {"type": "string"}, "description": "For pack: document names in display order"},
+                "token_budget": {"type": "integer", "description": "For pack: conservative output budget (default 1500)"}
             },
             "required": ["action"]
         })
@@ -110,6 +112,7 @@ impl Tool for ContextTool {
                 let max = arg_u64(args, "max_hits").unwrap_or(20) as usize;
                 context_store::search(session_id, &name, &pattern, max).map_err(NurError::Tool)
             }
+            "pack" => super::docs_context::pack(args, ctx),
             "register" => {
                 let name = arg_str(args, "name")?;
                 let content = arg_str(args, "content")?;
@@ -129,7 +132,7 @@ impl Tool for ContextTool {
                 context_store::delete(session_id, &name).map_err(NurError::Tool)
             }
             other => Err(NurError::Tool(format!(
-                "unknown context action `{other}`; use list|peek|slice|search|register|delete"
+                "unknown context action `{other}`; use list|peek|slice|search|pack|register|delete"
             ))),
         }
     }

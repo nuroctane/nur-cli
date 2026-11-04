@@ -22,7 +22,7 @@ const MAX_TOOL_PAGES: usize = 50;
 #[derive(Debug)]
 pub enum McpError {
     /// HTTP 401/403: the credential is missing, wrong, expired or revoked.
-    Unauthorized(String),
+    Unauthorized { status: u16, detail: String },
     /// HTTP 404 on a request that carried a session id: the server ended it.
     SessionExpired,
     /// A JSON-RPC error object.
@@ -34,7 +34,7 @@ pub enum McpError {
 impl std::fmt::Display for McpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            McpError::Unauthorized(detail) => write!(f, "unauthorized ({detail})"),
+            McpError::Unauthorized { detail, .. } => write!(f, "unauthorized ({detail})"),
             McpError::SessionExpired => write!(f, "the server ended the MCP session"),
             McpError::Rpc { code, message } => write!(f, "server error {code}: {message}"),
             McpError::Transport(detail) => write!(f, "{detail}"),
@@ -63,6 +63,10 @@ pub struct Connection {
 }
 
 impl Connection {
+    pub(crate) fn bearer_token(&self) -> Option<&str> {
+        self.bearer.as_deref()
+    }
+
     /// Open a session: `initialize`, then `notifications/initialized`.
     pub fn open(url: &str, bearer: Option<&str>, timeout: Duration) -> Result<Self, McpError> {
         let http = reqwest::blocking::Client::builder()
@@ -83,7 +87,7 @@ impl Connection {
             next_id: 0,
             server: ServerInfo::default(),
         };
-        let result = connection.request(
+        let mut result = connection.request(
             "initialize",
             json!({
                 "protocolVersion": PROTOCOL_VERSION,
@@ -91,6 +95,7 @@ impl Connection {
                 "clientInfo": {"name": "nur", "version": env!("CARGO_PKG_VERSION")},
             }),
         )?;
+        connection.redact_value(&mut result);
         let text = |value: Option<&Value>| {
             value
                 .and_then(Value::as_str)
@@ -137,15 +142,70 @@ impl Connection {
                 _ => break,
             }
         }
+        for tool in &mut tools {
+            self.redact_value(tool);
+        }
         Ok(tools)
     }
 
     /// `tools/call`; the raw `CallToolResult` (content, isError, structuredContent).
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value, McpError> {
-        self.request(
+        let mut result = self.request(
             "tools/call",
             json!({ "name": name, "arguments": arguments }),
-        )
+        )?;
+        self.redact_value(&mut result);
+        Ok(result)
+    }
+
+    fn redact_text(&self, text: &str) -> String {
+        let Some(token) = self.bearer.as_deref().filter(|token| !token.is_empty()) else {
+            return text.to_string();
+        };
+        let encoded = crate::secrets::url_encode(token);
+        let lower_encoded = crate::secrets::lowercase_url_escapes(&encoded);
+        let json = serde_json::to_string(token).unwrap_or_default();
+        let json = json
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or("");
+        let mut spans = Vec::new();
+        for form in [token, encoded.as_str(), lower_encoded.as_str(), json] {
+            if !form.is_empty() {
+                spans.extend(
+                    text.match_indices(form)
+                        .map(|(start, found)| (start, start + found.len())),
+                );
+            }
+        }
+        spans.sort_unstable_by_key(|&(start, end)| (start, std::cmp::Reverse(end - start)));
+        let mut out = String::with_capacity(text.len());
+        let mut consumed = 0;
+        for (start, end) in spans {
+            if start < consumed {
+                continue;
+            }
+            out.push_str(&text[consumed..start]);
+            out.push_str("[REDACTED]");
+            consumed = end;
+        }
+        out.push_str(&text[consumed..]);
+        out
+    }
+
+    fn redact_value(&self, value: &mut Value) {
+        match value {
+            Value::String(text) => *text = self.redact_text(text),
+            Value::Array(items) => items.iter_mut().for_each(|item| self.redact_value(item)),
+            Value::Object(object) => {
+                let old = std::mem::take(object);
+                for (key, mut item) in old {
+                    self.redact_value(&mut item);
+                    object.insert(self.redact_text(&key), item);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, McpError> {
@@ -190,11 +250,12 @@ impl Connection {
         if let Some(error) = message.get("error") {
             return Err(McpError::Rpc {
                 code: error.get("code").and_then(Value::as_i64).unwrap_or(0),
-                message: error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unspecified error")
-                    .to_string(),
+                message: self.redact_text(
+                    error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unspecified error"),
+                ),
             });
         }
         Ok(message.get("result").cloned().unwrap_or(Value::Null))
@@ -229,9 +290,12 @@ impl Connection {
         if status.is_success() {
             return Ok(response);
         }
-        let detail = error_detail(response);
+        let detail = self.redact_text(&error_detail(response));
         Err(match status.as_u16() {
-            401 | 403 => McpError::Unauthorized(format!("HTTP {}{detail}", status.as_u16())),
+            401 | 403 => McpError::Unauthorized {
+                status: status.as_u16(),
+                detail: format!("HTTP {}{detail}", status.as_u16()),
+            },
             404 if self.session_id.is_some() => McpError::SessionExpired,
             code => McpError::Transport(format!("HTTP {code}{detail}")),
         })

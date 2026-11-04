@@ -106,6 +106,12 @@ pub struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Print the effective configuration with credentials redacted
+    Config {
+        /// Dump the effective configuration as JSON
+        #[arg(long, required = true)]
+        dump: bool,
+    },
     /// Run a single agent turn headlessly (prints final answer)
     Run {
         /// Prompt text
@@ -120,6 +126,8 @@ pub enum Commands {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         output_format: OutputFormat,
     },
+    /// Serve the Agent Client Protocol over stdio
+    Acp,
     /// Authentication (API key / status / logout)
     Auth {
         #[command(subcommand)]
@@ -320,6 +328,18 @@ pub enum BenchCmd {
         /// Models to compare (comma-separated); default = the active model
         #[arg(long)]
         models: Option<String>,
+    },
+    /// Tune an instruction on training tasks with a separate held-out gate
+    SelfTune {
+        /// Comma-separated recorded training task names
+        #[arg(long, value_delimiter = ',', required = true)]
+        train: Vec<String>,
+        /// Comma-separated recorded held-out task names
+        #[arg(long, value_delimiter = ',', required = true)]
+        held_out: Vec<String>,
+        /// Maximum candidate changes (1-10)
+        #[arg(long, default_value_t = 1)]
+        rounds: u32,
     },
     /// GEPA: evolve the standing instruction against your recorded tasks.
     /// Scores candidates on the real bench (pass rate / seconds / tokens),

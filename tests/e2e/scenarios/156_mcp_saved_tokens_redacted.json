@@ -1,0 +1,18 @@
+{
+  "description": "Saved MCP access and refresh tokens are redacted from unrelated tool results.",
+  "prompt": "Read the diagnostic file.",
+  "setup_files": {"diagnostic.txt": "access=opaque-mcp-access-ABCDE\nrefresh=opaque-mcp-refresh-FGHIJ\nshort=tiny!\n"},
+  "setup_home_files": {
+    "mcp-tokens.json": "{\"server\":{\"resource\":\"https://example.test/mcp\",\"access_token\":\"opaque-mcp-access-ABCDE\",\"refresh_token\":\"opaque-mcp-refresh-FGHIJ\"},\"short\":{\"resource\":\"https://example.test/short\",\"access_token\":\"tiny!\"}}"
+  },
+  "script": [
+    {"tool_calls": [{"name": "read_file", "arguments": {"path": "diagnostic.txt"}}]},
+    {"text": "Diagnostic read."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": ["Diagnostic read."],
+    "tool_results": [{"request": 2, "contains": ["[secret:MCP_TOKEN]"], "lacks": ["opaque-mcp-access-ABCDE", "opaque-mcp-refresh-FGHIJ", "tiny!"]}]
+  }
+}

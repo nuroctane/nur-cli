@@ -1,0 +1,68 @@
+{
+  "description": "A debugger can read a termination event even when the adapter exits immediately.",
+  "setup_files": {
+    "fake_dap.py": "import json,sys\nseq=1\npending=None\ndef send(obj):\n global seq\n obj['seq']=seq;seq+=1\n data=json.dumps(obj).encode();sys.stdout.buffer.write(f'Content-Length: {len(data)}\\r\\n\\r\\n'.encode()+data);sys.stdout.buffer.flush()\ndef response(req, body=None): send({'type':'response','request_seq':req['seq'],'success':True,'command':req['command'],'body':body or {}})\ndef event(name, body=None): send({'type':'event','event':name,'body':body or {}})\nwhile True:\n headers={}\n while True:\n  line=sys.stdin.buffer.readline()\n  if not line: sys.exit(0)\n  if line in (b'\\r\\n',b'\\n'): break\n  key,value=line.decode().split(':',1);headers[key.lower()]=value.strip()\n req=json.loads(sys.stdin.buffer.read(int(headers['content-length'])))\n if req.get('type')!='request': continue\n command=req['command']\n if command=='initialize': response(req,{'supportsConfigurationDoneRequest':True})\n elif command=='launch': pending=req;event('initialized')\n elif command=='setBreakpoints': response(req,{'breakpoints':[{'verified':True,'line':x['line']} for x in req['arguments']['breakpoints']]})\n elif command=='configurationDone':\n  response(req);response(pending);event('terminated');sys.exit(0)\n elif command=='stackTrace': response(req,{'stackFrames':[{'id':7,'name':'main','line':3,'column':1,'source':{'path':'sample.py'}}],'totalFrames':1})\n elif command=='disconnect': response(req);sys.exit(0)\n else: response(req)\n",
+    "sample.py": "pass\n",
+    "pause.py": "import time\ntime.sleep(.5)\n"
+  },
+  "prompt": "Start the debugger and read its final event.",
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "debug",
+          "arguments": {
+            "action": "start",
+            "session": "fixture",
+            "adapter": "python",
+            "adapter_args": [
+              "fake_dap.py"
+            ],
+            "launch": {
+              "program": "sample.py"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "python pause.py"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "debug",
+          "arguments": {
+            "action": "events",
+            "session": "fixture"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Termination observed."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 4,
+    "stdout_contains": [
+      "Termination observed."
+    ],
+    "tool_results": [
+      {
+        "request": 4,
+        "contains": [
+          "terminated"
+        ]
+      }
+    ]
+  }
+}

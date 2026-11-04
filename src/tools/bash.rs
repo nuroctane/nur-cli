@@ -1,7 +1,8 @@
 use super::sandbox;
 use super::shell::{
-    clamp_max_output_bytes, clamp_timeout_ms, run_in_shell_with, shell_backend, ShellOptions,
-    DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, MAX_MAX_OUTPUT_BYTES, MAX_TIMEOUT_MS,
+    clamp_max_output_bytes, clamp_timeout_ms, run_in_shell_with, sandbox_shell_words,
+    shell_backend, ShellOptions, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS,
+    MAX_MAX_OUTPUT_BYTES, MAX_TIMEOUT_MS,
 };
 use super::{arg_str, arg_u64, Tool, ToolContext};
 use crate::error::{NurError, Result};
@@ -47,8 +48,9 @@ impl Tool for Bash {
 
     fn description(&self) -> &str {
         // Honest description — name kept as `bash` for model familiarity.
-        "Run a non-interactive shell command in the workspace cwd (not a full OS sandbox; \
-         non-login shell, pipelines and && chains allowed). \
+        "Run a non-interactive shell command in the workspace cwd (non-login shell, \
+         pipelines and && chains allowed). Linux/macOS use the configured OS sandbox; \
+         Windows defaults to no OS sandbox. \
          On Windows prefers Git Bash, then pwsh/PowerShell, then cmd.exe (reported in output). \
          Default timeout 60s (max 600s). A command still producing output at the timeout is \
          handed to a bg job (result says 'still running' with the job id; fetch it later with \
@@ -98,13 +100,36 @@ impl Tool for Bash {
         }
 
         let command = arg_str(args, "command")?;
-        let timeout_ms =
-            clamp_timeout_ms(arg_u64(args, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS));
         let background = args
             .get("background")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let config = crate::config::load_config().ok();
+        let worker_secs = config
+            .as_ref()
+            .map(|c| c.tools.worker_background_secs)
+            .unwrap_or(5);
+        let child_handoff_scope = crate::agent::context_store::is_child(&ctx.session_id);
+        let owner_session =
+            child_handoff_scope.then(|| crate::agent::context_store::root_session(&ctx.session_id));
+        let worker_handoff = child_handoff_scope
+            && !background
+            && args.get("timeout_ms").is_none()
+            && worker_secs > 0;
+        let timeout_ms = clamp_timeout_ms(arg_u64(args, "timeout_ms").unwrap_or_else(|| {
+            if worker_handoff {
+                worker_secs.saturating_mul(1000)
+            } else {
+                DEFAULT_TIMEOUT_MS
+            }
+        }));
+        let sandbox_mode = config
+            .as_ref()
+            .map(|c| crate::sandbox_os::Mode::parse(&c.sandbox.mode))
+            .unwrap_or_else(|| {
+                crate::sandbox_os::Mode::parse(&crate::config::SandboxConfig::default().mode)
+            });
+        let sandbox_enabled = config.as_ref().map(|c| c.sandbox.enabled).unwrap_or(true);
         let max_output_bytes = match arg_u64(args, "max_output_length") {
             Some(n) => clamp_max_output_bytes(n as usize),
             None => {
@@ -115,10 +140,15 @@ impl Tool for Bash {
             .as_ref()
             .map(|c| c.shell_timeout_handoff)
             .unwrap_or(true);
+        let worktree_lease = crate::worktree::for_session(&ctx.session_id)?;
         let opts = ShellOptions {
             timeout_ms,
             handoff_on_timeout,
             background,
+            worker_handoff,
+            child_handoff_scope,
+            owner_session: owner_session.clone(),
+            worktree_lease: worktree_lease.clone(),
             max_output_bytes,
             sandbox: Vec::new(),
         };
@@ -144,7 +174,12 @@ impl Tool for Bash {
             .as_ref()
             .map(|c| c.tools.rust_builder.as_str())
             .unwrap_or("cargo");
-        if let Some(blaze) = super::rust_builder::route(&command, builder) {
+        // Blaze cannot preserve the shell's sandbox or background handoff.
+        if let Some(blaze) = super::rust_builder::route(&command, builder).filter(|_| {
+            (!sandbox_enabled || sandbox_mode == crate::sandbox_os::Mode::Off)
+                && !background
+                && !worker_handoff
+        }) {
             match run_in_shell_with(shell_backend(), &blaze, &ctx.cwd, &opts, &ctx.cancel) {
                 Ok(out) if !super::rust_builder::refused(&out) => {
                     return Ok(format!("{out}\n{}", super::rust_builder::BORROW_CHECK_NOTE));
@@ -173,34 +208,27 @@ impl Tool for Bash {
             }
         }
 
-        // OS sandbox tier: a wrapping argv for the plain command path. Blaze
-        // routing and `background` handoffs stay direct - a compiler under a
-        // read-only bind cannot write its target tree.
-        let sandbox_mode = config
-            .as_ref()
-            .map(|c| crate::sandbox_os::Mode::parse(&c.sandbox.mode))
-            .unwrap_or(crate::sandbox_os::Mode::Off);
-        let sandbox_enabled = config.as_ref().map(|c| c.sandbox.enabled).unwrap_or(false);
-        let wrapped = crate::sandbox_os::wrap(&command, &ctx.cwd, sandbox_mode, sandbox_enabled);
+        // Background handoffs retain the wrapper on the already-spawned child.
+        let backend = shell_backend();
+        let shell = sandbox_shell_words(backend, &command);
+        let wrapped = crate::sandbox_os::wrap(&shell, &ctx.cwd, sandbox_mode, sandbox_enabled);
+        if let Some(failure) = &wrapped.failure {
+            return Err(NurError::Tool(failure.clone()));
+        }
         let opts_sandboxed = ShellOptions {
             timeout_ms,
             handoff_on_timeout,
             background,
+            worker_handoff,
+            child_handoff_scope,
+            owner_session,
+            worktree_lease,
             max_output_bytes,
             sandbox: wrapped.argv.clone(),
         };
-        match run_in_shell_with(
-            shell_backend(),
-            &command,
-            &ctx.cwd,
-            &opts_sandboxed,
-            &ctx.cancel,
-        ) {
+        match run_in_shell_with(backend, &command, &ctx.cwd, &opts_sandboxed, &ctx.cancel) {
             // A bg handoff comes back as Ok and is not a failure to lock out.
-            Ok(out) => Ok(match wrapped.note {
-                Some(note) => format!("{note}\n{out}"),
-                None => out,
-            }),
+            Ok(out) => Ok(out),
             Err(e) => {
                 // Only lock out hang/timeout/cancel — not ordinary tool refusals
                 // from this Err path that are already terminal.

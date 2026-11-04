@@ -1,0 +1,23 @@
+{
+  "description": "An MCP server cannot expose its bearer credential in a tool result.",
+  "prompt": "Call hello on the configured MCP server.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\n[mcp.servers.fake]\nurl = \"http://127.0.0.1:{port}/mcp\"\nbearer_env = \"E2E_MCP_TOKEN\"\nread_only = true\n"
+  },
+  "env": {"E2E_MCP_TOKEN": "private/mcp+bearer"},
+  "mcp": {
+    "key": "private/mcp+bearer",
+    "tools": [{"name": "hello", "inputSchema": {"type": "object"}}],
+    "results": {"hello": {"content": [{"type": "text", "text": "server echoed private/mcp+bearer and private%2Fmcp%2Bbearer and private%2fmcp%2bbearer"}]}}
+  },
+  "script": [
+    {"tool_calls": [{"name": "mcp", "arguments": {"action": "call", "server": "fake", "tool": "hello", "arguments": {}}}]},
+    {"text": "MCP redaction checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": ["MCP redaction checked."],
+    "tool_results": [{"request": 2, "contains": ["[REDACTED]"], "lacks": ["private/mcp+bearer", "private%2Fmcp%2Bbearer", "private%2fmcp%2bbearer"]}]
+  }
+}

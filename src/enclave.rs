@@ -74,7 +74,7 @@ fn missing_key() -> NurError {
 
 fn explain(error: McpError, url: &str) -> NurError {
     NurError::Tool(match error {
-        McpError::Unauthorized(detail) => format!(
+        McpError::Unauthorized { detail, .. } => format!(
             "Enclave rejected the key: {detail}. Keys expire after 90, 180 or 365 days; create \
              a new one at {KEYS_PAGE} and run `nur auth login --provider enclave` (or set \
              {KEY_ENV})."

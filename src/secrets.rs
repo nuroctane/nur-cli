@@ -15,8 +15,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// Values shorter than this are not redacted from output: a short value
-/// (`true`, `1234`) would rewrite ordinary text all over the transcript.
+/// Named user secrets shorter than this are not redacted from output: a short
+/// value (`true`, `1234`) would rewrite ordinary text all over the transcript.
+/// OAuth tokens are always redacted, including unusually short ones.
 pub const MIN_VALUE_CHARS: usize = 6;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -206,13 +207,17 @@ pub fn inject(cmd: &mut std::process::Command) {
 /// replaced by `[secret:NAME]`.
 pub fn redact(text: &str) -> Cow<'_, str> {
     let pairs = current();
-    if pairs.is_empty() {
+    let mcp_pairs = crate::mcp_oauth::redaction_pairs();
+    let mcp_env_pairs = crate::mcp_stdio::redaction_pairs();
+    if pairs.is_empty() && mcp_pairs.is_empty() && mcp_env_pairs.is_empty() {
         return Cow::Borrowed(text);
     }
     // Results can pass through more than one redaction boundary. Names in
     // markers are public metadata, and must survive a second pass unchanged.
     let markers: Vec<_> = pairs
         .iter()
+        .chain(mcp_pairs.iter())
+        .chain(mcp_env_pairs.iter())
         .flat_map(|(name, _)| {
             let marker = format!("[secret:{name}]");
             text.match_indices(&marker)
@@ -221,15 +226,26 @@ pub fn redact(text: &str) -> Cow<'_, str> {
         })
         .collect();
     let mut matches = Vec::new();
-    for (name, value) in pairs.iter() {
-        if value.chars().count() < MIN_VALUE_CHARS {
+    for ((name, value), is_mcp) in pairs
+        .iter()
+        .map(|pair| (pair, false))
+        .chain(mcp_pairs.iter().map(|pair| (pair, true)))
+        .chain(mcp_env_pairs.iter().map(|pair| (pair, true)))
+    {
+        if value.chars().count() < MIN_VALUE_CHARS && !is_mcp {
             continue;
         }
         let json = serde_json::to_string(value)
             .map(|q| q[1..q.len() - 1].to_string())
             .unwrap_or_default();
         let url: String = url_encode(value);
-        for form in [value.as_str(), json.as_str(), url.as_str()] {
+        let lower_url = lowercase_url_escapes(&url);
+        for form in [
+            value.as_str(),
+            json.as_str(),
+            url.as_str(),
+            lower_url.as_str(),
+        ] {
             if !form.is_empty() {
                 matches.extend(text.match_indices(form).filter_map(|(start, value)| {
                     let end = start + value.len();
@@ -264,7 +280,7 @@ pub fn redact(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-fn url_encode(value: &str) -> String {
+pub(crate) fn url_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for b in value.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
@@ -274,6 +290,21 @@ fn url_encode(value: &str) -> String {
         }
     }
     out
+}
+
+pub(crate) fn lowercase_url_escapes(encoded: &str) -> String {
+    let mut bytes = encoded.as_bytes().to_vec();
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%' {
+            bytes[i + 1] = bytes[i + 1].to_ascii_lowercase();
+            bytes[i + 2] = bytes[i + 2].to_ascii_lowercase();
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8(bytes).unwrap_or_default()
 }
 
 /// `text` safe to keep on disk: saved secret values become `[secret:NAME]`

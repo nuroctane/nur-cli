@@ -1,0 +1,29 @@
+{
+  "description": "Refuseless DeepSeek maps disabled reasoning to the provider's off value.",
+  "provider": "refuseless",
+  "model": "deepseek-v4.1-flash-abliterated",
+  "env": {
+    "REFUSELESS_API_KEY": "e2e-refuseless-key"
+  },
+  "setup_home_files": {
+    "config.toml": "provider = \"refuseless\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"deepseek-v4.1-flash-abliterated\"\nreasoning_effort = \"none\"\n"
+  },
+  "prompt": "Say ok.",
+  "script": [
+    {
+      "text": "OK."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 1,
+    "request_contains": [
+      {
+        "request": 1,
+        "contains": [
+          "\"reasoning_effort\": \"off\""
+        ]
+      }
+    ]
+  }
+}

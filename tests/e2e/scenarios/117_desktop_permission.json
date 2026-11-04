@@ -1,0 +1,21 @@
+{
+  "description": "Manual mode permits a desktop snapshot but asks before an action.",
+  "prompt": "Inspect the Editor and click its button.",
+  "mode": "manual",
+  "setup_native_desktop": true,
+  "env": {"NUR_AGENT_DESKTOP_BIN": "{workspace}/desktop_fixture.exe"},
+  "script": [
+    {"tool_calls": [{"name": "desktop", "arguments": {"action": "snapshot", "app": "Editor"}}]},
+    {"tool_calls": [{"name": "desktop", "arguments": {"action": "click", "target": "@s123:e4"}}]},
+    {"text": "Click needs approval."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "tool_results": [
+      {"request": 2, "contains": ["fixture:snapshot|--app=Editor|--compact:false"]},
+      {"request": 3, "contains": ["user denied this tool call"], "lacks": ["fixture:click"]}
+    ],
+    "stdout_contains": ["Click needs approval."]
+  }
+}
