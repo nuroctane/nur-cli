@@ -108,7 +108,7 @@ jobs:
         run: |
           $env:NUR_NO_UPDATE = '1'
           $version = & "target/${{ matrix.target }}/release/nur.exe" --version
-          if ($LASTEXITCODE -ne 0 -or $version -ne "nur $($env:GITHUB_REF_NAME.TrimStart('v'))") {
+          if ($LASTEXITCODE -ne 0 -or $version -ne "nur $($env:RELEASE_TAG.TrimStart('v'))") {
             throw "Built binary does not match release tag: $version"
           }
           Copy-Item "target/${{ matrix.target }}/release/nur.exe" "${{ matrix.asset }}"
