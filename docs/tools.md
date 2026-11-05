@@ -710,6 +710,18 @@ children are the exception outside Auto: they keep their own Plan mode,
 which enforces their read-only contract, so a later Auto toggle does
 not lift them.
 
+**Cheap model pin.** Set `subagent_model` in the config to pin every
+`agent` call that names no model to a cheap model on the parent provider
+(the `CLAUDE_CODE_SUBAGENT_MODEL` equivalent), so delegated work stops
+paying parent-model prices. An explicit `model` on the call, or
+`cost_mode: economy`, wins over the pin; a typesafe routing hop keeps
+its say when the pin did not apply. The pin announces itself on the
+status line (`subagent · pinned model <id>`). It is a model id the
+account can call on the parent provider: a pin the provider does not
+serve fails the child with the provider's error, like a bad explicit
+model. Unset, children run on the parent model unless typesafe routing
+hops them to a cheaper one.
+
 **Economy children.** `cost_mode: "economy"` runs the child on a cheap model
 with low reasoning effort: `economy_model` from config when the child stays on
 the parent's provider, otherwise the cheapest model the account lists that

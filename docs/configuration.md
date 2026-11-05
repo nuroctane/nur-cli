@@ -65,6 +65,13 @@ ecosystem_auto_ensure = true
 # Cheap model for `agent` cost_mode=economy (and prewalk when [prewalk] into is unset)
 # economy_model = "<a cheap model id on your provider>"
 
+# Default cheap model for every `agent` call that names no model (the
+# CLAUDE_CODE_SUBAGENT_MODEL equivalent): children run on this model on the
+# parent provider instead of the parent model. An explicit `model` on the
+# call, or cost_mode=economy, wins over it; typesafe routing still hops when
+# it can, unless the pin already decided the model.
+# subagent_model = "<a cheap model id on your provider>"
+
 # Self-update from GitHub Releases — checked on EVERY launch (60s network floor)
 auto_update = true
 
@@ -188,6 +195,7 @@ auto_update = true
 | `theme_setup.motion` | string | `auto` | Animation. With `full`, the NUR banner shimmers whenever it is on screen, idle included; every other ambient animation (aurora rules, the input border, modal edges) moves only while an agent turn, startup or a modal is active, and holds its frame while idle. `reduced` is an accessibility setting: the banner and all ambient animation hold one still frame, and spinners tick at ~10fps. `auto` picks `reduced` only over SSH (`SSH_TTY`/`SSH_CONNECTION`), where every frame crosses a network link. `/theme motion` toggles and saves; `NUR_REDUCED_MOTION=1|0` overrides for one run |
 | `ecosystem_auto_ensure` | bool | `true` | Background TTL **repair** of packs on later TUI opens (first install is foreground via npx / one-liner / EXE / `nur install\); set `false` to skip repair |
 | `economy_model` | string | unset | Model for `agent` calls with `cost_mode: economy` that stay on this provider, and for prewalk when `[prewalk] into` is unset. Unset: an economy child runs on the cheapest tool-capable model the account lists that models.dev prices |
+| `subagent_model` | string | unset | Default model for `agent` calls that name no model, on the parent provider (the `CLAUDE_CODE_SUBAGENT_MODEL` equivalent). An explicit `model` on the call, or `cost_mode: economy`, wins over it; a routing hop keeps its say when the pin did not apply. A pin naming a model the provider does not serve fails the child with the provider's error |
 | `skills.auto_activate` | bool | `false` | Natural-language skill activation ("think like fable" injects the skill body). Off by default; explicit `/skill-name` and the `skill` tool always work. See [natural-language skill activation](./ecosystem.md#natural-language-skill-activation) |
 | `tools.profile` | string | `lean` | `lean` = the editing shell and session tools up front, every ecosystem tool loaded on demand through `tool_search` (about 6.1k tool-schema tokens before the v0.61 additions; 30 tools in the default build, plus the system prompt; a loaded tool joins the end of the roster from the next request on). `full` = every tool up front. `core` = minimal editing shell (17 tools: typesafe, read/list/write/edit/multi_edit/apply_patch/hashline_edit, bash, sgrep/grep/glob, web_fetch/web_search, question, todo_write, submit_plan) with no ecosystem prose. Restart to change. Unknown values fall back to `lean`. Measured per-request overhead on the E2E harness (chars/4, no PLUR or OptMem installed): `full` about 3.9k system-prompt + 15.4k tool-schema tokens (54 tools), `core` about 1.8k + 2.8k (15 tools). Measured before the code-shape block (about 280 tokens, in `lean` and `full` only) and the `slop_scan` and `secscan` tools were added |
 | `tools.sgrep_first` | bool | `true` | Semantic search is enforced, not suggested: a `grep` whose pattern is a description is answered by `sgrep`, a `grep` past its default cap comes back reranked by `sgrep` (an explicit `max_matches` is honored), and shell searches (`grep`/`rg`/`findstr`/`Select-String` as the command) are refused. Needs sgrep installed to change anything; see [Tools](tools.md#sgrep) |
