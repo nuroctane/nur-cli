@@ -5467,22 +5467,6 @@ impl App {
                     self.click_transcript(col, row);
                 }
                 self.selecting = false;
-                // Single click on a sidegraph kid box opens that subagent's
-                // transcript modal. Previously only a double-click (or
-                // right-click) did, so a plain click on the graph did
-                // nothing. Guarded by "not a real pan" so dragging the
-                // canvas to pan still pans, and by drag_canvas so a click
-                // that started elsewhere does not open a peek it never
-                // aimed at. The double-click seed is cleared so the second
-                // click of an old double-click habit does not immediately
-                // dismiss the peek it just opened (re-targeting below
-                // keeps it open instead).
-                if self.sidegraph_drag_canvas && !self.sidegraph_drag_was_real_pan() {
-                    if let Some(sh) = self.sidegraph_swarm_hit_at(m.column, m.row) {
-                        self.sidegraph_last_click = None;
-                        self.open_swarm_peek(sh.run_id);
-                    }
-                }
                 if self.sidegraph_drag_was_real_pan() {
                     // Only a real pan kills the double-click seed - not a
                     // click that barely moved the cursor between Down and Up.
