@@ -107,6 +107,14 @@ def run(binary, scenario):
             term.type_text(text)
         term.write('\r')
 
+    def new_session():
+        # A turn's last text streams before the turn ends, and /new is refused
+        # while busy; wait for the idle status before starting a new session.
+        term.until('turn finished', timeout=30,
+                   found=lambda: term.screen.display[-1].rstrip().endswith('ready'))
+        command('/new')
+        term.until('new session')
+
     def paste(text):
         term.write('\x1b[200~' + text + '\x1b[201~')
         term.pump(.2)
@@ -130,8 +138,7 @@ def run(binary, scenario):
             term.until('PARENT_FINISHED', timeout=30)
             if scenario == 'swarm-approval-session':
                 old_session = next(p.stem for p in (home/'.nur/sessions').glob('*.json') if not p.name.endswith('.status.json'))
-                command('/new')
-                term.until('new session')
+                new_session()
                 term.pump(5)
                 assert 'write_file' not in '\n'.join(term.screen.display), 'old session approval leaked into the new session'
                 command('Continue the new session')
@@ -158,8 +165,7 @@ def run(binary, scenario):
             term.until('PARENT_FINISHED', timeout=30)
             if scenario == 'swarm-question-session':
                 old_session = next(p.stem for p in (home/'.nur/sessions').glob('*.json') if not p.name.endswith('.status.json'))
-                command('/new')
-                term.until('new session')
+                new_session()
                 term.pump(5)
                 assert 'CHILD_GATE_QUESTION' not in '\n'.join(term.screen.display), 'old session question leaked into the new session'
                 command('/swarm detail')
@@ -179,8 +185,7 @@ def run(binary, scenario):
         elif scenario == 'worker-background-session':
             command('Have a child run the slow fixture')
             term.until('FIRST_SESSION_DONE', timeout=30)
-            command('/new')
-            term.until('new session')
+            new_session()
             term.pump(5)
             results = list((home/'.nur/bg-jobs').glob('*.txt'))
             assert any('OLD_SESSION_WORKER_OUTPUT' in p.read_text(encoding='utf-8') for p in results), 'worker did not complete'
@@ -198,8 +203,7 @@ def run(binary, scenario):
             command('Start a child and list its admission')
             term.until('ADMISSION_CHECKED', timeout=30)
             assert '1 admission(s)' in log.read_text(encoding='utf-8'), 'admission was not visible in the new session'
-            command('/new')
-            term.until('new session')
+            new_session()
             command('List admissions for this session')
             term.until('NEW_SESSION_CHECKED', timeout=30)
             assert 'no admitted subagents in this session' in log.read_text(encoding='utf-8'), 'admission leaked into a new session'
