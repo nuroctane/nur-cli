@@ -700,6 +700,16 @@ turn cancellation also cancels automatically handed-off child commands. Set
 `tools.worker_background_secs = 0` to disable the automatic handoff, or provide
 an explicit `timeout_ms` for a particular command.
 
+**Mode inheritance.** A subagent shares the parent's permission mode
+object, not a snapshot of it: switching modes mid-run (Shift+Tab in the
+TUI) reaches running children on their next approval check, in both
+directions. In Auto, a child does not stop for approvals, just like the
+parent, except for the same standing exceptions (an explicit deny rule,
+an ask rule, a write inside `.git/`, a `secscan baseline`). Explore
+children are the exception outside Auto: they keep their own Plan mode,
+which enforces their read-only contract, so a later Auto toggle does
+not lift them.
+
 **Economy children.** `cost_mode: "economy"` runs the child on a cheap model
 with low reasoning effort: `economy_model` from config when the child stays on
 the parent's provider, otherwise the cheapest model the account lists that

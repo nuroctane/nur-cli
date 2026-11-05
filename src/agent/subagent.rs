@@ -15,6 +15,37 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+/// Permission mode for a child run.
+///
+/// General children share the parent's mode object, not a snapshot of it.
+/// The mode is an Arc-backed atomic: the TUI's Shift+Tab sets it live, and
+/// the approval gate reads it on every check. A snapshot froze the mode at
+/// spawn time, so a child spawned in Manual kept stopping for approvals
+/// after the user switched to Auto, and a child spawned in Auto kept
+/// auto-approving after the user switched back to Manual. Sharing fixes
+/// both directions.
+///
+/// Explore children are the exception, and only outside Auto: explore is
+/// a read-only investigation, and its own Plan object is what enforces
+/// that (writes deny, non-read-only shell asks). In Auto, a blanket yes
+/// must mean blanket yes for delegated work too, so an explore child
+/// spawned in Auto shares the parent mode instead of staying Plan and
+/// stopping for approvals every few calls. An explore child spawned
+/// outside Auto keeps its Plan object, so a later Auto toggle does not
+/// lift it; that is the read-only contract, and in Plan it only prompts
+/// for Ask-class calls, never for reads or denied writes.
+fn child_mode(parent_mode: &SharedMode, subagent_type: &str) -> SharedMode {
+    let explore = matches!(
+        subagent_type.to_ascii_lowercase().as_str(),
+        "explore" | "research" | "readonly"
+    );
+    if explore && parent_mode.get() != PermissionMode::Auto {
+        SharedMode::new(PermissionMode::Plan)
+    } else {
+        parent_mode.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // Cohesive spawn boundary; these inputs define one child run.
 pub async fn run_subagent(
     client: ApiClient,
@@ -38,12 +69,7 @@ pub async fn run_subagent(
         "explore" | "research" | "readonly"
     );
 
-    let mode = if explore {
-        SharedMode::new(PermissionMode::Plan)
-    } else {
-        // General inherits parent mode but never upgrades beyond parent auto.
-        SharedMode::new(parent_mode.get())
-    };
+    let mode = child_mode(&parent_mode, subagent_type);
 
     let mut cfg = config;
     // Subagents inherit the parent's turn budget verbatim — no extra ceiling.
@@ -393,6 +419,38 @@ async fn relay_approval_scoped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_mode_shares_parent_mode_for_general_children() {
+        let parent = SharedMode::new(PermissionMode::Manual);
+        let child = child_mode(&parent, "general");
+        assert_eq!(child.get(), PermissionMode::Manual);
+        // The whole point: a mode toggle after spawn must reach the child.
+        parent.set(PermissionMode::Auto);
+        assert_eq!(child.get(), PermissionMode::Auto);
+        parent.set(PermissionMode::Manual);
+        assert_eq!(child.get(), PermissionMode::Manual);
+    }
+
+    #[test]
+    fn child_mode_keeps_explore_plan_outside_auto() {
+        let parent = SharedMode::new(PermissionMode::Manual);
+        let child = child_mode(&parent, "explore");
+        assert_eq!(child.get(), PermissionMode::Plan);
+        // A later Auto toggle does not lift a Plan explore child: that is
+        // the read-only contract, not a snapshot bug.
+        parent.set(PermissionMode::Auto);
+        assert_eq!(child.get(), PermissionMode::Plan);
+    }
+
+    #[test]
+    fn child_mode_shares_parent_mode_for_explore_in_auto() {
+        let parent = SharedMode::new(PermissionMode::Auto);
+        let child = child_mode(&parent, "explore");
+        assert_eq!(child.get(), PermissionMode::Auto);
+        parent.set(PermissionMode::Manual);
+        assert_eq!(child.get(), PermissionMode::Manual);
+    }
 
     #[tokio::test]
     async fn child_prompts_in_other_sessions_are_not_blocked() {
