@@ -1,5 +1,5 @@
 {
-  "total_skills": 1792,
+  "total_skills": 1804,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -14047,6 +14047,29 @@
       "aliases": []
     },
     {
+      "name": "debug",
+      "description": "Debug a failing behavior deterministically instead of guessing at fixes. Use when a bug, crash, failing test, or wrong output is reported, or when asked to find why something broke.",
+      "path": "skills/debug/SKILL.md",
+      "triggers": [
+        "debug failing",
+        "/debug",
+        "debug"
+      ],
+      "keywords": [
+        "debug",
+        "failing",
+        "behavior",
+        "deterministically",
+        "instead",
+        "guessing",
+        "fixes",
+        "crash",
+        "test",
+        "wrong"
+      ],
+      "aliases": []
+    },
+    {
       "name": "debugging-and-error-recovery",
       "description": "Guides systematic root-cause debugging. Use when tests fail, builds break, something that worked yesterday broke, behavior doesn't match expectations, or you encounter any unexpected error. Use when you need to figure out what broke and why \u2014 a systematic approach to finding and fixing the root caus",
       "path": "skills/debugging-and-error-recovery/SKILL.md",
@@ -14226,6 +14249,31 @@
         "layer",
         "analysis",
         "dynamic"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "deploy-check",
+      "description": "Verify the deployed build before testing or walking a live site. Use when asked to check a deployment, test a live site, or confirm what version is actually running.",
+      "path": "skills/deploy-check/SKILL.md",
+      "triggers": [
+        "verify deployed",
+        "/deploy check",
+        "/deploy-check",
+        "deploy check",
+        "deploy-check"
+      ],
+      "keywords": [
+        "deploy",
+        "check",
+        "verify",
+        "deployed",
+        "build",
+        "testing",
+        "walking",
+        "live",
+        "site",
+        "asked"
       ],
       "aliases": []
     },
@@ -15151,6 +15199,29 @@
         "extractions",
         "recent",
         "gstack"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "desloppify",
+      "description": "Multi-language codebase health scanner with a persistent, prioritized cleanup queue. Use when the user explicitly asks to run desloppify, scan for technical debt, get a health score, or create a cleanup plan. Do NOT trigger for general code review, renaming, or fixing individual bugs.",
+      "path": "skills/desloppify/SKILL.md",
+      "triggers": [
+        "multi language",
+        "/desloppify",
+        "desloppify"
+      ],
+      "keywords": [
+        "desloppify",
+        "multi",
+        "language",
+        "codebase",
+        "health",
+        "scanner",
+        "persistent",
+        "prioritized",
+        "cleanup",
+        "queue"
       ],
       "aliases": []
     },
@@ -35143,6 +35214,29 @@
       "aliases": []
     },
     {
+      "name": "lightpanda",
+      "description": "Use Lightpanda, the headless browser built for AI agents, as a fast clean-room browser: one-shot fetches, a CDP server, or an MCP server. Use when a page needs JavaScript rendering that web_fetch cannot do, when a clean session is wanted, or when speed and memory matter more than a logged-in session",
+      "path": "skills/lightpanda/SKILL.md",
+      "triggers": [
+        "lightpanda headless",
+        "/lightpanda",
+        "lightpanda"
+      ],
+      "keywords": [
+        "lightpanda",
+        "headless",
+        "browser",
+        "built",
+        "fast",
+        "clean",
+        "room",
+        "shot",
+        "fetches",
+        "server"
+      ],
+      "aliases": []
+    },
+    {
       "name": "lingo",
       "description": "Playful, minimal design with bright colors, rounded shapes, tactile 3D borders, and friendly illustrations for approachable interfaces.",
       "path": "skills/lingo/SKILL.md",
@@ -44217,6 +44311,31 @@
       "aliases": []
     },
     {
+      "name": "regression-guard",
+      "description": "Guard a landed fix against regression by analyzing its diff for test-coverage gaps. Use after a bug fix lands, or when asked whether a fix is covered, what tests it needs, or how the bug could have been caught earlier.",
+      "path": "skills/regression-guard/SKILL.md",
+      "triggers": [
+        "/regression guard",
+        "/regression-guard",
+        "regression guard",
+        "regression-guard",
+        "guard landed"
+      ],
+      "keywords": [
+        "regression",
+        "guard",
+        "landed",
+        "against",
+        "analyzing",
+        "diff",
+        "test",
+        "coverage",
+        "gaps",
+        "lands"
+      ],
+      "aliases": []
+    },
+    {
       "name": "relaying-ntlm-for-adcs-esc8",
       "description": "Uses Impacket's ntlmrelayx.py with a coercion tool (PetitPotam, Coercer,",
       "path": "skills/security/relaying-ntlm-for-adcs-esc8/SKILL.md",
@@ -44457,6 +44576,31 @@
         "sources",
         "capture",
         "findings"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "research-spike",
+      "description": "Run a time-boxed research spike that ends in findings, not code. Use when asked to research, spike, evaluate, or compare an approach, library, or design before building it.",
+      "path": "skills/research-spike/SKILL.md",
+      "triggers": [
+        "/research spike",
+        "/research-spike",
+        "research spike",
+        "research-spike",
+        "time boxed"
+      ],
+      "keywords": [
+        "research",
+        "spike",
+        "time",
+        "boxed",
+        "ends",
+        "findings",
+        "code",
+        "asked",
+        "evaluate",
+        "compare"
       ],
       "aliases": []
     },
@@ -46911,6 +47055,31 @@
       "aliases": []
     },
     {
+      "name": "security-audit",
+      "description": "Security guidance and vulnerability review for codebases, APIs, services, CLI tools, libraries, and daemons. Use when asked security questions, for focused reviews, vulnerability research, security audits, or pen tests. Run the complete workflow only for explicit codebase audit or pen-test requests,",
+      "path": "skills/security-audit/SKILL.md",
+      "triggers": [
+        "security guidance",
+        "/security audit",
+        "/security-audit",
+        "security audit",
+        "security-audit"
+      ],
+      "keywords": [
+        "security",
+        "audit",
+        "guidance",
+        "vulnerability",
+        "review",
+        "codebases",
+        "apis",
+        "services",
+        "tools",
+        "libraries"
+      ],
+      "aliases": []
+    },
+    {
       "name": "sega",
       "description": "A playful, arcade-inspired interface for games \u2014 built on the VT323 pixel typeface, hard-edged 0px corners, chunky pill buttons that physically press into solid offset blocks",
       "path": "skills/sega/SKILL.md",
@@ -47094,6 +47263,31 @@
         "type",
         "checking",
         "tests"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "setup-repo",
+      "description": "Scaffold a repository's working conventions: issue and pull-request templates, process docs, and CI. Use when setting up a new repo, or when asked to add templates, contribution docs, or CI to an existing one.",
+      "path": "skills/setup-repo/SKILL.md",
+      "triggers": [
+        "scaffold repository",
+        "/setup repo",
+        "/setup-repo",
+        "setup repo",
+        "setup-repo"
+      ],
+      "keywords": [
+        "setup",
+        "repo",
+        "scaffold",
+        "repository",
+        "conventions",
+        "issue",
+        "pull",
+        "request",
+        "templates",
+        "process"
       ],
       "aliases": []
     },
@@ -47310,6 +47504,38 @@
       "aliases": []
     },
     {
+      "name": "show-me-the-bug",
+      "description": "Diagnose a problem from a shown bundle instead of a description: a screen recording, video, screenshots, or annotated images. Use when the user shows a bug, a crash, or a broken UI instead of describing it, or says \"show me\" / \"look at this\" with media attached.",
+      "path": "skills/show-me-the-bug/SKILL.md",
+      "triggers": [
+        "/show me the bug",
+        "/show-me-the-bug",
+        "diagnose problem",
+        "show me the bug",
+        "show-me-the-bug",
+        "/show me the",
+        "/show-me-the",
+        "/me the bug",
+        "/me-the-bug",
+        "show me the",
+        "show-me-the",
+        "me the bug"
+      ],
+      "keywords": [
+        "show",
+        "diagnose",
+        "problem",
+        "shown",
+        "bundle",
+        "instead",
+        "description",
+        "screen",
+        "recording",
+        "video"
+      ],
+      "aliases": []
+    },
+    {
       "name": "sign-in-with-google-web",
       "description": "Implement, configure, and secure Sign In With Google (SiwG) using Google Identity Services (GIS / `https://accounts.google.com/gsi/client`) across web architectures. Use when creating Google sign-in buttons, implementing Google One Tap with FedCM, integrating GIS in React/Next.js/Angular/HTML, verif",
       "path": "skills/sign-in-with-google-web/SKILL.md",
@@ -47434,6 +47660,31 @@
         "outer",
         "shadows",
         "reflective"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "skill-authoring",
+      "description": "Author a nur-cli skill the way a model actually follows one: a portable directory with a SKILL.md entry point, reference files, executable lint, an acceptance profile, and an eval that scores whether a model followed it. Use when asked to create, fix, or review a skill, or to make a skill enforceabl",
+      "path": "skills/skill-authoring/SKILL.md",
+      "triggers": [
+        "/skill authoring",
+        "/skill-authoring",
+        "skill authoring",
+        "skill-authoring",
+        "author model"
+      ],
+      "keywords": [
+        "authoring",
+        "author",
+        "model",
+        "actually",
+        "follows",
+        "portable",
+        "directory",
+        "entry",
+        "point",
+        "reference"
       ],
       "aliases": []
     },
@@ -50678,6 +50929,31 @@
       "aliases": []
     },
     {
+      "name": "ux-flow",
+      "description": "Audit a product's user journeys and interface clarity: build a story catalog from the codebase, then critique each journey for simplicity, redundancy, and friction. Use when asked to review UX, map user flows, find friction, or improve a product's interface.",
+      "path": "skills/ux-flow/SKILL.md",
+      "triggers": [
+        "audit product",
+        "/ux flow",
+        "/ux-flow",
+        "ux flow",
+        "ux-flow"
+      ],
+      "keywords": [
+        "flow",
+        "audit",
+        "product",
+        "user",
+        "journeys",
+        "interface",
+        "clarity",
+        "build",
+        "story",
+        "catalog"
+      ],
+      "aliases": []
+    },
+    {
       "name": "validating-backup-integrity-for-recovery",
       "description": "Validates backup integrity through cryptographic hash verification,",
       "path": "skills/security/validating-backup-integrity-for-recovery/SKILL.md",
@@ -51496,6 +51772,38 @@
         "message",
         "land",
         "pitch"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "walk-the-issues",
+      "description": "Groom and clear an open-issue backlog, one issue at a time, through branch, research, implementation, test, and pull request. Use when asked to clear, groom, triage, or work through open GitHub issues.",
+      "path": "skills/walk-the-issues/SKILL.md",
+      "triggers": [
+        "/walk the issues",
+        "/walk-the-issues",
+        "walk the issues",
+        "walk-the-issues",
+        "/the issues",
+        "/the-issues",
+        "groom clear",
+        "the issues",
+        "the-issues",
+        "/walk the",
+        "/walk-the",
+        "walk the"
+      ],
+      "keywords": [
+        "walk",
+        "issues",
+        "groom",
+        "clear",
+        "open",
+        "issue",
+        "backlog",
+        "time",
+        "branch",
+        "research"
       ],
       "aliases": []
     },

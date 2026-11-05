@@ -53,6 +53,8 @@ pub async fn run_subagent(
     cwd: PathBuf,
     parent_mode: SharedMode,
     approved_domains: Arc<Mutex<HashSet<String>>>,
+    approved_tools: Arc<Mutex<HashSet<String>>>,
+    permissions: super::SharedPermissions,
     prompt: &str,
     subagent_type: &str,
     parent_depth: u32,
@@ -86,9 +88,12 @@ pub async fn run_subagent(
         config: cfg.clone(),
         cwd: cwd.clone(),
         permission_mode: mode,
-        approved_tools: Arc::new(Mutex::new(HashSet::new())),
+        // Children inherit the user's "always allow" grants and the parent's
+        // loaded rules (a worktree child keeps the project's trust), and an
+        // "always" given to a child holds for the parent and its siblings.
+        approved_tools,
         tools: host,
-        permissions: super::SharedPermissions::load(&cwd),
+        permissions,
         hooks: super::hooks::HooksConfig::load(),
         is_subagent: true,
         interactive_children,

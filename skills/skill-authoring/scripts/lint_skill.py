@@ -14,6 +14,7 @@ Checks, mirroring the skill-authoring skill:
 - Every scripts/* file is either executable or documented in SKILL.md.
 """
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -23,7 +24,32 @@ SECRET = re.compile(
     r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*\S+|/home/|/Users/|"
     r"C:\\Users\\|secrets\.json"
 )
-LINK = re.compile(r"references/([A-Za-z0-9_.\-/]+)")
+# A link target ends at the last word character, so trailing sentence
+# punctuation ("see references/a.md.") is not part of the path.
+LINK = re.compile(r"references/([A-Za-z0-9_\-/]+(?:\.[A-Za-z0-9_\-]+)*)")
+
+
+def frontmatter_fields(front):
+    """Top-level keys, with quoted values unquoted and block scalars (> or |) joined."""
+    fields = {}
+    lines = front.splitlines()
+    i = 0
+    while i < len(lines):
+        key, sep, value = lines[i].partition(":")
+        i += 1
+        if not sep or lines[i - 1][:1].isspace():
+            continue
+        value = value.strip()
+        if value[:1] in (">", "|"):
+            block = []
+            while i < len(lines) and (not lines[i].strip() or lines[i][:1].isspace()):
+                block.append(lines[i].strip())
+                i += 1
+            value = " ".join(part for part in block if part)
+        elif len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        fields[key.strip()] = value
+    return fields
 
 
 def lint(skill_dir):
@@ -32,20 +58,14 @@ def lint(skill_dir):
     entry = skill_dir / "SKILL.md"
     if not entry.is_file():
         return [f"{skill_dir}: missing SKILL.md"]
-    text = entry.read_text(encoding="utf-8")
+    text = entry.read_text(encoding="utf-8").replace("\r\n", "\n")
     match = FRONTMATTER.match(text)
     if not match:
         problems.append(f"{entry}: missing frontmatter block")
         return problems
-    front = match.group(1)
-    name = None
-    description = ""
-    for line in front.splitlines():
-        key, _, value = line.partition(":")
-        if key.strip() == "name":
-            name = value.strip()
-        elif key.strip() == "description":
-            description = value.strip()
+    fields = frontmatter_fields(match.group(1))
+    name = fields.get("name") or None
+    description = fields.get("description", "")
     if not name:
         problems.append(f"{entry}: frontmatter has no name")
     elif name != skill_dir.name:
@@ -69,6 +89,14 @@ def lint(skill_dir):
     for target in sorted(linked):
         if not (refs_dir / target).is_file():
             problems.append(f"{entry}: linked references/{target} does not exist")
+    scripts_dir = skill_dir / "scripts"
+    if scripts_dir.is_dir():
+        for script in sorted(p for p in scripts_dir.rglob("*") if p.is_file()):
+            executable = os.name != "nt" and os.access(script, os.X_OK)
+            # The exact file name, not a longer name that merely contains it.
+            documented = re.search(r"(?<![\w.-])" + re.escape(script.name) + r"(?![\w-])", text)
+            if not executable and not documented:
+                problems.append(f"{entry}: scripts/{script.relative_to(scripts_dir).as_posix()} is neither executable nor documented")
     return problems
 
 

@@ -1,0 +1,18 @@
+{
+  "description": "With subagent_depth = 2 a general child is offered the agent tool, so it can delegate one more level.",
+  "prompt": "Delegate the check to a child.",
+  "setup_home_files": {
+    "config.toml": "provider = \"vllm\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nmodel = \"e2e-model\"\nsubagent_depth = 2\n"
+  },
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Check", "prompt": "Check the workspace.", "subagent_type": "general"}}]},
+    {"text": "Child finished the check."},
+    {"text": "The child finished."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "request_contains": [{"request": 2, "contains": ["\"name\": \"agent\""]}],
+    "stdout_contains": ["The child finished."]
+  }
+}

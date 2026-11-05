@@ -1,0 +1,15 @@
+{
+  "description": "At the default subagent_depth of 1 a child is never offered the agent tool.",
+  "prompt": "Delegate the check to a child.",
+  "script": [
+    {"tool_calls": [{"name": "agent", "arguments": {"description": "Check", "prompt": "Check the workspace.", "subagent_type": "general"}}]},
+    {"text": "Child finished the check."},
+    {"text": "The child finished."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "request_contains": [{"request": 1, "contains": ["\"name\": \"agent\""]}, {"request": 2, "lacks": ["\"name\": \"agent\""]}],
+    "stdout_contains": ["The child finished."]
+  }
+}

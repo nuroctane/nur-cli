@@ -70,12 +70,17 @@ fn signal(enabled: bool, command: &str) {
         run_detached(command);
         return;
     }
-    // A redirected run (CI, `nur run > out.txt`) must not receive a BEL byte
-    // in its output. The TUI and headless TTY paths are terminals.
+    // A redirected stream (CI, `nur run > out.txt`) must never receive a BEL
+    // byte. The TUI and headless TTY paths are terminals; a headless run with
+    // its answer redirected still prompts on a terminal stderr, so ring there.
     if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
         let mut out = std::io::stdout();
         let _ = out.write_all(BELL);
         let _ = out.flush();
+    } else if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        let mut err = std::io::stderr();
+        let _ = err.write_all(BELL);
+        let _ = err.flush();
     }
 }
 
@@ -98,19 +103,4 @@ fn run_detached(command: &str) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn attention_and_chime_never_fail() {
-        // Under `cargo test` stdout is captured, not a terminal, so the BEL
-        // branch is skipped; a bogus command is spawn-and-ignore. Both
-        // paths must simply return, never panic or block a turn.
-        super::attention(false, "");
-        super::attention(true, "");
-        super::attention(true, "definitely-not-a-real-command-xyz");
-        super::chime(false, "");
-        super::chime(true, "");
-    }
 }

@@ -5143,20 +5143,23 @@ impl App {
                             return;
                         }
                     }
-                    // Clicking another subagent while a peek is open
-                    // re-targets the modal instead of dismissing it
-                    // (parity with right-click re-targeting). This also
-                    // keeps a double-click habit working now that a single
-                    // click opens the peek: the second click lands on the
-                    // same kid box and re-targets the same run instead of
-                    // closing the modal the first click just opened.
-                    if let Some(sh) = self.sidegraph_swarm_hit_at(m.column, m.row) {
-                        self.open_swarm_peek(sh.run_id);
-                        return;
-                    }
-                    if let Some(run_id) = self.swarm_pane_at_mouse(m.column, m.row) {
-                        self.open_swarm_peek(run_id);
-                        return;
+                    // Clicking another subagent outside the open peek re-targets
+                    // the modal instead of dismissing it (parity with right-click
+                    // re-targeting). A click inside the box, including its close
+                    // button, belongs to the modal even when a /swarm pane lies
+                    // underneath. On a /swarm card, where a single click opens the
+                    // peek, the second click of a double-click lands on the same
+                    // pane and re-targets the same run instead of closing it.
+                    let outside_peek = !rect_contains(self.peek_box, m.column, m.row);
+                    if outside_peek {
+                        if let Some(sh) = self.sidegraph_swarm_hit_at(m.column, m.row) {
+                            self.open_swarm_peek(sh.run_id);
+                            return;
+                        }
+                        if let Some(run_id) = self.swarm_pane_at_mouse(m.column, m.row) {
+                            self.open_swarm_peek(run_id);
+                            return;
+                        }
                     }
                     if peek_click_dismisses(self.peek_close, self.peek_box, m.column, m.row) {
                         self.close_peek();

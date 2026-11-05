@@ -21,18 +21,33 @@ VALID_VERDICTS = {"confirmed", "needs_validation", "rejected"}
 def validate(path):
     problems = []
     try:
-        data = json.load(open(path, encoding="utf-8"))
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         return [f"{path}: cannot read findings: {exc}"]
-    records = data if isinstance(data, list) else data.get("findings", [])
+    if isinstance(data, dict):
+        records = data.get("findings", [])
+    else:
+        records = data
+    if not isinstance(records, list):
+        return [f"{path}: findings must be a list of records"]
     if not records:
         return [f"{path}: no findings records"]
     seen = set()
     for i, rec in enumerate(records):
-        label = f"record {i} ({rec.get('id', '?')})"
-        if rec.get("id") in seen:
+        if not isinstance(rec, dict):
+            problems.append(f"record {i}: must be an object, not {type(rec).__name__}")
+            continue
+        record_id = rec.get("id")
+        label = f"record {i} ({record_id or '?'})"
+        if not record_id:
+            problems.append(f"{label}: missing id")
+        elif not isinstance(record_id, (str, int)):
+            problems.append(f"{label}: id must be a string or number")
+        elif record_id in seen:
             problems.append(f"{label}: duplicate id")
-        seen.add(rec.get("id"))
+        else:
+            seen.add(record_id)
         if not rec.get("title"):
             problems.append(f"{label}: missing title")
         if not rec.get("trace"):

@@ -331,7 +331,8 @@ pub fn ensure_lightpanda() -> ComponentStatus {
     match find_bin("lightpanda") {
         Some(bin) => {
             c.available = true;
-            c.version = super::cmd_version_pub(&bin, &["--version"]);
+            // Lightpanda has a `version` subcommand, not a `--version` flag (src/Config.zig).
+            c.version = super::cmd_version_pub(&bin, &["version"]);
             c.path = Some(bin);
             c.detail = "found (external, AGPL; clean-room browser via MCP/CDP/fetch; telemetry on by default)".into();
         }

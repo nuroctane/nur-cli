@@ -347,6 +347,11 @@ pub fn discard_streamed_tail(text: &mut String, discard: usize) {
 const TRANSPORT_BACKOFF_MS: &[u64] = &[250, 1_000, 2_000, 4_000, 8_000, 15_000];
 
 impl AgentRunner {
+    /// True while this run may spawn another level of subagents (`subagent_depth`).
+    fn may_delegate(&self) -> bool {
+        self.subagent_depth < self.config.subagent_depth.max(1)
+    }
+
     fn persist_session(&self, session: &Session) {
         if !self.is_subagent {
             let _ = session.save();
@@ -1182,6 +1187,15 @@ impl AgentRunner {
                 if self.interactive_children {
                     if let Some(question) = self.tools.full_tool_defs().into_iter().find(|tool| tool.name == "question") {
                         defs.push(question);
+                    }
+                }
+                // `subagent_depth` above 1 allows grandchildren: offer `agent` to a
+                // child only while it may still delegate, matching the dispatch guard.
+                // Not mode-dependent: the roster stays fixed for the cached prefix, and
+                // the Plan gate refuses `agent` the same way it does for the root.
+                if self.may_delegate() && !self.config.tools.is_core() {
+                    if let Some(agent) = self.tools.full_tool_defs().into_iter().find(|tool| tool.name == "agent") {
+                        defs.push(agent);
                     }
                 }
                 defs
@@ -2133,7 +2147,7 @@ impl AgentRunner {
             // wall time that made the model ask for several in the first
             // place. Approval is still collected up front, one prompt at a
             // time, so the user is never raced by parallel children.
-            if calls[idx].name == "agent" && self.subagent_depth < self.config.subagent_depth.max(1)
+            if calls[idx].name == "agent" && self.may_delegate()
             {
                 let mut batch_end = idx + 1;
                 while batch_end < calls.len() && calls[batch_end].name == "agent" {
@@ -2284,7 +2298,7 @@ impl AgentRunner {
                 // not dispatched. Reported as the tool's own output.
                 (reason.clone(), true)
             } else if call.name == "agent" {
-                if self.subagent_depth >= self.config.subagent_depth.max(1) {
+                if !self.may_delegate() {
                     (
                         format!(
                             "error: nested subagents are not allowed (depth {} >= max {}) - raise config.subagent_depth to allow deeper recursion",
@@ -3533,7 +3547,9 @@ impl AgentRunner {
                 PlanGate::Deny => return false,
                 PlanGate::Ask => {
                     // An explicit allow rule is the user's standing answer;
-                    // anything else asks once per action.
+                    // anything else asks once per action. A session "always" from
+                    // Manual does not apply here: Plan is a read-only contract
+                    // (including explore children) and must not skip an ask rule.
                     if self.permissions.decide(name, args) == Some(RuleDecision::Allow) {
                         return true;
                     }
@@ -3577,18 +3593,23 @@ impl AgentRunner {
             PermissionMode::Auto => true,
             PermissionMode::Plan => true, // handled above
             PermissionMode::Manual => {
-                if read_only {
+                if read_only || self.has_session_grant(name, args) {
                     return true;
-                }
-                if let Ok(set) = self.approved_tools.lock() {
-                    let keys = super::permissions::session_grant_keys(name, args);
-                    if keys.iter().all(|k| set.contains(k)) {
-                        return true;
-                    }
                 }
                 self.prompt_approval(name, args, tx, cancel).await
             }
         }
+    }
+
+    /// True when the user already answered "always" for this call (shared by the
+    /// parent and all of its children).
+    fn has_session_grant(&self, name: &str, args: &str) -> bool {
+        let keys = super::permissions::session_grant_keys(name, args);
+        !keys.is_empty()
+            && self
+                .approved_tools
+                .lock()
+                .is_ok_and(|set| keys.iter().all(|key| set.contains(key)))
     }
 
     async fn prompt_approval(
@@ -6766,6 +6787,10 @@ struct ChildSpawn {
     cwd: PathBuf,
     mode: SharedMode,
     domains: Arc<Mutex<HashSet<String>>>,
+    /// The parent's "always allow" grants and loaded permission rules (including
+    /// project trust): a child never asks again for what the user already allowed.
+    approved_tools: Arc<Mutex<HashSet<String>>>,
+    permissions: super::SharedPermissions,
     depth: u32,
     interactive_children: bool,
     /// The parent's session id, and the variables of its context store the
@@ -6848,6 +6873,8 @@ impl ChildSpawn {
             cwd: runner.cwd.clone(),
             mode: runner.permission_mode.clone(),
             domains: runner.approved_domains.clone(),
+            approved_tools: runner.approved_tools.clone(),
+            permissions: runner.permissions.clone(),
             depth: runner.subagent_depth,
             interactive_children: runner.interactive_children && !super::goal::load(parent_session).is_some_and(|goal| goal.status == super::goal::GoalStatus::Active),
             parent_session: parent_session.to_string(),
@@ -6962,6 +6989,8 @@ impl ChildSpawn {
                         cwd,
                         self.mode,
                         self.domains,
+                        self.approved_tools,
+                        self.permissions,
                         &prompt,
                         &kind,
                         self.depth,

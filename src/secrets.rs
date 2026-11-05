@@ -321,31 +321,27 @@ pub fn scrub(text: &str) -> String {
     out
 }
 
-/// The line the system prompt carries: secret names only when any are saved,
-/// and the request guidance always, so a model with no secrets saved yet
-/// still knows to ask through the masked modal instead of asking the user
-/// to paste a credential in chat.
-pub fn prompt_note() -> Option<String> {
+/// The line the system prompt carries: secret names only, when there are any.
+/// `can_request` is false for runs without the `secret` tool (the core profile
+/// and child runs), which report a missing credential instead.
+pub fn prompt_note(can_request: bool) -> Option<String> {
     let pairs = current();
     if pairs.is_empty() {
-        return Some(
-            "No secrets saved yet. When a task needs an API key, token, or password, call the \
-             `secret` tool (action list first, then action request with a name like GITHUB_TOKEN \
-             and a one-line purpose) instead of asking the user to paste it in chat. Never print, \
-             echo, or write a value into a file; use it by name ($NAME) in shell commands. If the \
-             user declines, continue without it or explain what it would unlock. Subagents cannot \
-             request secrets: a child that needs one must return the name and purpose so the \
-             parent can request it."
-                .into(),
-        );
+        return None;
     }
     let names: Vec<String> = pairs.iter().map(|(name, _)| format!("${name}")).collect();
     Some(format!(
         "Secrets the user saved for this machine, set as environment variables in every shell \
          command: {}. Use them by name (`$NAME`); never print, echo or write a value into a \
-         file. Output that contains one reads [secret:NAME]. To get a credential you do not \
-         have, call the `secret` tool (action request) instead of asking the user to paste it.",
-        names.join(", ")
+         file. Output that contains one reads [secret:NAME]. {}",
+        names.join(", "),
+        if can_request {
+            "To get a credential you do not have, call the `secret` tool (action request) \
+             instead of asking the user to paste it."
+        } else {
+            "To get a credential you do not have, report its name and purpose instead of \
+             asking the user to paste it."
+        }
     ))
 }
 

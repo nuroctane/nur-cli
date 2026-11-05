@@ -192,8 +192,8 @@ fn model_tuning(provider: &str, model: &str) -> Option<&'static str> {
 }
 
 /// Names of the user's saved secrets (never values), when there are any.
-fn push_secrets_note(prompt: &mut String) {
-    if let Some(note) = crate::secrets::prompt_note() {
+fn push_secrets_note(prompt: &mut String, can_request: bool) {
+    if let Some(note) = crate::secrets::prompt_note(can_request) {
         prompt.push_str("\n\n# Secrets\n");
         prompt.push_str(&note);
         prompt.push('\n');
@@ -408,7 +408,7 @@ impl PromptContext {
             activation_requirements,
             activation_path,
             named_providers,
-            // Subagents cannot delegate, so orchestration is the root's job.
+            // Orchestration across parallel subagents is the root's job.
             ultracode: !is_subagent
                 && !core
                 && crate::providers::canonical_effort(effort) == "ultracode",
@@ -508,9 +508,9 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
                  workspace. Read tool errors before changing approach.\n\n\
                  When a task needs 3+ read-only calls in a row, codemode can batch them into \
                  one round (read-only calls only; `tools.parallel` fans a batch out concurrently).\n\n\
-                 For memory across systems, use `mem` first; use `optmem`/`connectome` only when `mem` names a specific backend. You do not have the secret tool; if a credential is needed, do not ask the user to paste it in chat. Return the secret name and purpose needed so the parent can request it.
-
-                 Delegation tools are intentionally unavailable in child runs. Do not \
+                 For memory across systems, use `mem` first; use `optmem`/`connectome` only when `mem` names a specific backend. You do not have the secret tool; if a credential is needed, do not ask the user to paste it in chat. Return the secret name and purpose needed so the parent can request it.\n\n\
+                 Delegation is available only when the `agent` tool appears in your tool schema \
+                 (`subagent_depth` allows another level); otherwise do not try to delegate. Do not \
                  substitute another backend when a tool or provider fails. Return a clear \
                  failure with any useful partial findings so the parent can retry or recover.\n\n\
                  Finish with a concise report of findings, files touched, and checks run.\n",
@@ -524,7 +524,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
                 prompt.push_str(CODE_SHAPE);
             }
             prompt.push_str(&self.render_instructions(session_id));
-            push_secrets_note(&mut prompt);
+            push_secrets_note(&mut prompt, false);
             return RenderedPrompt {
                 system: prompt,
                 turn_state: String::new(),
@@ -543,11 +543,11 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
              - Mutating the repo via shell: git commit/push/add/reset/checkout/restore/stash/\n\
              merge/rebase/pull, and dependency installs (npm/pip/cargo/… install/add)."
         } else {
-            "Free (always-on in lean): read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look,\
-             git_status, git_diff, skill, memory(read), todo_write, submit_plan, codemode, tool_search,\
-             and bash for the read-only set above. Free after a `tool_search` load (lean) or in\
-             full profile: extract_frames, graphify(query|path|explain|status|report|affected),\
-             excalidraw(status|reference), plur(recall|status|…), ruflo(memory_search|status|…),\
+            "Free (always-on in lean): read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look,\n\
+             git_status, git_diff, skill, memory(read), todo_write, submit_plan, codemode, tool_search,\n\
+             and bash for the read-only set above. Free after a `tool_search` load (lean) or in\n\
+             full profile: extract_frames, graphify(query|path|explain|status|report|affected),\n\
+             excalidraw(status|reference), plur(recall|status|…), ruflo(memory_search|status|…),\n\
              executor(search|status), enclave(status|tools).\n\
              BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):\n\
              - Authoring code: write_file, edit_file, multi_edit, apply_patch, hashline_edit.\n\
@@ -678,6 +678,13 @@ Fan-out: one `agent` call per target provider; set `provider` on every call the 
 "#
             .to_string()
         };
+        // The core profile has no `secret` tool, so it gets no instructions to call one.
+        let secret_policy = if self.core_profile {
+            ""
+        } else {
+            "- secret: when a task needs an API key, token, or password, call secret(action=list) first, then secret(action=request, name, purpose). Never ask the user to paste a credential in chat, never print or write a value, use $NAME in shell. If the user declines, continue without it or explain what it would unlock.
+"
+        };
         let mut s = format!(
             r#"{role}
 
@@ -740,8 +747,7 @@ instead of polling it.{codemode_note}
   intent when the user enabled it (`[skills] auto_activate`). When a **SKILL ACTIVATED** item
   appears in the conversation, follow it for the turn.
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
-- secret: when a task needs an API key, token, or password, call secret(action=list) first, then secret(action=request, name, purpose). Never ask the user to paste a credential in chat, never print or write a value, use $NAME in shell. If the user declines, continue without it or explain what it would unlock.
-- submit_plan: formal plan artifact in plan mode
+{secret_policy}- submit_plan: formal plan artifact in plan mode
 - Prefer, in order: edit_file for one exact replacement, multi_edit for several replacements in one file, apply_patch for multi-hunk or multi-file changes, hashline_edit for line-number changes after a read, over full rewrites
 - hashline_edit: read_file heads every file with `[path#TAG]`; hashline_edit changes lines by those
   numbers (`PUT N.=M:` + `+` rows, `PUT >N:`, `CUT N.=M`) with the tag, so you never retype old
@@ -799,7 +805,7 @@ reflects the moment the request was sent; follow it over anything earlier.
         }
 
         s.push_str(&self.render_instructions(session_id));
-        push_secrets_note(&mut s);
+        push_secrets_note(&mut s, !self.core_profile);
         if let Some(tuning) = self.model_tuning {
             s.push_str(tuning);
         }

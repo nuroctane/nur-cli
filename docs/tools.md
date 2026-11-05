@@ -673,13 +673,15 @@ Cargo feature `codemode` (default on). E2E scenario 32.
 
 ### `agent`
 
-Spawn a subagent for complex tasks. `explore` runs read-only research; `general`
-inherits the parent permission mode. In the CLI, child approval requests are
+Spawn a subagent for complex tasks. `explore` runs read-only research outside
+Auto; `general` shares the parent permission mode. In the CLI, child approval requests are
 proxied to the parent prompt, and subagent transcripts stay out of the native
 session list while their usage is folded into the parent turn. Child prompts
 receive a focused core tool schema rather than the parent's full ecosystem
-catalog. Nested delegation and OMP are intentionally absent, so a failed child
-cannot recurse or silently substitute OMP. Partial output from a failed child is
+catalog. A child is offered the `agent` tool only while `subagent_depth` allows
+another level (the default of 1 means children cannot delegate); Plan mode
+refuses it as it does for the parent. OMP is not available, so a failed child cannot silently substitute
+it. Partial output from a failed child is
 preserved in the error but never marked successful.
 
 Pass `output_schema` as a JSON Schema object to request a JSON report. Nur
@@ -708,7 +710,13 @@ parent, except for the same standing exceptions (an explicit deny rule,
 an ask rule, a write inside `.git/`, a `secscan baseline`). Explore
 children are the exception outside Auto: they keep their own Plan mode,
 which enforces their read-only contract, so a later Auto toggle does
-not lift them.
+not lift them. An explore child spawned in Auto shares the parent mode
+instead, so it keeps following later mode switches.
+
+Children also share the parent's "always allow" approvals and its loaded
+permission rules, including project trust, so they never ask again for what
+the user already allowed. An "always" given to a child holds for the parent and
+its other children, and a child in a worktree keeps the trust of the project.
 
 **Economy children.** `cost_mode: "economy"` runs the child on a cheap model
 with low reasoning effort: `economy_model` from config when the child stays on
@@ -717,10 +725,11 @@ models.dev prices and does not mark as unable to call tools. Nothing external
 is launched; when no priced model is found the child stays on its model and the
 status line says so. An explicit `model` always wins.
 
-**Which model a child runs on.** There is no configured cheap-model pin:
-the choice is dictated in prose, in the `agent` call itself. The tool
-description tells the parent model to name a cheap model (or use
-`cost_mode: economy`) whenever the task does not need the strong model,
+**Which model a child runs on.** There is no subagent model pin in config:
+the choice is made in each `agent` call. The tool description tells the
+parent model to set `model` to a cheap model (or use `cost_mode: economy`,
+which uses `economy_model` when it is set) whenever the task does not need
+the strong model,
 and to keep planning, hard debugging, and large refactors on the strong
 one. Typesafe routing still hops an unrouted child to a cheaper model
 when it can price the hop.

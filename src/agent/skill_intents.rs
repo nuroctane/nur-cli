@@ -204,6 +204,20 @@ mod tests {
     }
 
     #[test]
+    fn bare_debug_word_does_not_route_to_the_debug_skill() {
+        let skills = shipped_skills();
+        // "debug" is a log level and a build profile; only explicit asks should load the skill.
+        for phrase in ["set the log level to debug", "run the debug build"] {
+            let found = find_by_expanded_triggers(&normalize_intent_text(phrase), &skills);
+            assert_ne!(found.map(|s| s.name.as_str()), Some("debug"), "{phrase}");
+        }
+        for phrase in ["/debug the login crash", "debug failing checkout test"] {
+            let found = find_by_expanded_triggers(&normalize_intent_text(phrase), &skills);
+            assert_eq!(found.map(|s| s.name.as_str()), Some("debug"), "{phrase}");
+        }
+    }
+
+    #[test]
     fn expanded_triggers_cover_fable() {
         let skills = shipped_skills();
         // Should find fable-method from expanded triggers
