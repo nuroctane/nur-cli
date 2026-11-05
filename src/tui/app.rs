@@ -5143,6 +5143,21 @@ impl App {
                             return;
                         }
                     }
+                    // Clicking another subagent while a peek is open
+                    // re-targets the modal instead of dismissing it
+                    // (parity with right-click re-targeting). This also
+                    // keeps a double-click habit working now that a single
+                    // click opens the peek: the second click lands on the
+                    // same kid box and re-targets the same run instead of
+                    // closing the modal the first click just opened.
+                    if let Some(sh) = self.sidegraph_swarm_hit_at(m.column, m.row) {
+                        self.open_swarm_peek(sh.run_id);
+                        return;
+                    }
+                    if let Some(run_id) = self.swarm_pane_at_mouse(m.column, m.row) {
+                        self.open_swarm_peek(run_id);
+                        return;
+                    }
                     if peek_click_dismisses(self.peek_close, self.peek_box, m.column, m.row) {
                         self.close_peek();
                     }
@@ -5452,6 +5467,22 @@ impl App {
                     self.click_transcript(col, row);
                 }
                 self.selecting = false;
+                // Single click on a sidegraph kid box opens that subagent's
+                // transcript modal. Previously only a double-click (or
+                // right-click) did, so a plain click on the graph did
+                // nothing. Guarded by "not a real pan" so dragging the
+                // canvas to pan still pans, and by drag_canvas so a click
+                // that started elsewhere does not open a peek it never
+                // aimed at. The double-click seed is cleared so the second
+                // click of an old double-click habit does not immediately
+                // dismiss the peek it just opened (re-targeting below
+                // keeps it open instead).
+                if self.sidegraph_drag_canvas && !self.sidegraph_drag_was_real_pan() {
+                    if let Some(sh) = self.sidegraph_swarm_hit_at(m.column, m.row) {
+                        self.sidegraph_last_click = None;
+                        self.open_swarm_peek(sh.run_id);
+                    }
+                }
                 if self.sidegraph_drag_was_real_pan() {
                     // Only a real pan kills the double-click seed - not a
                     // click that barely moved the cursor between Down and Up.
@@ -11215,6 +11246,18 @@ impl App {
                     return;
                 }
             }
+        }
+
+        // A single click on a `/swarm` card pane opens that subagent's
+        // transcript modal. Checked after URLs and paths (a link inside a
+        // pane still opens the link), before headers/chevrons. Previously a
+        // single click here did nothing and only a double-click opened the
+        // peek, so the child transcript was effectively hidden behind a
+        // gesture nobody discovers. Drag-select still wins: a real drag
+        // copies text and never reaches click_transcript.
+        if let Some(run_id) = self.swarm_pane_at_mouse(col, row) {
+            self.open_swarm_peek(run_id);
+            return;
         }
 
         let header = self.hit_headers.get(line_idx).copied().flatten();
