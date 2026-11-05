@@ -396,6 +396,20 @@ impl UsageTracker {
         let _ = self.write_status();
     }
 
+    #[cfg(test)]
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Price later turns on `model`/`provider`; writes status only on a change.
+    pub fn set_route(&mut self, model: &str, provider: &str) {
+        if self.model != model || self.provider != provider {
+            self.model = model.to_string();
+            self.provider = provider.to_string();
+            let _ = self.write_status();
+        }
+    }
+
     pub fn set_cwd(&mut self, cwd: PathBuf) {
         self.cwd = cwd;
         let _ = self.write_status();

@@ -150,6 +150,8 @@ pub async fn run_subagent(
         &cfg.provider,
         &cfg.model,
     );
+    // The parent aborts this future on Esc; the run must not stay Running.
+    let _finish_on_drop = swarm::FinishOnDrop(run_id);
 
     let mut last_text = String::new();
     while let Some(ev) = rx.recv().await {

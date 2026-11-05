@@ -174,6 +174,10 @@ impl App {
     fn fire_resume(&mut self) {
         let when = resume::clock(resume::now_secs());
         self.settle_resume(&format!("continued at {when}"));
+        // Settling lifted this card's hold; anything else still holds.
+        if !self.may_start_unattended() {
+            return;
+        }
         // A message queued while waiting is what the user wants next.
         if let Some(next) = self.queue.pop_front() {
             if let Some(index) = self

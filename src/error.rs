@@ -262,6 +262,16 @@ pub fn error_chain(error: &dyn std::error::Error) -> String {
     out
 }
 
+/// The message a caught panic carried (`panic!("...")` payloads are `&str` or
+/// `String`), for reporting a crashed task as an error instead of hanging.
+pub fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".into())
+}
+
 pub type Result<T> = std::result::Result<T, NurError>;
 
 #[cfg(test)]

@@ -922,6 +922,29 @@ pub fn heartbeat(cwd: &str, session_id: &str, state: Option<PeerState>) -> Strin
     id
 }
 
+/// A session is Working while this lives and Idle once it drops, so every exit
+/// from a turn (answer, error, cancel, panic) settles its presence.
+pub struct WorkingPresence {
+    cwd: String,
+    session_id: String,
+}
+
+impl WorkingPresence {
+    pub fn begin(cwd: &str, session_id: &str) -> Self {
+        register_session(cwd, session_id, None, PeerState::Working);
+        Self {
+            cwd: cwd.to_string(),
+            session_id: session_id.to_string(),
+        }
+    }
+}
+
+impl Drop for WorkingPresence {
+    fn drop(&mut self) {
+        heartbeat(&self.cwd, &self.session_id, Some(PeerState::Idle));
+    }
+}
+
 // ===========================================================================
 // Compatibility layer for existing callers (message tool + memory router)
 // ===========================================================================
@@ -2097,6 +2120,44 @@ mod tests {
         )
         .unwrap();
         assert!(drain_inbound_for_prompt().is_empty());
+
+        clear_home();
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// Failure mode: presence went Working at turn start but back to Idle only
+    /// on a clean answer, so a failed or crashed turn left peers seeing this
+    /// session busy forever.
+    #[test]
+    fn presence_returns_to_idle_when_a_turn_fails_or_panics() {
+        let _g = env_guard();
+        let home = tmp_home();
+        set_home(&home);
+        let dir = peers_dir();
+        let state = |id: &str| read_record(&dir, id).map(|r| r.state);
+
+        fn failing_turn(cwd: &str, sid: &str, seen: &mut Option<PeerState>) -> Result<(), String> {
+            let _presence = WorkingPresence::begin(cwd, sid);
+            *seen = read_record(&peers_dir(), &mailbox_id(cwd, sid)).map(|r| r.state);
+            Err("provider rejected the request".into())
+        }
+        let mut during = None;
+        assert!(failing_turn("/w", "failed-turn", &mut during).is_err());
+        assert_eq!(during, Some(PeerState::Working));
+        assert_eq!(
+            state(&mailbox_id("/w", "failed-turn")),
+            Some(PeerState::Idle)
+        );
+
+        let crashed = std::panic::catch_unwind(|| {
+            let _presence = WorkingPresence::begin("/w", "crashed-turn");
+            panic!("tool panicked");
+        });
+        assert!(crashed.is_err());
+        assert_eq!(
+            state(&mailbox_id("/w", "crashed-turn")),
+            Some(PeerState::Idle)
+        );
 
         clear_home();
         let _ = std::fs::remove_dir_all(&home);

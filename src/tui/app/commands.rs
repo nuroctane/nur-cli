@@ -1429,7 +1429,7 @@ impl App {
         );
     }
 
-    fn cmd_new(&mut self) {
+    pub(super) fn cmd_new(&mut self) {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         if self.busy {
             self.push_error("wait for the current turn to finish".into());
@@ -1444,8 +1444,7 @@ impl App {
             &self.cfg.provider,
             &self.cwd.display().to_string(),
         );
-        self.session_id = session.id.clone();
-        self.swarm_autoshow_seen_id = 0;
+        self.enter_session(&session.id);
         self.reset_transcript_interaction();
         let mut usage =
             UsageTracker::new(session.id.clone(), self.cfg.model.clone(), self.cwd.clone());
@@ -2752,8 +2751,7 @@ impl App {
                 };
                 loaded.cwd = self.cwd.display().to_string();
                 self.discard_pending_requests();
-                self.session_id = loaded.id.clone();
-                self.swarm_autoshow_seen_id = 0;
+                self.enter_session(&loaded.id);
                 self.reset_transcript_interaction();
                 let mut tracker =
                     UsageTracker::new(loaded.id.clone(), self.cfg.model.clone(), self.cwd.clone());
@@ -3051,6 +3049,9 @@ impl App {
                 false
             }
             GoalTurnEnd::Continue => {
+                if !self.may_start_unattended() {
+                    return false;
+                }
                 let used = max - auto_left + 1;
                 let did_work = !self.tool_cells.is_empty();
                 self.push_note(
@@ -3063,6 +3064,11 @@ impl App {
                 let prompt = goal_continuation_prompt(&goal_text, did_work, used, max);
                 let display = format!("goal · continue ({used}/{max})");
                 self.start_turn_labeled(&display, &prompt);
+                // Signed out (say after /logout): no turn started, so the
+                // goal is not continuing and the idle turn stays a chat.
+                if !self.busy {
+                    return false;
+                }
                 self.turn_kind = TurnMode::Goal {
                     auto_left: auto_left - 1,
                 };
@@ -3100,9 +3106,11 @@ impl App {
             self.start_turn_labeled(&display, &model_prompt);
             // Mark the turn goal-driven so the harness auto-continues it while
             // the tracked goal stays active (Esc / /goal clear|pause stops it).
-            self.turn_kind = TurnMode::Goal {
-                auto_left: agent::goal::MAX_GOAL_AUTO_CONTINUES,
-            };
+            if self.busy {
+                self.turn_kind = TurnMode::Goal {
+                    auto_left: agent::goal::MAX_GOAL_AUTO_CONTINUES,
+                };
+            }
         }
     }
 
@@ -3154,7 +3162,7 @@ impl App {
         self.push_note(Tone::Plan, msg);
     }
 
-    fn cmd_goal_persistent_set(&mut self, text: &str) {
+    pub(super) fn cmd_goal_persistent_set(&mut self, text: &str) {
         let Some(scope) = self.gen_session_scope() else {
             return;
         };

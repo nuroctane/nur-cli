@@ -86,7 +86,7 @@ impl App {
             return true;
         }
         if Instant::now() < job.next
-            || self.busy
+            || !self.may_start_unattended()
             || self.startup_pending()
             || !self.authed
             || self.session.is_none()

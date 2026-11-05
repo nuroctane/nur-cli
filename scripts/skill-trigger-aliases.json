@@ -61,5 +61,15 @@
     "noul question",
     "score question",
     "choice question"
+  ],
+  "implicit-state-machines": [
+    "/implicit-state-machines",
+    "implicit state machines",
+    "implicit state machine",
+    "hidden state machines",
+    "find all of the implicit state machines",
+    "find the implicit state machines",
+    "audit the state machines",
+    "audit lifecycle states"
   ]
 }

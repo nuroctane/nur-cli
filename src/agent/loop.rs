@@ -228,18 +228,53 @@ pub struct AgentRunner {
 
 pub fn spawn_turn(
     runner: Arc<AgentRunner>,
-    mut session: Session,
-    mut usage: UsageTracker,
+    session: Session,
+    usage: UsageTracker,
     prompt: String,
     tx: mpsc::UnboundedSender<AgentEvent>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
+    let save = !runner.is_subagent;
+    let events = tx.clone();
+    spawn_guarded_turn(session, usage, tx, save, move |session, usage| {
+        Box::pin(async move {
+            runner
+                .run_turn_events(session, &prompt, usage, &events, &cancel)
+                .await
+        })
+    })
+}
+
+type TurnFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>>;
+
+/// Run `turn` on a task and always finish with [`AgentEvent::Done`]. A panic
+/// inside the turn becomes an error result: the session and usage live out
+/// here, so they still go back to the caller (TUI, ACP slot, gateway, parent
+/// agent), which would otherwise wait for a `Done` that never comes.
+fn spawn_guarded_turn<F>(
+    mut session: Session,
+    mut usage: UsageTracker,
+    tx: mpsc::UnboundedSender<AgentEvent>,
+    save: bool,
+    turn: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: for<'a> FnOnce(&'a mut Session, &'a mut UsageTracker) -> TurnFuture<'a> + Send + 'static,
+{
+    use futures_util::FutureExt;
     tokio::spawn(async move {
-        let res = runner
-            .run_turn_events(&mut session, &prompt, &mut usage, &tx, &cancel)
-            .await;
+        let res = std::panic::AssertUnwindSafe(turn(&mut session, &mut usage))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|payload| {
+                Err(NurError::Other(format!(
+                    "internal error: the turn crashed ({})",
+                    crate::error::panic_text(&*payload)
+                )))
+            });
         usage.set_state("idle");
-        if !runner.is_subagent {
+        if save {
             let _ = session.save();
         }
         let interrupted = matches!(res, Err(NurError::Interrupted));
@@ -781,18 +816,16 @@ impl AgentRunner {
         // by other sessions and mark it working for the turn. Best-effort and
         // non-fatal - a registry we cannot write is a discovery problem only.
         let mut peer_mail = String::new();
+        // Settles back to Idle however the turn ends (answer, error, cancel,
+        // panic), so peers never see this session wedged in Working.
+        let mut _presence = None;
         if !self.is_subagent {
             let sid = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| session.id.clone());
             let cwd = self.cwd.to_string_lossy().into_owned();
             // Persistent watch lives across turns and drains within the sender's
             // 1.5s receipt window. Re-assert Working after watch registration.
             crate::agent::mailbox::ensure_live_watch(&cwd, &sid);
-            crate::agent::mailbox::register_session(
-                &cwd,
-                &sid,
-                None,
-                crate::agent::mailbox::PeerState::Working,
-            );
+            _presence = Some(crate::agent::mailbox::WorkingPresence::begin(&cwd, &sid));
             // Existing queued mail may race the just-started watcher: combine a
             // direct turn-start drain with anything the watcher already queued.
             // Policy `ask` letters are held for a user decision right here;
@@ -1903,17 +1936,6 @@ impl AgentRunner {
 
                 usage.set_state("idle");
                 session.push_assistant(&text);
-                // Settle back to idle so peers see this session as idle (not wedged).
-                if !self.is_subagent {
-                    let sid =
-                        std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| session.id.clone());
-                    let cwd = self.cwd.to_string_lossy().into_owned();
-                    crate::agent::mailbox::heartbeat(
-                        &cwd,
-                        &sid,
-                        Some(crate::agent::mailbox::PeerState::Idle),
-                    );
-                }
                 self.persist_session(session);
                 return Ok(text);
             }
@@ -4133,6 +4155,53 @@ mod tests {
             prewalk_override: Arc::new(Mutex::new(None)),
             approved_domains: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Failure mode: a panic inside the turn task skipped `Done`, so the TUI
+    /// stayed busy with no session and an ACP slot stayed empty for good.
+    #[tokio::test]
+    async fn a_panicking_turn_still_ends_with_done_and_its_session() {
+        if crate::agent::admission::isolated_test(
+            "agent::r#loop::tests::a_panicking_turn_still_ends_with_done_and_its_session",
+        ) {
+            return;
+        }
+        let session = Session::new_for_provider("fixture", "vllm", "/w");
+        let id = session.id.clone();
+        let usage = UsageTracker::scoped(id.clone(), "fixture".into(), PathBuf::from("/w"));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let handle = spawn_guarded_turn(session, usage, tx, false, |session, _usage| {
+            Box::pin(async move {
+                session.push_assistant("partial work before the crash");
+                tokio::task::yield_now().await;
+                panic!("tool index out of range");
+            })
+        });
+        handle.await.expect("the task itself must not die");
+        let mut done = None;
+        while let Ok(event) = rx.try_recv() {
+            if let AgentEvent::Done {
+                session,
+                result,
+                interrupted,
+                ..
+            } = event
+            {
+                done = Some((session, result, interrupted));
+            }
+        }
+        let (session, result, interrupted) = done.expect("a crashed turn still sends Done");
+        assert_eq!(session.id, id);
+        assert!(
+            session
+                .messages
+                .iter()
+                .any(|m| m.content == "partial work before the crash"),
+            "the session handed back is the one the turn was working on"
+        );
+        let error = result.unwrap_err();
+        assert!(error.contains("tool index out of range"), "{error}");
+        assert!(!interrupted);
     }
 
     #[tokio::test]

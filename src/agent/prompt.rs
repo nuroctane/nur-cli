@@ -214,6 +214,9 @@ unless asked or it bears on the task.
 - Duplication: search for an existing helper before writing one; extend it rather than copy it.
 - Illegal states: model data so invalid combinations cannot be built (enums over flag pairs,
   newtypes over raw strings).
+- Implicit state machines: when a lifecycle or mode would span several flags, Options or status
+  strings, make it one state type and route every transition through one function that rejects
+  invalid source states. To audit existing ones, use skill(read, name=implicit-state-machines).
 - God files: put new code that is a separate responsibility in its own file; do not split
   existing files unless asked.
 - Shotgun surgery: if one change needs edits in many unrelated places, say which abstraction is

@@ -4076,8 +4076,7 @@ impl App {
         truncate_session_before_prompt(&mut forked, from_end);
         let _ = forked.save();
 
-        self.session_id = forked.id.clone();
-        self.swarm_autoshow_seen_id = 0;
+        self.enter_session(&forked.id);
         self.u_session = forked.usage.clone();
         self.u_last = TokenUsage::default();
         let mut usage =
@@ -4103,6 +4102,42 @@ impl App {
                 &self.session_id[..8.min(self.session_id.len())]
             ),
         );
+    }
+
+    /// Every session switch (`/new`, `/resume`, fork) goes through here: point
+    /// what is keyed on the current session at `id` and drop what belonged to
+    /// the previous one. `NUR_SESSION_ID` is what the goal store, the goal
+    /// tool and mailbox registration read, so it must follow the switch.
+    fn enter_session(&mut self, id: &str) {
+        self.settle_resume("session switched");
+        self.session_id = id.to_string();
+        std::env::set_var("NUR_SESSION_ID", id);
+        self.swarm_autoshow_seen_id = 0;
+        self.session_goal = None;
+        self.resume_kind = TurnMode::Chat;
+        self.resume_attempts = 0;
+        self.pending_subagent_login = None;
+        self.pending_fusion_login = None;
+    }
+
+    /// The session continues on the configured route. A `/model` pick or a
+    /// provider reconnect made while a turn held the session lands when the
+    /// turn hands it back, or the next turn is priced on the old model.
+    fn adopt_selection_into_session(&mut self) {
+        if let Some(s) = self.session.as_mut() {
+            s.model.clone_from(&self.cfg.model);
+            s.provider.clone_from(&self.cfg.provider);
+        }
+        if let Some(u) = self.usage.as_mut() {
+            u.set_route(&self.cfg.model, &self.cfg.provider);
+        }
+    }
+
+    /// Whether a turn nobody just typed (a queued prompt, a `/loop` tick, a
+    /// goal continuation, an auto-resume) may start: not while a turn runs,
+    /// and not while an armed resume card holds unattended work for a limit.
+    pub(super) fn may_start_unattended(&self) -> bool {
+        !self.busy && !self.resume_holds_queue()
     }
 
     /// Clear transient transcript interaction state after cells change.
@@ -6711,6 +6746,10 @@ impl App {
     fn close_login_cancelled(&mut self) {
         self.cancel_oauth();
         self.login = None;
+        // A request held for this login is abandoned with it; a later
+        // sign-in must not replay it.
+        self.pending_subagent_login = None;
+        self.pending_fusion_login = None;
     }
 
     fn open_login(&mut self) {
@@ -10958,6 +10997,7 @@ impl App {
                 self.session_id = session.id.clone();
                 self.session = Some(session);
                 self.usage = Some(usage);
+                self.adopt_selection_into_session();
                 self.save_session_with_ui_log();
                 self.busy = false;
                 self.cancelling = false;
@@ -11045,7 +11085,7 @@ impl App {
                 if interrupted && !self.preserve_queue_on_interrupt {
                     self.queue.clear();
                     self.remove_cells_matching(|c| matches!(c, Cell::Queued { .. }));
-                } else if self.resume_holds_queue() {
+                } else if !self.may_start_unattended() {
                     // Queued prompts wait for the limit too, then go first.
                     self.preserve_queue_on_interrupt = false;
                 } else if let Some(next) = self.queue.pop_front() {

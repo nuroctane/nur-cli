@@ -487,7 +487,7 @@ impl App {
                 });
             }
         }
-        if !self.busy
+        if self.may_start_unattended()
             && self.startup.account_pending == 0
             && self.login.is_none()
             && self.theme_picker.is_none()
@@ -636,6 +636,194 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An idle, prepared, signed-in TUI on a throwaway workspace. Callers run
+    /// in `admission::isolated_test`, so session, goal and config writes land
+    /// in a temp `NUR_HOME`.
+    fn prepared_app(workspace: &std::path::Path) -> App {
+        std::env::set_var("NUR_PRICING_OFF", "1");
+        let cfg = Config {
+            provider: "vllm".into(),
+            model: "old-model".into(),
+            base_url: "http://127.0.0.1:1/v1".into(),
+            auto_update: false,
+            ecosystem_auto_ensure: false,
+            ..Config::default()
+        };
+        let cwd = workspace.to_path_buf();
+        let session =
+            Session::new_for_provider(&cfg.model, &cfg.provider, &cwd.display().to_string());
+        std::env::set_var("NUR_SESSION_ID", &session.id);
+        let usage = UsageTracker::new(session.id.clone(), cfg.model.clone(), cwd.clone());
+        let client = ApiClient::new("http://127.0.0.1:1", "test-only").unwrap();
+        let mut app = new_app(
+            client,
+            cfg,
+            cwd,
+            SharedMode::new(PermissionMode::Auto),
+            session,
+            usage,
+        );
+        app.authed = true;
+        app.startup.provider_ready = true;
+        app.startup.skills_ready = true;
+        app.startup.announced_ready = true;
+        app.startup.maintenance_started = true;
+        app
+    }
+
+    fn done(session: Box<Session>, usage: Box<UsageTracker>) -> AgentEvent {
+        AgentEvent::Done {
+            session,
+            usage,
+            result: Ok("answer".into()),
+            interrupted: false,
+            exit_code: 0,
+        }
+    }
+
+    /// Failure mode: a queued prompt, a `/loop` tick or a goal continuation
+    /// started a turn while an armed usage-limit card was holding work back.
+    #[test]
+    fn unattended_turns_wait_for_an_armed_resume_card() {
+        if agent::admission::isolated_test(
+            "tui::app::startup::tests::unattended_turns_wait_for_an_armed_resume_card",
+        ) {
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _rt = runtime.enter();
+        let mut app = prepared_app(workspace.path());
+        app.auto_continue = true;
+        assert!(app.offer_resume("API error (429): usage limit reached", TurnMode::Chat));
+        assert!(app.resume_holds_queue());
+
+        let queued = QueuedPrompt::new("queued while waiting".into(), &app.session_id, &app.cwd);
+        app.queue.push_back(queued);
+        app.poll_startup();
+        assert!(!app.busy, "queue drain started a turn under the hold");
+        assert_eq!(app.queue.len(), 1);
+
+        let queued = app.queue.pop_front().unwrap();
+        app.cmd_loop("1s check the fixture");
+        std::thread::sleep(Duration::from_millis(1100));
+        app.poll_recurring();
+        assert!(!app.busy, "/loop started a turn under the hold");
+
+        agent::goal::set(&app.session_id, "ship the fix", None).unwrap();
+        assert!(!app.maybe_goal_continue(3), "goal continued under the hold");
+        assert!(!app.busy);
+
+        // The hold is the only thing stopping them: switched off, the queued
+        // prompt goes.
+        app.recurring = None;
+        app.queue.push_back(queued);
+        app.cmd_autocontinue("off");
+        app.poll_startup();
+        assert!(
+            app.busy,
+            "the queued prompt should run once nothing holds it"
+        );
+    }
+
+    /// Failure mode: a goal continuation that could not start (signed out)
+    /// still reported continuing and left the idle turn marked as a goal run.
+    #[test]
+    fn a_goal_continuation_that_cannot_start_is_not_continuing() {
+        if agent::admission::isolated_test(
+            "tui::app::startup::tests::a_goal_continuation_that_cannot_start_is_not_continuing",
+        ) {
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let mut app = prepared_app(workspace.path());
+        agent::goal::set(&app.session_id, "ship the fix", None).unwrap();
+        app.authed = false;
+        assert!(!app.maybe_goal_continue(3));
+        assert!(!app.busy);
+        assert!(matches!(app.turn_kind, TurnMode::Chat));
+    }
+
+    /// Failure mode: `/model` during a turn changed the config, then `Done`
+    /// put back the session and tracker still naming the old model, so the
+    /// next turn was priced on it.
+    #[test]
+    fn a_model_picked_mid_turn_lands_on_the_returned_session() {
+        if agent::admission::isolated_test(
+            "tui::app::startup::tests::a_model_picked_mid_turn_lands_on_the_returned_session",
+        ) {
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let mut app = prepared_app(workspace.path());
+        // What `start_turn_labeled` does: the running turn owns both.
+        let (session, usage) = (app.session.take().unwrap(), app.usage.take().unwrap());
+        app.busy = true;
+        app.apply_model_selection("new-model");
+        app.on_agent_event(done(session, usage));
+        assert_eq!(app.cfg.model, "new-model");
+        assert_eq!(app.session.as_ref().unwrap().model, "new-model");
+        assert_eq!(app.usage.as_ref().unwrap().model(), "new-model");
+    }
+
+    /// Failure modes: after `/new` or `/resume`, `/goal` still stored the goal
+    /// under the startup session (`NUR_SESSION_ID` never moved), and the old
+    /// session's standing goal, resume state and held logins carried over.
+    #[test]
+    fn switching_sessions_moves_the_goal_store_and_drops_old_session_state() {
+        if agent::admission::isolated_test(
+            "tui::app::startup::tests::switching_sessions_moves_the_goal_store_and_drops_old_session_state",
+        ) {
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let mut app = prepared_app(workspace.path());
+        let first = app.session_id.clone();
+        let stale = |app: &mut App| {
+            app.session_goal = Some("old standing goal".into());
+            app.resume_attempts = 2;
+            app.pending_subagent_login = Some(PendingSubagentLogin {
+                provider_id: "deepseek".into(),
+                ..Default::default()
+            });
+            app.pending_fusion_login = Some(PendingFusionLogin::default());
+        };
+        let cleared = |app: &App| {
+            app.session_goal.is_none()
+                && app.resume_attempts == 0
+                && app.pending_subagent_login.is_none()
+                && app.pending_fusion_login.is_none()
+        };
+
+        stale(&mut app);
+        app.cmd_new();
+        let second = app.session_id.clone();
+        assert_ne!(second, first);
+        assert_eq!(std::env::var("NUR_SESSION_ID").unwrap(), second);
+        assert!(cleared(&app), "/new kept the previous session's state");
+        app.cmd_goal_persistent_set("goal for the second session");
+        assert!(agent::goal::load(&second).is_some());
+        assert!(
+            agent::goal::load(&first).is_none(),
+            "goal stored under the old session"
+        );
+
+        stale(&mut app);
+        app.cmd_resume(&first);
+        assert_eq!(app.session_id, first);
+        assert_eq!(std::env::var("NUR_SESSION_ID").unwrap(), first);
+        assert!(cleared(&app), "/resume kept the previous session's state");
+
+        // Backing out of the login a held request opened abandons it.
+        stale(&mut app);
+        app.close_login_cancelled();
+        assert!(app.pending_subagent_login.is_none());
+        assert!(app.pending_fusion_login.is_none());
+    }
 
     // A reconnect long after launch must be timed from its own start: the
     // busy line used to show the age of the previous turn.

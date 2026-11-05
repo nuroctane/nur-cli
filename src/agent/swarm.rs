@@ -371,6 +371,27 @@ pub fn finish(id: u64, state: RunState, tokens: u64) {
     prune(&mut guard);
 }
 
+/// Closes a run as cancelled if it is dropped while still running: a parent
+/// that aborts its child tasks (Esc) drops `run_subagent` before it reaches
+/// [`finish`], which left the run showing as running forever. A run that
+/// already finished keeps its state.
+pub struct FinishOnDrop(pub u64);
+
+impl Drop for FinishOnDrop {
+    fn drop(&mut self) {
+        let running = table()
+            .lock()
+            .map(|runs| {
+                runs.iter()
+                    .any(|r| r.id == self.0 && r.state == RunState::Running)
+            })
+            .unwrap_or(false);
+        if running {
+            finish(self.0, RunState::Cancelled, 0);
+        }
+    }
+}
+
 /// Drop finished runs beyond [`HISTORY_CAP`], oldest first. Running entries are
 /// never evicted.
 fn prune(runs: &mut Vec<AgentRun>) {
@@ -529,6 +550,45 @@ mod tests {
 
     fn lock() -> std::sync::MutexGuard<'static, ()> {
         test_lock()
+    }
+
+    /// Failure modes: a child task aborted by its parent (Esc) never reached
+    /// `finish` and stayed Running; or the guard overwrote a run that had
+    /// already reported.
+    #[test]
+    fn an_aborted_child_run_ends_cancelled_and_a_finished_one_keeps_its_state() {
+        let _g = lock();
+        reset();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let aborted = runtime.block_on(async {
+            let (started_tx, started) = tokio::sync::oneshot::channel();
+            let child = tokio::spawn(async move {
+                let id = begin("general", "slow child");
+                let _finish = FinishOnDrop(id);
+                let _ = started_tx.send(id);
+                std::future::pending::<()>().await;
+            });
+            let id = started.await.unwrap();
+            child.abort();
+            assert!(child.await.unwrap_err().is_cancelled());
+            id
+        });
+
+        let reported = begin("general", "quick child");
+        {
+            let _finish = FinishOnDrop(reported);
+            finish(reported, RunState::Done, 7);
+        }
+        let runs = snapshot();
+        let state = |id| {
+            runs.iter()
+                .find(|r| r.id == id)
+                .map(|r| (r.state, r.tokens))
+        };
+        assert_eq!(state(aborted), Some((RunState::Cancelled, 0)));
+        assert_eq!(state(reported), Some((RunState::Done, 7)));
     }
 
     #[test]

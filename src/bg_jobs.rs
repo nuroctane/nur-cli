@@ -191,7 +191,16 @@ where
         .name(format!("nur-bg-{id}"))
         .spawn(move || {
             let started = Instant::now();
-            let outcome = work(cancel_worker.clone());
+            // A panicking job is a failed job, not one left running forever.
+            let worker_cancel = cancel_worker.clone();
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(worker_cancel)))
+                    .unwrap_or_else(|payload| {
+                        Err(format!(
+                            "job crashed: {}",
+                            crate::error::panic_text(&*payload)
+                        ))
+                    });
             let cancelled = cancel_worker.load(std::sync::atomic::Ordering::SeqCst);
             finish(id, &label, &kind, outcome, started.elapsed(), cancelled);
         });
@@ -289,6 +298,20 @@ pub fn spawn_command(label: &str, program: &str, args: &[String]) -> u64 {
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
         let mut child = cmd.spawn().map_err(|e| format!("spawn {program}: {e}"))?;
+        // Drain both pipes while waiting: a child that writes more than the
+        // OS pipe buffer (~64 KiB) blocks on write until someone reads, so
+        // polling `try_wait` alone never saw it exit.
+        fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> thread::JoinHandle<String> {
+            thread::spawn(move || {
+                let mut bytes = Vec::new();
+                if let Some(mut pipe) = pipe {
+                    let _ = pipe.read_to_end(&mut bytes);
+                }
+                String::from_utf8_lossy(&bytes).into_owned()
+            })
+        }
+        let stdout = drain(child.stdout.take());
+        let stderr = drain(child.stderr.take());
         // Poll until exit or cancel.
         loop {
             if cancel.load(std::sync::atomic::Ordering::SeqCst) {
@@ -297,15 +320,8 @@ pub fn spawn_command(label: &str, program: &str, args: &[String]) -> u64 {
             }
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let out = child.wait_with_output().ok();
-                    let stdout = out
-                        .as_ref()
-                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                        .unwrap_or_default();
-                    let stderr = out
-                        .as_ref()
-                        .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
-                        .unwrap_or_default();
+                    let stdout = stdout.join().unwrap_or_default();
+                    let stderr = stderr.join().unwrap_or_default();
                     if status.success() {
                         return Ok(format!("ok · {program}\n{stdout}{stderr}"));
                     }
@@ -675,6 +691,56 @@ mod tests {
             report()
         );
         assert!(completion_note().is_none(), "reported exactly once");
+    }
+
+    // Failure mode: stdout/stderr were piped but only read after exit, so a
+    // command printing more than the pipe buffer blocked on write forever.
+    #[test]
+    fn a_command_printing_past_the_pipe_buffer_completes() {
+        if !in_throwaway_home("bg_jobs::tests::a_command_printing_past_the_pipe_buffer_completes") {
+            return;
+        }
+        let line = "0123456789".repeat(9);
+        #[cfg(windows)]
+        let (program, script) = ("cmd", format!("for /L %i in (1,1,2000) do @echo {line}"));
+        #[cfg(not(windows))]
+        let (program, script) = (
+            "sh",
+            format!("i=0; while [ $i -lt 2000 ]; do echo {line}; i=$((i+1)); done"),
+        );
+        #[cfg(windows)]
+        let args: Vec<String> = ["/C".to_string()]
+            .into_iter()
+            .chain(script.split(' ').map(str::to_string))
+            .collect();
+        #[cfg(not(windows))]
+        let args = vec!["-c".to_string(), script];
+        let id = spawn_command("flood", program, &args);
+        let j = wait_done(id);
+        assert_eq!(j.state, JobState::Completed, "{:?}", j.error);
+        let r = result(id).unwrap();
+        assert_eq!(r.matches(line.as_str()).count(), 2000);
+        assert!(
+            r.len() > 128 * 1024,
+            "fixture must exceed the pipe buffer: {}",
+            r.len()
+        );
+    }
+
+    // Failure mode: a panic in the job's work killed the worker thread before
+    // `finish`, so the job showed as running forever.
+    #[test]
+    fn a_panicking_job_is_reported_failed() {
+        if !in_throwaway_home("bg_jobs::tests::a_panicking_job_is_reported_failed") {
+            return;
+        }
+        let id = spawn("crashy", "shell", |_c| panic!("index out of range"));
+        let j = wait_done(id);
+        assert_eq!(j.state, JobState::Failed);
+        assert!(j.error.unwrap().contains("index out of range"));
+        assert!(completion_note()
+            .unwrap()
+            .contains(&format!("#{id} FAILED · crashy")));
     }
 
     // Failure mode: TUI-side jobs (heartbeat, installs) announce themselves

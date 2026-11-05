@@ -204,6 +204,23 @@ mod tests {
     }
 
     #[test]
+    fn implicit_state_machine_requests_route_to_the_audit_skill() {
+        let skills = shipped_skills();
+        for phrase in [
+            "find all of the implicit state machines in my app",
+            "/implicit-state-machines",
+            "are there hidden state machines in the tui?",
+        ] {
+            let found = find_by_expanded_triggers(&normalize_intent_text(phrase), &skills);
+            assert_eq!(
+                found.map(|s| s.name.as_str()),
+                Some("implicit-state-machines"),
+                "{phrase}"
+            );
+        }
+    }
+
+    #[test]
     fn bare_debug_word_does_not_route_to_the_debug_skill() {
         let skills = shipped_skills();
         // "debug" is a log level and a build profile; only explicit asks should load the skill.
