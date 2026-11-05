@@ -647,6 +647,15 @@ impl Tool for AgentStub {
          `context` variables (a spilled tool result, a registered doc) in \
          `context_vars` and the child can read exactly those, read-only, on any \
          provider. Nothing else in your store is shared. \
+         \n\nCOST: a child runs on your model unless you say otherwise, and it \
+         pays your model's prices for every token it reads and writes. Say in \
+         plain words which cheap model it should run on, or use \
+         `cost_mode: economy` for mechanical or bulk work, whenever the task \
+         does not need the strong model: research, searches, test runs, log \
+         reading, and repetitive checks belong on a cheap model. Keep planning, \
+         hard debugging, and large refactors on the strong model. There is no \
+         configured cheap model to fall back on; the choice is yours, in the \
+         call, every time. \
          \n\nCROSS-PROVIDER DEPLOYMENT: set `provider` to run this subagent on a \
          DIFFERENT model provider than yours - this is how you 'deploy a subagent \
          on gemini', 'use grok', 'spawn a claude subagent', etc. When the user's \

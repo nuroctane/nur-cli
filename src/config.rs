@@ -157,18 +157,6 @@ pub struct Config {
     /// lists that models.dev prices.
     #[serde(default)]
     pub economy_model: String,
-    /// The default model for `agent` calls that name no model, on the
-    /// parent provider — the `CLAUDE_CODE_SUBAGENT_MODEL` equivalent: pin
-    /// children to a cheap model (a Haiku-class model, say) instead of
-    /// the parent model, so delegated work stops paying parent-model
-    /// prices. Empty → no pin; typesafe routing still hops to a cheaper
-    /// model when it can. An explicit `model` on the `agent` call, or
-    /// `cost_mode: economy`, wins over the pin. A pin naming a model the
-    /// provider does not serve fails the child with the provider's error,
-    /// like a bad explicit model — set it to a model id the account can
-    /// actually call.
-    #[serde(default)]
-    pub subagent_model: String,
     /// When true (default), interactive launch checks GitHub Releases and self-updates
     /// when a newer version is available (TTL-throttled). Opt out with `false` or
     /// env `NUR_SKIP_AUTO_UPDATE=1`. Explicit `nur update` always runs.
@@ -1336,7 +1324,6 @@ impl Default for Config {
             poor_mode: false,
             ecosystem_auto_ensure: true,
             economy_model: String::new(),
-            subagent_model: String::new(),
             auto_update: true,
             fallback_providers: Vec::new(),
             failover_allow_downgrade: false,

@@ -710,24 +710,20 @@ children are the exception outside Auto: they keep their own Plan mode,
 which enforces their read-only contract, so a later Auto toggle does
 not lift them.
 
-**Cheap model pin.** Set `subagent_model` in the config to pin every
-`agent` call that names no model to a cheap model on the parent provider
-(the `CLAUDE_CODE_SUBAGENT_MODEL` equivalent), so delegated work stops
-paying parent-model prices. An explicit `model` on the call, or
-`cost_mode: economy`, wins over the pin; a typesafe routing hop keeps
-its say when the pin did not apply. The pin announces itself on the
-status line (`subagent · pinned model <id>`). It is a model id the
-account can call on the parent provider: a pin the provider does not
-serve fails the child with the provider's error, like a bad explicit
-model. Unset, children run on the parent model unless typesafe routing
-hops them to a cheaper one.
-
 **Economy children.** `cost_mode: "economy"` runs the child on a cheap model
 with low reasoning effort: `economy_model` from config when the child stays on
 the parent's provider, otherwise the cheapest model the account lists that
 models.dev prices and does not mark as unable to call tools. Nothing external
 is launched; when no priced model is found the child stays on its model and the
 status line says so. An explicit `model` always wins.
+
+**Which model a child runs on.** There is no configured cheap-model pin:
+the choice is dictated in prose, in the `agent` call itself. The tool
+description tells the parent model to name a cheap model (or use
+`cost_mode: economy`) whenever the task does not need the strong model,
+and to keep planning, hard debugging, and large refactors on the strong
+one. Typesafe routing still hops an unrouted child to a cheaper model
+when it can price the hop.
 
 **Cross-provider subagents.** An `agent` call may set `provider` (and optionally
 `model`) to run a subagent on a *different* provider than the parent — in natural

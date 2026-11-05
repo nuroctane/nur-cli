@@ -3919,49 +3919,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn subagent_model_pin_applies_only_to_undecided_children() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        // No overrides and a pin: the child runs on the pinned model.
-        let (provider, model, pinned) =
-            apply_subagent_model_pin(None, None, "cheap-model", &tx);
-        assert_eq!(provider, None);
-        assert_eq!(model.as_deref(), Some("cheap-model"));
-        assert!(pinned);
-        // The pin announces itself on the status line.
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(AgentEvent::Status(s)) if s.contains("pinned model cheap-model")
-        ));
-        // An explicit model on the call wins over the pin.
-        let (_, model, pinned) = apply_subagent_model_pin(
-            None,
-            Some("explicit-model".to_string()),
-            "cheap-model",
-            &tx,
-        );
-        assert_eq!(model.as_deref(), Some("explicit-model"));
-        assert!(!pinned);
-        // A named provider wins too: the pin is a model on the parent
-        // provider, not a cross-provider hop.
-        let (provider, model, pinned) = apply_subagent_model_pin(
-            Some("other".to_string()),
-            None,
-            "cheap-model",
-            &tx,
-        );
-        assert_eq!(provider.as_deref(), Some("other"));
-        assert_eq!(model, None);
-        assert!(!pinned);
-        // No pin configured: nothing changes, and nothing is announced.
-        let (provider, model, pinned) =
-            apply_subagent_model_pin(None, None, "  ", &tx);
-        assert_eq!(provider, None);
-        assert_eq!(model, None);
-        assert!(!pinned);
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
     fn recovery_fits_large_items_and_preserves_schema_and_retrieval() {
         const CHILD: &str = "NUR_RECOVERY_FIT_CHILD";
         if std::env::var_os(CHILD).is_none() {
@@ -6956,16 +6913,6 @@ impl ChildSpawn {
                 tx,
             )
             .await;
-            // Pin: a configured default cheap model for children that
-            // named none (see `apply_subagent_model_pin`). It applies
-            // after routing, so a routing hop keeps its say, and the
-            // economy check below can still win over a pin.
-            let (provider_override, model_override, pinned) = apply_subagent_model_pin(
-                provider_override,
-                model_override,
-                &self.config.subagent_model,
-                tx,
-            );
             // Cross-provider: a named provider gets a client from its own stored
             // credentials. Missing creds → LoginRequired + hard block, never a
             // silent run on the parent.
@@ -6982,11 +6929,8 @@ impl ChildSpawn {
             );
             match target {
                 SubagentTarget::Ready { client, mut config } => {
-                    // A named or routed model is a choice; economy fills the
-                    // gap. It also wins over a pin (an explicit per-call
-                    // choice beats a configured default), but not over a
-                    // routing hop, as before.
-                    if self.economy && (model_override.is_none() || pinned) {
+                    // A named or routed model is a choice; economy fills the gap.
+                    if self.economy && model_override.is_none() {
                         let status = match economy_model(&self.config, &client, &config.provider).await
                         {
                             Some(model) => {
@@ -7133,29 +7077,6 @@ fn route_context(config: &Config, items: &[Value]) -> Arc<Vec<String>> {
 /// so they run on the blocking pool. Returns the prompt the child receives,
 /// the (possibly routed) provider/model overrides, and whether routing chose
 /// them. An explicit provider or model is always obeyed as written.
-/// Apply the configured `subagent_model` pin: a child that names no
-/// provider or model runs on the pinned cheap model instead of the
-/// parent model — the `CLAUDE_CODE_SUBAGENT_MODEL` equivalent. An
-/// explicit model/provider on the call, or a typesafe routing hop, has
-/// already decided the target, so the pin stays out of their way.
-/// Returns the (possibly pinned) overrides and whether the pin applied,
-/// so the economy check can still win over a pin but not over a hop.
-fn apply_subagent_model_pin(
-    provider: Option<String>,
-    model: Option<String>,
-    pin: &str,
-    tx: &mpsc::UnboundedSender<AgentEvent>,
-) -> (Option<String>, Option<String>, bool) {
-    let pin = pin.trim();
-    if provider.is_some() || model.is_some() || pin.is_empty() {
-        return (provider, model, false);
-    }
-    let _ = tx.send(AgentEvent::Status(format!(
-        "subagent · pinned model {pin}"
-    )));
-    (None, Some(pin.to_string()), true)
-}
-
 async fn plan_unrouted_child(
     config: &Config,
     prompt: String,
