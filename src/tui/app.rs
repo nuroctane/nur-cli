@@ -6496,6 +6496,11 @@ impl App {
 
     // ── update modal (opencode-style UX parity with other pickers) ──────────
     fn open_update_modal(&mut self, current: String, remote: String) {
+        // Unprompted modal: the user did not ask for it, so sound once.
+        crate::notifications::attention(
+            self.cfg.notifications.chime,
+            &self.cfg.notifications.command,
+        );
         self.update_modal = Some(UpdateModal::new(current, remote));
     }
 
@@ -10764,6 +10769,15 @@ impl App {
                     from_subagent: parent_session.is_some(),
                     respond: Some(respond),
                 });
+                // The agent is now waiting on the user, mid-turn, with no
+                // end-of-turn chime coming. Sound once, here, so a waiting
+                // approval is never silent. Queued prompts re-enter this
+                // handler through poll_pending_human, so they sound when
+                // they actually pop up, not when they are queued.
+                crate::notifications::attention(
+                    self.cfg.notifications.chime,
+                    &self.cfg.notifications.command,
+                );
             }
             AgentEvent::QuestionRequest {
                 turn_cancel,
@@ -10804,6 +10818,10 @@ impl App {
                     last_step_at: Instant::now() - Duration::from_secs(1),
                     respond: Some(respond),
                 });
+                crate::notifications::attention(
+                    self.cfg.notifications.chime,
+                    &self.cfg.notifications.command,
+                );
             }
             AgentEvent::Usage { session, last } => {
                 self.u_session = session;
@@ -10842,6 +10860,10 @@ impl App {
                 // Only auto-open if no other modal is already up, so we don't
                 // stomp an in-progress login / picker the user is mid-flow on.
                 if self.login.is_none() {
+                    crate::notifications::attention(
+                        self.cfg.notifications.chime,
+                        &self.cfg.notifications.command,
+                    );
                     self.open_scoped_login_for(&provider_id);
                 }
                 // Remember the exact request so we can faithfully re-deploy it
@@ -10872,6 +10894,10 @@ impl App {
                     panel_ids,
                 });
                 if self.login.is_none() {
+                    crate::notifications::attention(
+                        self.cfg.notifications.chime,
+                        &self.cfg.notifications.command,
+                    );
                     self.open_scoped_login_for(&provider_id);
                 }
             }
@@ -10891,6 +10917,10 @@ impl App {
                 } else if self.approval.is_some() || self.question.is_some() || self.secret.is_some() {
                     self.pending_human.push_back(AgentEvent::SecretRequest { name, purpose, respond });
                 } else {
+                    crate::notifications::attention(
+                        self.cfg.notifications.chime,
+                        &self.cfg.notifications.command,
+                    );
                     self.open_secret_request(name, purpose, respond);
                 }
             }

@@ -449,10 +449,17 @@ files, pass-through wrappers and the rest; see the `codebase-slop` skill).
 
 ## Notifications
 
-`[notifications] chime = true` signals a completed turn with a terminal bell.
-Terminal and multiplexer bell settings determine whether it is audible. Set
-`chime = false` to disable it, or set `command` to a sound command to run
-instead of the bell.
+`[notifications] chime = true` signals a completed turn with a terminal bell,
+and also sounds whenever the agent stops mid-turn to wait on the user: a
+question, approval, secret, or login modal in the TUI, an update modal, or
+an interactive approval/question prompt in headless mode. That second
+signal is the point: without it, an approval can wait silently while the
+user has no idea. Terminal and multiplexer bell settings determine whether
+it is audible. Set `chime = false` to disable both signals, or set
+`command` to a sound command to run instead of the bell. The sound fires
+once per pop-up, when the prompt becomes visible and actionable, not when
+it is merely queued behind another modal. It does not fire for ACP or
+gateway clients, which surface prompts in their own UI.
 
 ## Auto-continue
 

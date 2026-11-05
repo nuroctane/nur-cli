@@ -245,7 +245,7 @@ pub struct Config {
     /// `[sandbox]` - OS-level jail for the `bash` tool.
     #[serde(default)]
     pub sandbox: SandboxConfig,
-    /// `[notifications]` - end-of-turn chime (BEL, or a configured command).
+    /// `[notifications]` - end-of-turn and waiting-on-user chimes (BEL, or a configured command).
     #[serde(default)]
     pub notifications: crate::notifications::NotificationsConfig,
     /// `[mcp]` - local MCP servers over stdio (`[mcp.servers.<name>]`).

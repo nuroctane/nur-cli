@@ -1669,6 +1669,9 @@ async fn run_headless(
     agent::prompt::prefetch_slow_sources(&cwd, &cfg);
     let auto_continue = cfg.auto_continue.clone();
     let mut resume_attempts = 0u32;
+    // Captured before `cfg` moves into the runner: the interactive prompts
+    // below need it to sound the attention chime when they appear.
+    let notify = (cfg.notifications.chime, cfg.notifications.command.clone());
     let runner = Arc::new(AgentRunner {
         client,
         config: cfg,
@@ -1732,7 +1735,10 @@ async fn run_headless(
                 ..
             } => {
                 // Interactive terminal prompt (headless without -y), on stderr
-                // so a captured stdout stays the answer.
+                // so a captured stdout stays the answer. Sound first: the
+                // user may have walked away mid-turn, and this prompt is the
+                // only thing standing between the run and its next step.
+                crate::notifications::attention(notify.0, &notify.1);
                 let decision = tokio::task::spawn_blocking(move || {
                     eprintln!();
                     eprintln!("  {name} {}", truncate_line(&args, 200));
@@ -1763,6 +1769,7 @@ async fn run_headless(
                 respond,
                 ..
             } => {
+                crate::notifications::attention(notify.0, &notify.1);
                 let answer = tokio::task::spawn_blocking(move || {
                     eprintln!();
                     eprintln!("  {header}: {question}");
@@ -1935,6 +1942,9 @@ async fn run_continuous(
     let quality_gate = cfg.quality_gate.clone();
     let ts_cfg = cfg.typesafe.clone();
     let auto_continue = cfg.auto_continue.clone();
+    // Captured before `cfg` moves into the runner, for the interactive
+    // approval prompt below.
+    let notify = (cfg.notifications.chime, cfg.notifications.command.clone());
     let mut resume_attempts = 0u32;
 
     let runner = Arc::new(AgentRunner {
@@ -2083,6 +2093,7 @@ async fn run_continuous(
                     respond,
                     ..
                 } => {
+                    crate::notifications::attention(notify.0, &notify.1);
                     let decision = tokio::task::spawn_blocking(move || {
                         eprintln!();
                         eprintln!("  {name} {}", truncate_line(&args, 200));
