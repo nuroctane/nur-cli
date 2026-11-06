@@ -116,3 +116,18 @@ claimed on Tara's behalf.
 | kunchenguid X: pi agent dotfiles | Aug 2 | RES |
 | ddoemonn/interior | Jul 31 | INT, skill (`skills/interior/`) |
 | DeusData/codebase-memory-mcp | Jun 27 | RES, low CAND (code-graph MCP would overlap `graphify`/`sgrep`) |
+
+## 2026-11-06 follow-up
+
+The tag grew to **73 items** (68 + 5, added Nov 5–6). The full list is
+saved to `~/workspace/cli-integration-current.json` outside the repo.
+None of the 5 hits the Tara boundary. Full triage report:
+`~/workspace/cli-integration-triage-2026-11-06.md`.
+
+| Item | Date | Verdict |
+|---|---|---|
+| Executor — executor.sh | Nov 5 | INT already (`skills/executor-gateway/`, `executor` tool) |
+| trashpandaemoji X: memory systems are mostly garbage | Nov 5 | PAT/INT — all three legs already exist (`agents-md`, skills, `mem`) |
+| danlovesproofs X: unpinned GitHub Actions | Nov 6 | NEW — `workflows` check in `secscan` + CI/supply-chain ledger unit in `skills/security-audit/` |
+| alezander9 X: subagents are the biggest cause of AI failures | Nov 6 | RES — docs-only note in `skills/subagent-orchestration/` |
+| mainplane-ai/mainplane | Nov 6 | RES — competing harness, nothing to integrate |

@@ -292,7 +292,13 @@ findings (id, scanner, severity, `file:line`, rule, message), most severe first:
 read into a finding), **osv-scanner** for vulnerable dependencies, **semgrep**
 (`p/default`, metrics off) for code patterns, **trivy** and **checkov** for
 infrastructure configuration, and **trufflehog** for filesystem secrets without
-remote verification. Nur never installs them; `status`
+remote verification. A built-in `workflows` check needs no install: it
+walks `.github/workflows/*.yml` and flags third-party `uses:` entries not
+pinned to a full 40-character commit SHA (tags, branches, and short SHAs
+are mutable and can be repointed by a compromised maintainer account;
+local `./` workflows and `docker://` steps are skipped). Select it with
+`scanners: ["workflows"]`, or run everything, which includes it. Nur never
+installs them; `status`
 lists which are present with install links, and a missing one is skipped with a
 note. Set `NUR_SECSCAN_<NAME>_BIN` to choose a specific executable (replace
 hyphens in the scanner name with underscores). Captured reports over 2 MB are

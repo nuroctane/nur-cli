@@ -64,6 +64,12 @@ confirmed vulnerability, and a defense-in-depth gap is not a vulnerability.
   token handling, redirect and origin checks.
 - Client side, supply chain and release: dependency trust, build and
   release integrity, update channels.
+- CI and supply chain: unpinned third-party Actions (pin to a full
+  commit SHA; tags and branches are mutable and repointable, see the
+  `workflows` check in `secscan`), `pull_request_target` pwn requests,
+  over-broad `permissions:`, mutable transitive dependencies. An
+  unpinned Action is a candidate, not a confirmed vulnerability:
+  severity still needs impact.
 - Cloud and deployment, resource exhaustion, data isolation and lifecycle,
   desktop/mobile and local IPC.
 

@@ -11,6 +11,13 @@
 //! - **trivy** and **checkov**: infrastructure misconfigurations;
 //! - **trufflehog**: filesystem secrets, without remote verification.
 //!
+//! Plus a built-in check that needs no install:
+//! - **workflows**: third-party GitHub Actions in `.github/workflows/`
+//!   not pinned to a full 40-character commit SHA. Tags (`@v4`), branches
+//!   (`@main`) and short SHAs are mutable and can be repointed by a
+//!   compromised maintainer account (tj-actions, March 2025, CVE-2025-30066).
+//!   Local `./` workflows and `docker://` steps are skipped.
+//!
 //! Each writes a JSON report to `.nur/scratch/secscan/`, which is parsed and
 //! deleted; a scanner's exit code only says whether it found something.
 //! Secret values (`Secret`, `Match`) are never read into a finding.
@@ -62,7 +69,8 @@ impl Tool for SecScan {
 
     fn description(&self) -> &str {
         "Run installed security scanners (gitleaks, osv-scanner, semgrep, trivy, checkov, \
-         trufflehog) and get normalized findings with \
+         trufflehog) plus a built-in check for unpinned GitHub Actions, and get normalized \
+         findings with \
          file:line and a stable id; secret values are never shown. gitleaks scans the files as \
          they are now; history=true scans every commit instead. Actions: run (default) | \
          status (which scanners are installed) | baseline (record findings the user accepts as \
@@ -77,7 +85,7 @@ impl Tool for SecScan {
                 "action": {"type": "string", "enum": ["run", "status", "baseline"], "default": "run"},
                 "scanners": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["gitleaks", "osv-scanner", "semgrep", "trivy", "checkov", "trufflehog"]},
+                    "items": {"type": "string", "enum": ["gitleaks", "osv-scanner", "semgrep", "trivy", "checkov", "trufflehog", "workflows"]},
                     "description": "For run: which scanners (default: every one installed)"
                 },
                 "path": {"type": "string", "description": "For run: subdirectory to scan (default: the workspace)"},
@@ -143,6 +151,7 @@ fn status() -> String {
             None => out.push_str(&format!("- {name}: not installed ({install})\n")),
         }
     }
+    out.push_str("- workflows: built-in (no install needed)\n");
     out
 }
 
@@ -348,6 +357,11 @@ fn run(args: &Value, ctx: &ToolContext) -> Result<String> {
         }
         let _ = std::fs::remove_file(&report);
     }
+    if wanted.is_empty() || wanted.iter().any(|w| w == "workflows") {
+        let wf = scan_workflows(&root);
+        notes.push(format!("workflows: {} finding(s)", wf.len()));
+        findings.extend(wf);
+    }
     let accepted = load_baseline(&ctx.cwd);
     let before = findings.len();
     findings.retain(|f| !accepted.accepted.iter().any(|a| a.id == f.id));
@@ -393,6 +407,67 @@ fn severity_rank(severity: &str) -> u8 {
         "medium" | "moderate" | "warning" => 2,
         "low" | "info" => 3,
         _ => 4,
+    }
+}
+
+/// Built-in check, no external binary: third-party GitHub Actions must be
+/// pinned to a full 40-character commit SHA. Tags (`@v4`), branches
+/// (`@main`) and short SHAs are mutable and can be repointed by a
+/// compromised maintainer account (tj-actions, March 2025, CVE-2025-30066).
+/// Local `./` workflows and `docker://` steps are not third-party code and
+/// are skipped.
+fn scan_workflows(root: &Path) -> Vec<Finding> {
+    let dir = root.join(".github").join("workflows");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "yml" || ext == "yaml"))
+        .collect();
+    paths.sort();
+    let mut findings = Vec::new();
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let rel = relative(root, &path.to_string_lossy());
+        for (idx, line) in text.lines().enumerate() {
+            let Some(spec) = uses_spec(line) else {
+                continue;
+            };
+            if spec.starts_with("./") || spec.starts_with("docker://") {
+                continue;
+            }
+            let pinned = spec
+                .rsplit_once('@')
+                .map(|(_, r)| r.len() == 40 && r.chars().all(|c| c.is_ascii_hexdigit()))
+                .unwrap_or(false);
+            if !pinned {
+                findings.push(finding(
+                    "workflows",
+                    "unpinned-action",
+                    "medium",
+                    rel.clone(),
+                    (idx + 1) as u64,
+                    &format!("{spec} is not pinned to a full commit SHA"),
+                ));
+            }
+        }
+    }
+    findings
+}
+
+/// The value after `uses:` on a workflow line, quotes and trailing
+/// comments stripped; `None` when the line has no `uses:` step.
+fn uses_spec(line: &str) -> Option<String> {
+    let after = line.split_once("uses:")?.1;
+    let no_comment = after.split('#').next().unwrap_or("");
+    let spec = no_comment.trim().trim_matches(|c| c == '"' || c == '\'');
+    if spec.is_empty() {
+        None
+    } else {
+        Some(spec.to_string())
     }
 }
 
@@ -727,5 +802,30 @@ mod tests {
         let found = parse_semgrep(semgrep, root);
         assert_eq!((found[0].file.as_str(), found[0].line), ("src/a.rs", 7));
         assert_eq!(found[0].severity, "WARNING");
+    }
+
+    #[test]
+    fn workflows_check_flags_unpinned_actions() {
+        let dir = std::env::temp_dir()
+            .join(format!("nur-secscan-test-{}", uuid::Uuid::new_v4().simple()));
+        let wf = dir.join(".github").join("workflows");
+        std::fs::create_dir_all(&wf).unwrap();
+        std::fs::write(
+            wf.join("ci.yml"),
+            "name: ci\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - uses: actions/setup-node@v4\n      - uses: ./.github/workflows/validate.yml\n      - uses: docker://alpine:3.14\n      - uses: dorny/paths-filter@main\n      - uses: actions/checkout\n      - uses: actions/checkout@3d3c42e\n",
+        )
+        .unwrap();
+        let found = scan_workflows(&dir);
+        assert_eq!(found.len(), 4);
+        assert_eq!(
+            found.iter().map(|f| f.line).collect::<Vec<_>>(),
+            vec![8, 11, 12, 13]
+        );
+        assert!(found
+            .iter()
+            .all(|f| f.scanner == "workflows" && f.rule == "unpinned-action"));
+        assert_eq!(found[0].file, ".github/workflows/ci.yml");
+        assert!(found[0].message.contains("setup-node@v4"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
