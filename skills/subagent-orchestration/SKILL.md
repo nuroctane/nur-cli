@@ -72,6 +72,19 @@ unless writers are deliberately isolated.
   orchestrator role.
 - Never let a child guess an unapproved decision; it escalates instead.
 
+## Pass the full task, not a summary
+
+Summaries are lossy in both directions, and that is where subagents
+fail: a child that starts from a summary of the task makes assumptions
+the parent never stated, and a parent that trusts only the child's
+summary report never sees the work. Never pre-summarize when
+delegating: pass the full task prompt and hand over the context
+variables the child needs instead of pasting a digest. When the return
+must be machine-checked, give the child an `output_schema` so it
+answers in JSON instead of prose. Verify consequential child claims
+against the `/swarm` peek transcript or a fresh reviewer read of the
+diff, not against the report alone.
+
 ## Code mode: scripted orchestration (plain JS)
 
 pi-subagents' "code mode" lets you orchestrate subagents from a plain
