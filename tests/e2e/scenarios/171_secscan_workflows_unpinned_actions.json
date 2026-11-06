@@ -1,0 +1,17 @@
+{
+  "description": "The built-in workflows check flags third-party Actions not pinned to a full commit SHA, with no scanner installed, and ignores pinned, local, commented-out and run-text lines.",
+  "setup_files": {
+    ".github/workflows/ci.yml": "name: ci\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - uses: actions/setup-node@v4\n      - uses: ./.github/actions/local\n      # - uses: actions/cache@v3\n      - run: echo \"uses: actions/cache@v3\"\n"
+  },
+  "prompt": "Check the workflows for unpinned actions.",
+  "script": [
+    {"tool_calls": [{"name": "secscan", "arguments": {"action": "run", "scanners": ["workflows"]}}]},
+    {"text": "Workflows checked."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "tool_results": [{"request": 2, "contains": ["workflows: 1 finding(s)", "actions/setup-node@v4 is not pinned to a full commit SHA", ".github/workflows/ci.yml:8"], "lacks": ["actions/checkout@3d3c42e", "actions/cache", "./.github/actions/local", "not installed"]}],
+    "stdout_contains": ["Workflows checked."]
+  }
+}

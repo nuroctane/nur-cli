@@ -458,10 +458,14 @@ fn scan_workflows(root: &Path) -> Vec<Finding> {
     findings
 }
 
-/// The value after `uses:` on a workflow line, quotes and trailing
-/// comments stripped; `None` when the line has no `uses:` step.
+/// The value of a `uses:` key on a workflow line (a step's `- uses:` or a
+/// job's `uses:`), quotes and trailing comments stripped; `None` for any
+/// other line, so commented-out steps and `uses:` inside `run:` text are
+/// not read as steps.
 fn uses_spec(line: &str) -> Option<String> {
-    let after = line.split_once("uses:")?.1;
+    let key = line.trim_start();
+    let key = key.strip_prefix('-').map(str::trim_start).unwrap_or(key);
+    let after = key.strip_prefix("uses:")?;
     let no_comment = after.split('#').next().unwrap_or("");
     let spec = no_comment.trim().trim_matches(|c| c == '"' || c == '\'');
     if spec.is_empty() {
@@ -812,14 +816,13 @@ mod tests {
         std::fs::create_dir_all(&wf).unwrap();
         std::fs::write(
             wf.join("ci.yml"),
-            "name: ci\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - uses: actions/setup-node@v4\n      - uses: ./.github/workflows/validate.yml\n      - uses: docker://alpine:3.14\n      - uses: dorny/paths-filter@main\n      - uses: actions/checkout\n      - uses: actions/checkout@3d3c42e\n",
+            "name: ci\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - uses: actions/setup-node@v4\n      - uses: ./.github/workflows/validate.yml\n      - uses: docker://alpine:3.14\n      - uses: dorny/paths-filter@main\n      - uses: actions/checkout\n      - uses: actions/checkout@3d3c42e\n      # - uses: actions/cache@v3\n      - run: echo \"uses: actions/cache@v3\"\n  reuse:\n    uses: org/repo/.github/workflows/build.yml@v1\n",
         )
         .unwrap();
         let found = scan_workflows(&dir);
-        assert_eq!(found.len(), 4);
         assert_eq!(
             found.iter().map(|f| f.line).collect::<Vec<_>>(),
-            vec![8, 11, 12, 13]
+            vec![8, 11, 12, 13, 17]
         );
         assert!(found
             .iter()

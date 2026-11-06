@@ -298,9 +298,8 @@ pinned to a full 40-character commit SHA (tags, branches, and short SHAs
 are mutable and can be repointed by a compromised maintainer account;
 local `./` workflows and `docker://` steps are skipped). Select it with
 `scanners: ["workflows"]`, or run everything, which includes it. Nur never
-installs them; `status`
-lists which are present with install links, and a missing one is skipped with a
-note. Set `NUR_SECSCAN_<NAME>_BIN` to choose a specific executable (replace
+installs the external scanners; `status` lists which are present with install
+links, and a missing one is skipped with a note. Set `NUR_SECSCAN_<NAME>_BIN` to choose a specific executable (replace
 hyphens in the scanner name with underscores). Captured reports over 2 MB are
 reported as failures. File-based reports go under `.nur/scratch/secscan/`, which
 is parsed and deleted. Actions: `run` (default, approval-gated like a shell
