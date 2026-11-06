@@ -28,7 +28,7 @@
     },
     "design": {
       "repo": "emilkowalski/skills",
-      "commit": "a81dbca07f2217b7103e510c0f13f8d5b017afc9"
+      "commit": "c8a79627b59d72d764d6ab6f2c87c09a48169833"
     },
     "clone-website": {
       "repo": "JCodesMore/ai-website-cloner-template",
@@ -40,15 +40,15 @@
     },
     "mattpocock": {
       "repo": "mattpocock/skills",
-      "commit": "a496f5513d4a4cf889bc48e189e579f4b0bdf6aa"
+      "commit": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
     },
     "addyosmani": {
       "repo": "addyosmani/agent-skills",
-      "commit": "eb07f19f52c2669f2364897aaa293e2aaddd7b1c"
+      "commit": "301b02b12bff98e4688e6984af6556802322bbde"
     },
     "builderio": {
       "repo": "BuilderIO/skills",
-      "commit": "f1e12a1b75f342e0b49ebaf182b05168f4fa7b96"
+      "commit": "f4f10b8d513476c24bd995ceac5294bcdd6ee15c"
     },
     "infinite-headcount": {
       "repo": "MikeFishbeinAtherial/infinite-headcount",
@@ -56,11 +56,11 @@
     },
     "text-to-cad": {
       "repo": "earthtojake/text-to-cad",
-      "commit": "24573128ceaab564f497d7c12f995c41784c9539"
+      "commit": "4099cac3ddc56a5e696138c53fd7bee685e8ad9d"
     },
     "mobile-harness": {
       "repo": "droidrun/mobile-harness",
-      "commit": "a8c7270d4c44d7a9ccbcd07983c16e1545d71fa0"
+      "commit": "321868e6de647d68f9520e9a36da1fc67538c4c7"
     },
     "web3-skills": {
       "repo": "DarkNavySecurity/web3-skills",
@@ -73,7 +73,7 @@
   },
   "plugins": {
     "superpowers": {
-      "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
       "repo": "https://github.com/obra/superpowers.git"
     },
     "fable": {
@@ -81,15 +81,15 @@
       "repo": "https://github.com/Sahir619/fable-method.git"
     },
     "mattpocock": {
-      "commit": "a496f5513d4a4cf889bc48e189e579f4b0bdf6aa",
+      "commit": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
       "repo": "https://github.com/mattpocock/skills.git"
     },
     "addyosmani": {
-      "commit": "eb07f19f52c2669f2364897aaa293e2aaddd7b1c",
+      "commit": "301b02b12bff98e4688e6984af6556802322bbde",
       "repo": "https://github.com/addyosmani/agent-skills.git"
     },
     "builderio": {
-      "commit": "f1e12a1b75f342e0b49ebaf182b05168f4fa7b96",
+      "commit": "f4f10b8d513476c24bd995ceac5294bcdd6ee15c",
       "repo": "https://github.com/BuilderIO/skills.git"
     }
   },

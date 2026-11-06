@@ -23,7 +23,9 @@
 /add-shader-cursor-trail/
 /adding-a-skill/
 /agency-grid-layout-minimal/
+/agent-platform-access-audit/
 /agent-platform-alert-configuration/
+/agent-platform-architecture/
 /agent-platform-deploy/
 /agent-platform-endpoint-management/
 /agent-platform-eval-flywheel/
@@ -57,6 +59,8 @@
 /api-and-interface-design/
 /api-gateway-backend-security-and-rate-limiting/
 /api-gateway-mcp-server/
+/api-gateway-openapi-spec-authoring/
+/api-gateway-troubleshooting/
 /apigee-agent-gateway-governance/
 /apple-design/
 /application-design-center-design-deploy/
@@ -84,8 +88,11 @@
 /autoplan/
 /axiom-agent-created-orgs/
 /axiom-alerting/
+/axiom-build-dashboard/
 /axiom-building-dashboards/
+/axiom-control-costs/
 /axiom-controlling-costs/
+/axiom-create-org/
 /axiom-ingest/
 /axiom-metrics-chart/
 /axiom-spl-to-apl/
@@ -173,6 +180,7 @@
 /ce-dogfood/
 /ce-explain/
 /ce-handoff/
+/ce-help/
 /ce-ideate/
 /ce-noslop/
 /ce-optimize/
@@ -198,6 +206,7 @@
 /cf-cli/
 /chat-sdk/
 /chief-of-staff/
+/choreograph/
 /ci-cd-and-automation/
 /cinematic-gsap-lenis-motion-system/
 /cinematic-scroll-storytelling/
@@ -217,12 +226,14 @@
 /cloud-logging-cross-project-configuration/
 /cloud-logging-finops/
 /cloud-logging-query-generation/
+/cloud-monitoring-alert-configuration/
 /cloud-monitoring-chart-generation/
 /cloud-monitoring-list-time-series-request/
 /cloud-monitoring-metric-selection/
 /cloud-monitoring-notification-channels-configuration/
 /cloud-monitoring-promql-query/
 /cloud-network-insights/
+/cloud-operator/
 /cloud-run-alert-configuration/
 /cloud-run-basics/
 /cloud-sql-basics/
@@ -243,6 +254,8 @@
 /competitive-positioning/
 /component-canvas/
 /composition-patterns/
+/compute-future-reservations/
+/compute-on-demand-reservations/
 /constraint-driven-development/
 /container-lines/
 /contemporary/
@@ -257,6 +270,7 @@
 /corporate/
 /cosmic/
 /create-a-backend/
+/create-ai-avatar/
 /create-canvas/
 /create-design-md/
 /create-game-vfx/
@@ -477,6 +491,7 @@
 /google-cloud-solution-rag-enterprise-search-gke-sqldb/
 /google-cloud-storage-basics/
 /google-cloud-storage-bucket-architect/
+/google-cloud-storage-diagnostic/
 /google-cloud-storage-fuse/
 /google-cloud-waf-cost-optimization/
 /google-cloud-waf-operational-excellence/
@@ -497,10 +512,13 @@
 /grilling/
 /gsap-scrolltrigger-storytelling/
 /gsap/
+/gstack-investigate/
 /gstack-openclaw-ceo-review/
 /gstack-openclaw-investigate/
 /gstack-openclaw-office-hours/
 /gstack-openclaw-retro/
+/gstack-plan/
+/gstack-review/
 /gstack-upgrade/
 /gstack/
 /guard/
@@ -512,6 +530,7 @@
 /high-contrast-skeuomorphic-clean/
 /horizontal-scroll-scenes/
 /html-demo/
+/html-explainer-video/
 /html-reel/
 /html-to-interaction-prompts/
 /iam-helper-for-policy-management/
@@ -690,6 +709,7 @@
 /riso/
 /roku/
 /routing-middleware/
+/runaway-stopper/
 /runtime-cache/
 /sandbox-migrate-to-next/
 /sandbox-next/
@@ -1546,6 +1566,7 @@
 /slides/
 /smui/
 /soft-skill/
+/software-factory/
 /solar-duotone-bold/
 /solidity/
 /source-driven-development/
@@ -1615,6 +1636,7 @@
 /unsplash-asset-images/
 /upstream/
 /urdf/
+/url-to-motion-design/
 /use-railway/
 /using-agent-skills/
 /using-git-worktrees/
@@ -1630,11 +1652,13 @@
 /vercel-optimize/
 /vercel-plugin-eval/
 /vercel-sandbox/
+/vercel-schedules/
 /vercel-services/
 /vercel-storage/
 /vercel-tracing/
 /verification-before-completion/
 /verification/
+/verify/
 /vibrant/
 /video-to-superprompt/
 /vintage/
