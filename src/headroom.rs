@@ -10,6 +10,13 @@
 //! inherits env, so the knob works without nur-side config. Upstream also ships
 //! a `/v1/compress` HTTP sidecar as a Python-free path; the inline helper stays
 //! the default because it needs no running service.
+//! Upstream 0.43.x (lock pins 0.43.1, verified Nov 6 2026): the 0.43.0
+//! breaking change is the MCP servers moving to MCP SDK 2.x, which nur does
+//! not use. `compress(messages, model=..., protect_recent=0)` and the
+//! `CompressResult` fields the helper reads (`messages`, `usage`,
+//! `tokens_saved`, `compression_ratio`, `processing`, `backend`) are
+//! unchanged; the helper was run end-to-end against 0.43.1 and produces
+//! the same JSON shape.
 
 use crate::config::{nur_home, HeadroomConfig};
 use crate::ecosystem::{find_bin, run_capture};

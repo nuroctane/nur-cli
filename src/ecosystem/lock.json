@@ -1,25 +1,25 @@
 {
   "schema": 1,
-  "resolved_at": "2026-10-14",
+  "resolved_at": "2026-11-06",
   "npm": {
-    "skills": "1.7.2",
-    "akm-cli": "0.9.32",
-    "executor": "1.6.10",
-    "graphjin": "3.21.13",
-    "@oh-my-pi/pi-coding-agent": "18.11.0",
+    "skills": "1.7.6",
+    "akm-cli": "0.10.261022",
+    "executor": "2.0.0-beta.37",
+    "graphjin": "3.21.18",
+    "@oh-my-pi/pi-coding-agent": "18.17.0",
     "@sleepinsummer/agent-browser-cli": "0.3.7",
     "penecho": "1.4.2",
     "excalidraw-cli": "0.0.2",
-    "egaki": "0.11.0",
+    "egaki": "0.12.0",
     "akarso": "0.3.0",
-    "@plur-ai/cli": "0.21.5",
-    "@plur-ai/mcp": "0.21.5",
-    "ruflo": "3.56.10"
+    "@plur-ai/cli": "0.23.0",
+    "@plur-ai/mcp": "0.23.0",
+    "ruflo": "3.72.2"
   },
   "pypi": {
-    "headroom-ai": "0.41.0",
-    "plasma-fractal": "1.3.0",
-    "graphifyy": "0.9.91"
+    "headroom-ai": "0.43.1",
+    "plasma-fractal": "1.4.0",
+    "graphifyy": "0.9.103"
   },
   "packs": {
     "startup-skill": {
@@ -28,7 +28,7 @@
     },
     "design": {
       "repo": "emilkowalski/skills",
-      "commit": "2d228630ba1446365f614a108cb8252f1feda202"
+      "commit": "a81dbca07f2217b7103e510c0f13f8d5b017afc9"
     },
     "clone-website": {
       "repo": "JCodesMore/ai-website-cloner-template",
@@ -40,15 +40,15 @@
     },
     "mattpocock": {
       "repo": "mattpocock/skills",
-      "commit": "49dd158d1076134a641b33efb035946536778336"
+      "commit": "a496f5513d4a4cf889bc48e189e579f4b0bdf6aa"
     },
     "addyosmani": {
       "repo": "addyosmani/agent-skills",
-      "commit": "aeac41d4d005999432bb7312f7ff06383a91d59d"
+      "commit": "eb07f19f52c2669f2364897aaa293e2aaddd7b1c"
     },
     "builderio": {
       "repo": "BuilderIO/skills",
-      "commit": "20ff8a101fe8300e44cb3b2d570cb93c7580e1b9"
+      "commit": "f1e12a1b75f342e0b49ebaf182b05168f4fa7b96"
     },
     "infinite-headcount": {
       "repo": "MikeFishbeinAtherial/infinite-headcount",
@@ -60,7 +60,7 @@
     },
     "mobile-harness": {
       "repo": "droidrun/mobile-harness",
-      "commit": "e9507735bcc3f2f4a7b783491bbeb920ee778ad6"
+      "commit": "a8c7270d4c44d7a9ccbcd07983c16e1545d71fa0"
     },
     "web3-skills": {
       "repo": "DarkNavySecurity/web3-skills",
@@ -73,7 +73,7 @@
   },
   "plugins": {
     "superpowers": {
-      "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3",
+      "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
       "repo": "https://github.com/obra/superpowers.git"
     },
     "fable": {
@@ -81,25 +81,25 @@
       "repo": "https://github.com/Sahir619/fable-method.git"
     },
     "mattpocock": {
-      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "commit": "a496f5513d4a4cf889bc48e189e579f4b0bdf6aa",
       "repo": "https://github.com/mattpocock/skills.git"
     },
     "addyosmani": {
-      "commit": "aeac41d4d005999432bb7312f7ff06383a91d59d",
+      "commit": "eb07f19f52c2669f2364897aaa293e2aaddd7b1c",
       "repo": "https://github.com/addyosmani/agent-skills.git"
     },
     "builderio": {
-      "commit": "20ff8a101fe8300e44cb3b2d570cb93c7580e1b9",
+      "commit": "f1e12a1b75f342e0b49ebaf182b05168f4fa7b96",
       "repo": "https://github.com/BuilderIO/skills.git"
     }
   },
   "git": {
     "dogwood": {
-      "commit": "4ec5e2c01b44ff3882a231ae5d315b330b38fa25",
+      "commit": "ff158506cfd9c7871385ed3a87d7435505fd24b1",
       "repo": "https://github.com/dogwood-policy/dogwood"
     },
     "sgrep": {
-      "commit": "dde0c13c8d6081f9c6d6d1d33580eebf1034aecf",
+      "commit": "dec6122c05be553c5a60bd647d1350b221b7b9c3",
       "repo": "https://github.com/context-dot-dev/sgrep"
     }
   }
