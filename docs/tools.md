@@ -533,7 +533,11 @@ Post, schedule, and reply across 14 social platforms (X, LinkedIn, Instagram, Fa
 
 ### `executor`
 
-Dispatch to external APIs.
+Dispatch to external APIs through the Executor 2 MCP gateway (`http://127.0.0.1:4312/mcp`). `action=status|start|stop|sources|search|describe|call|resume|execute|pair|upgrade`. `status`, `sources`, `search`, `describe`, `pair` are read-only; `call`, `execute`, `resume`, `start`, `stop`, `upgrade` need approval in manual mode and are blocked in plan mode. Daemon management is `executor service start|stop|status`; the V1 CLI commands (`tools`, `call`, `mcp`, `web`, `install`) no longer exist in Executor 2.
+
+### `monitor`
+
+Stream a background command's stdout to the model as events, line by line. `action=start|list|status|events|stop`. `start` takes `command`, `description`, `timeout_ms` (default 300000), `persistent` (default false). Lines within 200ms batch into one event; stderr goes to a file (`~/.nur/monitors/<id>.stderr`) and never triggers events; exit ends the watch and reports the code. `list` and `status` are read-only; `start`, `events`, `stop` are not. Never restored on resume. Use for live streams (build/deploy logs, `tail -F`, long test runs); `bg` is for fire-and-forget jobs.
 
 ### `browser`
 

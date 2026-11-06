@@ -41,7 +41,7 @@ complete snapshot was saved. It does not resolve credentials or install packages
 | **tldraw** | Offline [tldraw](https://www.tldraw.com) boards (`tldraw` tool · `/draw <file.tldraw>` or `/draw <idea>`; `/draw excalidraw` and `/draw pen` route to those tools) |
 | **excalidraw** | Hand-drawn, publishable diagrams via [excalidraw-cli](https://github.com/ahmadawais/excalidraw-cli) (`excalidraw` tool · `/excalidraw <idea>`, also reachable through `/draw excalidraw`) |
 | **penecho** | penecho canvas beyond the chat box - ink, MathJax, plots, animations (npm `penecho` sidecar · `penecho` tool · `/pen` · `/drawings` · `/penecho`) |
-| **lightpanda** | [Lightpanda](https://github.com/lightpanda-io/browser) headless browser built for AI agents, detect-only (AGPL, never installed or embedded by nur-cli): one-shot fetch, CDP server, or MCP server for JS-heavy pages and clean-room automation. Not a replacement for `browser`, which keeps the user's logged-in Chrome session; no native Windows binary (run inside WSL); telemetry on by default (`LIGHTPANDA_DISABLE_TELEMETRY=true` to disable). Skill: `lightpanda` |
+| **lightpanda** | [Lightpanda](https://github.com/lightpanda-io/browser) headless browser built for AI agents, detect-only (AGPL, never installed or embedded by nur-cli): one-shot fetch, CDP server, or MCP server for JS-heavy pages and clean-room automation. 1.0.3 (Nov 2026) ends the beta: WebMCP, AudioContext, Payment Request API, new CDP/MCP tools, Grok/xAI and Parallel providers; CORS is enforced by default now. Not a replacement for `browser`, which keeps the user's logged-in Chrome session; no native Windows binary (run inside WSL); telemetry on by default (`LIGHTPANDA_DISABLE_TELEMETRY=true` to disable). Skill: `lightpanda` |
 | **desloppify** | [Desloppify](https://github.com/peteromallet/desloppify) codebase health scanner with a persistent, prioritized cleanup queue, detect-only (never installed by nur-cli): `desloppify scan`, `plan triage`, `next`, rescan, state in `.desloppify/`. Use for the queue and for signals `slop_scan` lacks (dead code, complexity, naming, coverage gaps, Rust smells); do not replace `slop_scan` with it. Skill: `desloppify` |
 | **akarso** | akarso post, schedule, and reply across 14 social platforms (npm `akarso` · `akarso` tool · `/akarso` · `akarso` skill). Publishing, deleting, and connecting accounts are outward-facing and gated in manual mode |
 | **fractal** | [fractal](https://github.com/plasma-ai/fractal) hierarchical loops - Unix only; ecosystem ensure + loud warn on `node start` |
@@ -398,6 +398,8 @@ MCP / OpenAPI gateway catalog.
 - Policy enforcement for multi-agent tool routing
 
 **Requires:** Node.js 20+
+
+**Executor 2 (current):** the CLI is at `2.0.0-beta.37` via `npm i -g executor@beta` (stable 2.0.0 not yet on npm `latest`). V2 serves one streamable-HTTP MCP endpoint at `http://127.0.0.1:4312/mcp` with six tools (`skills`, `search`, `describe`, `call`, `execute`, `resume`); the V1 CLI commands (`tools`, `call`, `mcp`, `web`, `install`) no longer exist. Data lives in `~/.executor/v2/cli`. There is no OS autostart: run `executor service start` again after a reboot. `executor upgrade` follows the release channel.
 
 ---
 

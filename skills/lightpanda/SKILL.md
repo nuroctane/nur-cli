@@ -45,6 +45,15 @@ its fetch command, never as vendored code.
    `download`; and `run` / `save` for PandaScripts (replay a saved
    script deterministically without a model at runtime).
 
+## 1.0 notes (1.0.3, Nov 2026)
+
+1.x ends the beta. New in 1.0: `AudioContext`, the Payment Request API,
+WebMCP, new CDP and MCP tools, Grok/xAI and Parallel providers, and
+roughly 10% faster page loads. The behavior change that bites: **CORS is
+enforced by default** now — a fetch that worked under 0.2.x can fail on
+cross-origin requests that the page does not allow. If a 1.x fetch fails
+where 0.2.x worked, CORS is the first suspect, not the page.
+
 ## Rules
 
 - Telemetry is on by default. Set `LIGHTPANDA_DISABLE_TELEMETRY=true`
