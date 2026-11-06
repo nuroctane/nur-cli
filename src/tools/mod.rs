@@ -154,7 +154,6 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "repl",
     "mem",
     "bg",
-    "monitor",
     "typesafe",
     // Skills + OptMem: a subagent told to "load your playbook" or "check
     // memory" silently no-oped without these (session 5b30168a: three audit
@@ -289,6 +288,12 @@ pub trait Tool: Send + Sync {
 /// A tool subprocess's environment: the user's saved secrets are set
 /// (`crate::secrets`), and model-provider keys are dropped unless
 /// `[tools] pass_provider_keys = true` (see [`crate::providers::is_model_provider_key`]).
+/// Program and arguments that run `command` under the shell the `bash` tool
+/// uses (the first word is the shell program).
+pub(crate) fn model_shell_words(command: &str) -> Vec<std::ffi::OsString> {
+    shell::sandbox_shell_words(shell::shell_backend(), command)
+}
+
 pub(crate) fn tool_env(cmd: &mut std::process::Command) {
     static PASS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let pass = *PASS.get_or_init(|| {

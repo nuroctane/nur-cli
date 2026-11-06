@@ -558,7 +558,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
              restore/stash/merge/rebase/pull, gh pr create/merge, and dependency installs\n\
              (npm/pnpm/yarn/pip/cargo/… install/add).\n\
              - Mutating knowledge: graphify(extract|update), excalidraw(create|export),\n\
-             plur(learn|capture), ruflo(memory_store|swarm_init), executor(call|execute|start|upgrade),\n\
+             plur(learn|capture), ruflo(memory_store|swarm_init), executor(call|execute|start|login|pair|upgrade),\n\
              enclave(call), memory(append), agent."
         };
         let lean_catalog;
@@ -627,12 +627,12 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
   to http://127.0.0.1:3888. Also stop|restart|inject|export_png. Never ask the user to diagnose.
 - bg: background jobs so long work does not block the agent. action=run|list|status|result|cancel.
   Status chip in the TUI footer. /bg slash. Diagram tools accept background=true on install/launch.
-- monitor: event-streaming background process — each stdout line arrives as an event. action=start|list|status|events|stop.
+- monitor: event-streaming background process, each stdout line arrives as an event. action=start|list|status|events|stop.
   Use for live streams (build/deploy logs, tail -F, long test runs); bg is for fire-and-forget jobs. Never restored on resume.
 - diagram skill: router - architecture→excalidraw (browser share only), offline board→tldraw,
   ink/math→penecho. /diagram <idea>.
 - executor: MCP gateway (executor.sh) for external OpenAPI/GraphQL/MCP integrations - not for
-  local repo edits. action=status|start|stop|sources|search|describe|call|resume|execute|pair|upgrade.
+  local repo edits. action=status|start|stop|login|skills|search|describe|call|resume|execute|pair|upgrade.
 - enclave: Enclave (enclave.ai) security agents over native MCP - pentests, code security review,
   findings, CVE monitoring. action=tools first (names + schemas), then call tool=<name> arguments={...}.
   Calls start real work on real systems: target only what the user named or Enclave already has in

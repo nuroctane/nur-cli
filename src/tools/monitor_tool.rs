@@ -1,4 +1,4 @@
-//! Monitor tool — event-streaming background processes, modelled on
+//! Monitor tool: event-streaming background processes, modelled on
 //! Claude Code's Monitor tool.
 //!
 //! `monitor(action=start, command=…, description=…)` runs a shell command
@@ -31,9 +31,9 @@ impl Tool for MonitorTool {
     }
 
     fn description(&self) -> &str {
-        "Monitor — stream a background command's stdout to the model as events, line by line. \
-         action=start: run a shell command whose stdout lines arrive as events (batched within 200ms); \
-         stderr goes to a file and never triggers events. action=list|status|events|stop. \
+        "Stream a background command's stdout to the model as events, line by line. \
+         action=start: run a shell command in the workspace whose stdout lines arrive as events (batched within 200ms); \
+         stderr goes to a file and never triggers events (merge with 2>&1 to see failures). action=list|status|events|stop. \
          Use for live streams (build/deploy logs, tail -F, long test runs); use bg for fire-and-forget jobs. \
          Same permission rules as bash. Never restored on resume."
     }
@@ -49,7 +49,7 @@ impl Tool for MonitorTool {
                 },
                 "command": {
                     "type": "string",
-                    "description": "For start: shell command string (sh -c, or cmd /C on Windows)"
+                    "description": "For start: shell command, run under the same shell as bash"
                 },
                 "description": {
                     "type": "string",
@@ -61,7 +61,7 @@ impl Tool for MonitorTool {
                 },
                 "persistent": {
                     "type": "boolean",
-                    "description": "For start: keep the monitor across session end (default false)"
+                    "description": "For start: no timeout, run until stopped or nur exits (default false)"
                 },
                 "id": {
                     "type": "integer",
@@ -155,18 +155,19 @@ impl Tool for MonitorTool {
                 let id = crate::monitors::start(
                     &label,
                     &command,
+                    Some(&ctx.cwd),
                     timeout_ms,
                     persistent,
                     Some(ctx.session_id.clone()),
                 )?;
                 Ok(format!(
                     "monitor #{id} started · {label}\n  $ {command}\n  \
-                     stdout lines arrive as events — keep working, they stream in. \
+                     stdout lines arrive as events; keep working, they stream in. \
                      stop: monitor(action=stop, id={id})\n"
                 ))
             }
             other => Err(NurError::Tool(format!(
-                "unknown monitor action '{other}' — use start|list|status|events|stop"
+                "unknown monitor action '{other}', use start|list|status|events|stop"
             ))),
         }
     }

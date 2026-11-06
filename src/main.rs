@@ -138,6 +138,7 @@ async fn main() {
 
     let result = real_main().await;
     tools::debug_tool::shutdown_all();
+    monitors::stop_all();
     if let Err(e) = result {
         theme::print_err(&e.to_string());
         std::process::exit(e.exit_code());

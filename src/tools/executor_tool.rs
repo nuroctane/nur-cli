@@ -14,13 +14,21 @@
 //! --version`, regex-extracted semver) keeps the V1 CLI path as a
 //! fallback while a V1 binary is installed.
 //!
-//! Auth (unverified live — the V2 daemon would not start in the dev VM,
-//! "Local startup failed at composition"): the loopback endpoint may or
-//! may not require a bearer. We try anonymous first and, on 401/403,
-//! retry with a key from `EXECUTOR_API_KEY` or the `apiKey` in
-//! `keys.json` under the data dir (`$EXECUTOR_DATA_DIR` or
-//! `~/.executor/v2/cli`). If the endpoint answers anonymously, no key
-//! is ever read.
+//! Auth (verified live against 2.0.0-beta.37 on Windows): the loopback
+//! endpoint answers 401 and advertises MCP OAuth (discovery, dynamic client
+//! registration, PKCE). The local API key lives in `keys.json` only when the
+//! data dir was created with `EXECUTOR_KEY_STORAGE=file`; by default it is in
+//! the OS credential store, which nur does not read. So on 401 the order is:
+//! `EXECUTOR_API_KEY`, then `keys.json` under the data dir
+//! (`$EXECUTOR_DATA_DIR` or `~/.executor/v2/cli`), then the OAuth token from
+//! `executor(action=login)` (stored by `mcp_oauth` under the name
+//! `executor`, refreshed once on a rejected token).
+//!
+//! Tool input shapes are taken from the server's own schemas: `describe
+//! {paths}`, `call {calls}`, `execute {code}`, `search {query?, namespace?}`
+//! or the returned `next` object as the whole input, `resume {requestId}`
+//! plus `{action, content}` on the elicitation variant, `skills {app?,
+//! name?}`.
 
 use super::{arg_str, Tool, ToolContext};
 use crate::ecosystem;
@@ -66,10 +74,21 @@ fn parse_version(output: &str) -> Option<(u64, String)> {
     Some((major, version))
 }
 
-fn executor_version(bin: &str) -> Option<(u64, String)> {
-    let out = ecosystem::run_capture(bin, &["--version"], None, 30_000).ok()?;
-    parse_version(&out)
+/// `executor --version` launches a runtime, so it runs once per process and
+/// again only after `upgrade`/`start` (which may have changed the binary).
+fn executor_version(bin: &str, refresh: bool) -> Option<(u64, String)> {
+    static CACHE: std::sync::Mutex<Option<(u64, String)>> = std::sync::Mutex::new(None);
+    let mut cached = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if refresh || cached.is_none() {
+        *cached = ecosystem::run_capture(bin, &["--version"], None, 30_000)
+            .ok()
+            .and_then(|out| parse_version(&out));
+    }
+    cached.clone()
 }
+
+/// The OAuth name `executor(action=login)` stores its token under.
+const OAUTH_NAME: &str = "executor";
 
 /// Local API key for the MCP endpoint: `EXECUTOR_API_KEY` first, else the
 /// `apiKey` in `keys.json` under the data dir. The value is never logged.
@@ -82,12 +101,11 @@ fn local_api_key() -> Option<String> {
     let data_dir = std::env::var("EXECUTOR_DATA_DIR")
         .ok()
         .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| format!("{h}/.executor/v2/cli"))
+            crate::config::home_dir().map(|h| h.join(".executor").join("v2").join("cli"))
         })?;
-    let raw = std::fs::read_to_string(format!("{data_dir}/keys.json")).ok()?;
+    let raw = std::fs::read_to_string(data_dir.join("keys.json")).ok()?;
     serde_json::from_str::<Value>(&raw)
         .ok()?
         .get("apiKey")?
@@ -96,24 +114,56 @@ fn local_api_key() -> Option<String> {
         .map(str::to_string)
 }
 
-/// Open an MCP session to the Executor endpoint: anonymous first, and on
-/// 401/403 retry once with the local API key as bearer.
+/// Open an MCP session to the Executor endpoint: anonymous first; on
+/// 401/403 the local API key, then the stored OAuth token (refreshed once
+/// if the server rejects it).
 fn open_executor_mcp() -> std::result::Result<Connection, McpError> {
     let url = endpoint_url();
-    match Connection::open(&url, None, Duration::from_secs(300)) {
-        Ok(conn) => Ok(conn),
-        Err(McpError::Unauthorized { .. }) => match local_api_key() {
-            Some(key) => Connection::open(&url, Some(&key), Duration::from_secs(300)),
-            None => Err(McpError::Unauthorized {
-                status: 401,
-                detail: format!(
-                    "Executor at {url} requires auth and no key was found. \
-                     Set EXECUTOR_API_KEY or sign in so keys.json exists under \
-                     the Executor data dir, then retry."
-                ),
-            }),
+    let timeout = Duration::from_secs(300);
+    match Connection::open(&url, None, timeout) {
+        Err(McpError::Unauthorized { .. }) => {}
+        other => return other,
+    }
+    if let Some(key) = local_api_key() {
+        return Connection::open(&url, Some(&key), timeout);
+    }
+    let needs_login = || McpError::Unauthorized {
+        status: 401,
+        detail: format!(
+            "Executor at {url} requires sign-in. Run executor(action=login) once \
+             (opens the browser), or set EXECUTOR_API_KEY."
+        ),
+    };
+    let token = crate::mcp_oauth::stored_token(OAUTH_NAME, &url)
+        .map_err(McpError::Transport)?
+        .ok_or_else(needs_login)?;
+    match Connection::open(&url, Some(&token), timeout) {
+        Err(McpError::Unauthorized { .. }) => {
+            let fresh = crate::mcp_oauth::refresh_rejected_token(OAUTH_NAME, &url, &token)
+                .map_err(McpError::Transport)?
+                .ok_or_else(needs_login)?;
+            Connection::open(&url, Some(&fresh), timeout).map_err(|e| match e {
+                McpError::Unauthorized { .. } => needs_login(),
+                other => other,
+            })
+        }
+        other => other,
+    }
+}
+
+/// A JSON object argument the model may send as an object or as a JSON
+/// string (the schema declares strings, models send both).
+fn object_arg(args: &Value, key: &str) -> Result<Option<serde_json::Map<String, Value>>> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(map)) => Ok(Some(map.clone())),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(Value::String(s)) => match serde_json::from_str::<Value>(s) {
+            Ok(Value::Object(map)) => Ok(Some(map)),
+            Ok(_) => Err(NurError::Tool(format!("{key} must be a JSON object"))),
+            Err(e) => Err(NurError::Tool(format!("{key} is not valid JSON: {e}"))),
         },
-        Err(other) => Err(other),
+        Some(_) => Err(NurError::Tool(format!("{key} must be a JSON object"))),
     }
 }
 
@@ -150,8 +200,9 @@ fn render_call_result(result: Value) -> Result<String> {
         return Err(NurError::Tool(text));
     }
     if let Some(structured) = result.get("structuredContent") {
-        return Ok(serde_json::to_string_pretty(structured)
-            .unwrap_or_else(|_| structured.to_string()));
+        return Ok(
+            serde_json::to_string_pretty(structured).unwrap_or_else(|_| structured.to_string())
+        );
     }
     if let Some(content) = result.get("content").and_then(Value::as_array) {
         let text: Vec<&str> = content
@@ -169,24 +220,36 @@ fn render_call_result(result: Value) -> Result<String> {
 fn v2_mcp(action: &str, args: &Value) -> Result<String> {
     let mut conn = open_executor_mcp().map_err(mcp_error)?;
     let result = match action {
-        // `skills({})` lists the configured apps (the V2 replacement for
-        // the V1 integrations list).
-        "sources" => conn
-            .call_tool("skills", json!({}))
-            .map_err(mcp_error)?,
-        "search" => {
-            // Pagination: the endpoint returns a `next` token; pass it back
-            // as the whole search input on the next call.
-            if let Ok(next) = arg_str(args, "next") {
-                conn.call_tool("search", json!(next)).map_err(mcp_error)?
-            } else {
-                let q = arg_str(args, "query")?;
-                conn.call_tool("search", json!({ "query": q }))
-                    .map_err(mcp_error)?
+        // `skills({})` lists every visible app skill (the V2 replacement for
+        // the V1 integrations list); `app` narrows to one app, `name` reads
+        // one SKILL.md. Start with app=executor name=executor.
+        "sources" | "skills" => {
+            let mut input = serde_json::Map::new();
+            for key in ["app", "name"] {
+                if let Ok(v) = arg_str(args, key) {
+                    input.insert(key.into(), Value::String(v));
+                }
             }
+            conn.call_tool("skills", Value::Object(input))
+                .map_err(mcp_error)?
         }
-        // Exact input shape unverified live (see module docs): the docs give
-        // the JS form `tools.search.describe({ paths })`; we send `paths`.
+        "search" => {
+            // Pagination: the result carries a `next` object; it goes back
+            // as the whole search input for the following page.
+            let input = match object_arg(args, "next")? {
+                Some(next) => Value::Object(next),
+                None => {
+                    let mut input = serde_json::Map::new();
+                    for key in ["query", "namespace"] {
+                        if let Ok(v) = arg_str(args, key) {
+                            input.insert(key.into(), Value::String(v));
+                        }
+                    }
+                    Value::Object(input)
+                }
+            };
+            conn.call_tool("search", input).map_err(mcp_error)?
+        }
         "describe" => {
             let paths = match args.get("paths") {
                 Some(Value::Array(items)) => items
@@ -197,8 +260,7 @@ fn v2_mcp(action: &str, args: &Value) -> Result<String> {
                 Some(Value::String(one)) => vec![one.clone()],
                 _ => {
                     return Err(NurError::Tool(
-                        "describe needs `paths`: an array of exact tool paths from search"
-                            .into(),
+                        "describe needs `paths`: an array of exact tool paths from search".into(),
                     ));
                 }
             };
@@ -216,32 +278,25 @@ fn v2_mcp(action: &str, args: &Value) -> Result<String> {
                     format!("{ns}.{tool}")
                 }
             };
-            let input = match args.get("args_json") {
-                Some(Value::String(s)) => serde_json::from_str::<Value>(s)
-                    .map_err(|e| NurError::Tool(format!("args_json is not valid JSON: {e}")))?,
-                Some(v @ Value::Object(_)) => v.clone(),
-                _ => json!({}),
-            };
-            conn.call_tool("call", json!({ "calls": [{ "path": path, "input": input }] }))
-                .map_err(mcp_error)?
+            let input = Value::Object(object_arg(args, "args_json")?.unwrap_or_default());
+            conn.call_tool(
+                "call",
+                json!({ "calls": [{ "path": path, "input": input }] }),
+            )
+            .map_err(mcp_error)?
         }
-        // Answer an approval/input pause: requestId plus whatever the
-        // server asked for (passed through `args_json` as an object).
+        // Answer an approval/input pause: requestId, plus `{action, content}`
+        // in `args_json` when the server paused for an elicitation answer.
         "resume" => {
             let request_id = arg_str(args, "request_id")?;
-            let mut payload = json!({ "requestId": request_id });
-            if let Some(Value::Object(extra)) = args.get("args_json") {
-                if let Value::Object(map) = &mut payload {
-                    for (k, v) in extra {
-                        map.insert(k.clone(), v.clone());
-                    }
-                }
-            }
-            conn.call_tool("resume", payload).map_err(mcp_error)?
+            let mut payload = object_arg(args, "args_json")?.unwrap_or_default();
+            payload.insert("requestId".into(), Value::String(request_id));
+            conn.call_tool("resume", Value::Object(payload))
+                .map_err(mcp_error)?
         }
         "execute" => {
-            let program = arg_str(args, "program")?;
-            conn.call_tool("execute", json!({ "program": program }))
+            let code = arg_str(args, "code").or_else(|_| arg_str(args, "program"))?;
+            conn.call_tool("execute", json!({ "code": code }))
                 .map_err(mcp_error)?
         }
         other => return Err(NurError::Tool(format!("unknown executor action '{other}'"))),
@@ -283,7 +338,7 @@ pub fn is_read_only_action(args: &str) -> bool {
         .unwrap_or_else(|| "status".into());
     matches!(
         action.as_str(),
-        "status" | "sources" | "search" | "describe" | "help" | "pair"
+        "status" | "sources" | "skills" | "search" | "describe" | "help"
     )
 }
 
@@ -294,9 +349,10 @@ impl Tool for ExecutorTool {
 
     fn description(&self) -> &str {
         "Executor MCP gateway (executor.sh): unified catalog of OpenAPI/GraphQL/MCP \
-         integrations. action=status|start|stop|sources|search|describe|call|resume|execute|pair|upgrade. \
-         Prefer for external SaaS/APIs; use native Meta tools for local repo work. \
-         Auto-installed with Nur."
+         integrations. action=status|start|stop|login|skills|search|describe|call|resume|execute|pair|upgrade. \
+         Flow: search, describe the exact path, then call; execute runs a JS program when one result feeds another. \
+         On approval-required or input-required, show it to the user and resume with their answer. \
+         Prefer for external SaaS/APIs; use native tools for local repo work."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -305,17 +361,29 @@ impl Tool for ExecutorTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["status", "start", "stop", "sources", "search", "describe",
-                             "call", "resume", "execute", "pair", "upgrade", "help"],
+                    "enum": ["status", "start", "stop", "login", "skills", "sources", "search",
+                             "describe", "call", "resume", "execute", "pair", "upgrade", "help"],
                     "default": "status"
                 },
                 "query": {
                     "type": "string",
-                    "description": "For search: natural-language tool query"
+                    "description": "For search: words matched against tool paths and descriptions; omit to list a namespace"
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": "For search: app slug or namespace to search in. For call: integration namespace (joined with tool when no path is given)"
                 },
                 "next": {
+                    "type": "object",
+                    "description": "For search: the `next` object from a previous search result, sent back as the whole input for the next page"
+                },
+                "app": {
                     "type": "string",
-                    "description": "For search: the `next` token from a previous search result, passed back as the whole input for the next page"
+                    "description": "For skills: app slug (omit to list every skill)"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "For skills: skill name within app, reads its SKILL.md"
                 },
                 "paths": {
                     "type": "array",
@@ -326,23 +394,19 @@ impl Tool for ExecutorTool {
                     "type": "string",
                     "description": "For call: dotted tool path, e.g. tools.github.issues.create"
                 },
-                "namespace": {
-                    "type": "string",
-                    "description": "For call: integration namespace (joined with tool when no path is given)"
-                },
                 "tool": {
                     "type": "string",
                     "description": "For call: tool name within namespace"
                 },
                 "args_json": {
                     "type": "string",
-                    "description": "For call: JSON object string of arguments. For resume: JSON object with the server's requested answer fields"
+                    "description": "For call: JSON object of tool input. For resume: {action: accept|decline|cancel, content: {...}} when the server asked for an answer"
                 },
                 "request_id": {
                     "type": "string",
                     "description": "For resume: the requestId of the paused call"
                 },
-                "program": {
+                "code": {
                     "type": "string",
                     "description": "For execute: a JS program over the apps (tools.search(...), tools.<app>.<tool>(...))"
                 }
@@ -353,14 +417,14 @@ impl Tool for ExecutorTool {
     fn execute(&self, args: &Value, _ctx: &ToolContext) -> Result<String> {
         let bin = ecosystem::find_bin("executor").ok_or_else(|| {
             NurError::Tool(
-                "executor CLI not found. Meta auto-installs it — npm i -g executor@beta \
-                 then nur ecosystem ensure"
+                "executor CLI not found. Install it with `nur ecosystem ensure` \
+                 (or npm i -g executor@beta)"
                     .into(),
             )
         })?;
 
         let action = arg_str(args, "action").unwrap_or_else(|_| "status".into());
-        let version = executor_version(&bin);
+        let version = executor_version(&bin, matches!(action.as_str(), "start" | "upgrade"));
         // V2 (2.x) is the current line; unparseable output falls back to
         // the V1 CLI path, the pre-existing behaviour.
         let is_v2 = version.as_ref().is_some_and(|(major, _)| *major >= 2);
@@ -379,7 +443,16 @@ impl Tool for ExecutorTool {
             _ => None,
         };
         if let Some(argv) = cli_argv {
-            return ecosystem::run_capture(&bin, &argv, None, 120_000).map_err(NurError::Tool);
+            let out = ecosystem::run_capture(&bin, &argv, None, 120_000).map_err(NurError::Tool);
+            if action == "upgrade" {
+                executor_version(&bin, true);
+            }
+            return out;
+        }
+        // Sign in over MCP OAuth (browser, PKCE); the token is stored and
+        // used for every later call.
+        if action == "login" {
+            return crate::mcp_oauth::login(OAUTH_NAME, &endpoint_url()).map_err(NurError::Tool);
         }
         v2_mcp(&action, args)
     }
@@ -415,13 +488,15 @@ mod tests {
 
     #[test]
     fn read_only_set_matches_the_v2_action_table() {
-        let ro = |action: &str| {
-            is_read_only_action(&serde_json::json!({"action": action}).to_string())
-        };
-        for action in ["status", "sources", "search", "describe", "help", "pair"] {
+        let ro =
+            |action: &str| is_read_only_action(&serde_json::json!({"action": action}).to_string());
+        for action in ["status", "sources", "skills", "search", "describe", "help"] {
             assert!(ro(action), "{action} should be read-only");
         }
-        for action in ["call", "execute", "resume", "start", "stop", "upgrade", "install"] {
+        // `pair` mints a connection link (a credential); `login` opens OAuth.
+        for action in [
+            "call", "execute", "resume", "start", "stop", "upgrade", "install", "pair", "login",
+        ] {
             assert!(!ro(action), "{action} should not be read-only");
         }
     }

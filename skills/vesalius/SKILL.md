@@ -27,9 +27,9 @@ vesalius doctor       # checks the connection
 ## Using it
 
 Vesalius is an MCP server (`vesalius mcp`, stdio). `vesalius setup` registers it with Claude
-Code and Codex; Cursor and other stdio clients take it by hand. nur has no built-in stdio MCP
-client, so from nur reach it through the Executor gateway (`executor`, action `start`) if your
-Executor build can add an HTTP MCP source (`http://127.0.0.1:4312/mcp`), or run the questions in one of those clients. Its five
+Code and Codex; Cursor and other stdio clients take it by hand. In nur, add it as a stdio MCP
+server (`[mcp.servers.vesalius]` with `command = "vesalius"`, `args = ["mcp"]`, see
+`docs/tools.md`) and call it with the `mcp` tool. Its five
 read-only tools are:
 
 | Tool | Answers |

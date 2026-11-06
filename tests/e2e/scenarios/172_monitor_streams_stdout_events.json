@@ -1,0 +1,17 @@
+{
+  "description": "A monitor runs in the workspace and its stdout lines and exit reach the model as events on the next round, without polling; stderr never does.",
+  "setup_files": {"marker.txt": "monitor-line-42\n"},
+  "prompt": "Watch the marker command.",
+  "script": [
+    {"tool_calls": [{"name": "monitor", "arguments": {"action": "start", "description": "marker watch", "command": "python -c \"import sys; print(open('marker.txt').read().strip()); print('stderr-only-line', file=sys.stderr)\""}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "python -c \"import time; time.sleep(2)\""}}]},
+    {"text": "Monitor watched."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "tool_results": [{"request": 2, "contains": ["monitor #1 started", "marker watch"]}],
+    "request_contains": [{"request": 3, "contains": ["[monitor] #1 (marker watch) events:", "monitor-line-42", "ended: completed exit code 0"], "lacks": ["\\n  stderr-only-line"]}],
+    "stdout_contains": ["Monitor watched."]
+  }
+}

@@ -36,7 +36,7 @@ within that budget. If the path cannot fit, the result is truncated without a sp
 
 Which schemas ride on every request depends on `[tools] profile`:
 
-- **`lean` (default):** the editing shell and session tools are always offered (`read_file`, `list_dir`, the edit tools, `bash`, `sgrep`/`grep`/`glob`, `web_search`/`web_fetch`, `look`, `git_status`/`git_diff`, `context`, `goal`, `message`, `bg`, `skill`, `memory`, `question`, `secret`, `todo_write`, `submit_plan`, `agent`, `codemode`, `typesafe`, `tool_search`). Every other tool loads through `tool_search`; from the next request on the model calls it by its real name. The loaded set is read back from the conversation, so `/resume` keeps it.
+- **`lean` (default):** the editing shell and session tools are always offered (`read_file`, `list_dir`, the edit tools, `bash`, `sgrep`/`grep`/`glob`, `web_search`/`web_fetch`, `look`, `git_status`/`git_diff`, `context`, `goal`, `message`, `bg`, `monitor`, `skill`, `memory`, `question`, `secret`, `todo_write`, `submit_plan`, `agent`, `codemode`, `typesafe`, `tool_search`). Every other tool loads through `tool_search`; from the next request on the model calls it by its real name. The loaded set is read back from the conversation, so `/resume` keeps it.
 - **`full`:** every schema on every request.
 - **`core`:** 17 tools: the minimal editing shell and `typesafe`.
 
@@ -533,11 +533,11 @@ Post, schedule, and reply across 14 social platforms (X, LinkedIn, Instagram, Fa
 
 ### `executor`
 
-Dispatch to external APIs through the Executor 2 MCP gateway (`http://127.0.0.1:4312/mcp`). `action=status|start|stop|sources|search|describe|call|resume|execute|pair|upgrade`. `status`, `sources`, `search`, `describe`, `pair` are read-only; `call`, `execute`, `resume`, `start`, `stop`, `upgrade` need approval in manual mode and are blocked in plan mode. Daemon management is `executor service start|stop|status`; the V1 CLI commands (`tools`, `call`, `mcp`, `web`, `install`) no longer exist in Executor 2.
+Dispatch to external APIs through the Executor 2 MCP gateway (`http://127.0.0.1:4312/mcp`). `action=status|start|stop|login|skills|search|describe|call|resume|execute|pair|upgrade`. The endpoint requires sign-in: `login` runs MCP OAuth in the browser once and stores the token (`EXECUTOR_API_KEY` also works). `status`, `skills`, `search`, `describe` are read-only; `call`, `execute`, `resume`, `start`, `stop`, `login`, `pair` (mints a connection link), `upgrade` need approval in manual mode and are blocked in plan mode. Daemon management is `executor service start|stop|status`; the V1 CLI commands (`tools`, `call`, `mcp`, `web`, `install`) no longer exist in Executor 2.
 
 ### `monitor`
 
-Stream a background command's stdout to the model as events, line by line. `action=start|list|status|events|stop`. `start` takes `command`, `description`, `timeout_ms` (default 300000), `persistent` (default false). Lines within 200ms batch into one event; stderr goes to a file (`~/.nur/monitors/<id>.stderr`) and never triggers events; exit ends the watch and reports the code. `list` and `status` are read-only; `start`, `events`, `stop` are not. Never restored on resume. Use for live streams (build/deploy logs, `tail -F`, long test runs); `bg` is for fire-and-forget jobs.
+Stream a background command's stdout to the model as events, line by line. `action=start|list|status|events|stop`. `start` takes `command` (run in the workspace, same environment as `bash`), `description`, `timeout_ms` (default 300000), `persistent` (no timeout: runs until stopped or nur exits). Stop, timeout and nur exit kill the whole process tree. Lines within 200ms batch into one event; stderr goes to a file (`~/.nur/monitors/<id>.stderr`) and never triggers events; exit ends the watch and reports the code. `list` and `status` are read-only; `start`, `events`, `stop` are not. Never restored on resume. Use for live streams (build/deploy logs, `tail -F`, long test runs); `bg` is for fire-and-forget jobs.
 
 ### `browser`
 

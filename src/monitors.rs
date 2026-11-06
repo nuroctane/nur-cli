@@ -1,4 +1,4 @@
-//! Monitors — event-streaming background processes, modelled on Claude
+//! Monitors: event-streaming background processes, modelled on Claude
 //! Code's Monitor tool (2.1.98+, April 2026).
 //!
 //! A monitor runs a shell command in the background and each stdout line
@@ -14,7 +14,10 @@
 //! - Stderr goes to a file (`~/.nur/monitors/<id>.stderr`) and never
 //!   triggers events (merge with `2>&1` if failures must reach the model).
 //! - Exit ends the watch and the exit code is reported.
-//! - Cancel ends it. `timeout_ms` (default 5 minutes) ends it.
+//! - Cancel ends it. `timeout_ms` (default 5 minutes) ends it; a
+//!   `persistent` monitor has no timeout and runs until stopped or nur exits.
+//! - Stop, timeout and exit kill the whole process tree, so a `tail -F`
+//!   under the shell does not outlive the watch.
 //! - Never restored on resume: monitors live in process memory, so a new
 //!   session starts with none.
 //!
@@ -151,6 +154,10 @@ fn now_secs() -> u64 {
 }
 
 fn monitors_dir() -> PathBuf {
+    // cargo test does not set NUR_HOME; tests must not write the real home.
+    if cfg!(test) {
+        return std::env::temp_dir().join("nur-monitors-test");
+    }
     nur_home().join("monitors")
 }
 
@@ -164,11 +171,17 @@ fn stderr_path(id: u64) -> PathBuf {
 pub fn start(
     label: &str,
     command: &str,
+    cwd: Option<&std::path::Path>,
     timeout_ms: Option<u64>,
     persistent: bool,
     owner_session: Option<String>,
 ) -> Result<u64> {
-    let timeout_ms = timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+    // A persistent monitor has no timeout: it runs until stopped or nur exits.
+    let timeout_ms = if persistent {
+        0
+    } else {
+        timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS)
+    };
     let _ = std::fs::create_dir_all(monitors_dir());
     let id = {
         let _registry = registry();
@@ -179,15 +192,31 @@ pub fn start(
     let stderr_file = std::fs::File::create(stderr_path(id))
         .map_err(|e| NurError::Tool(format!("cannot create monitor stderr file: {e}")))?;
 
-    #[cfg(windows)]
-    let (prog, argv) = ("cmd.exe".to_string(), vec!["/C".into(), command.to_string()]);
-    #[cfg(not(windows))]
-    let (prog, argv) = ("sh".to_string(), vec!["-c".into(), command.to_string()]);
-
-    let mut child = Command::new(&prog)
-        .args(&argv)
+    // The same shell as the `bash` tool (Git Bash on Windows when present),
+    // so the syntax the model writes for bash works here too.
+    let words = crate::tools::model_shell_words(command);
+    let mut cmd = Command::new(&words[0]);
+    cmd.args(&words[1..])
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::from(stderr_file))
+        .stderr(Stdio::from(stderr_file));
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    // Same environment as bash/bg: provider keys scrubbed, saved secrets in.
+    crate::tools::tool_env(&mut cmd);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    // Own process group, so stop/timeout can kill the whole tree.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| NurError::Tool(format!("cannot start monitor command: {e}")))?;
     let stdout = child
@@ -245,6 +274,11 @@ pub fn start(
                     let Some(rec) = g.monitors.get_mut(&id) else {
                         break;
                     };
+                    // Stopped or timed out: a straggler line from a dying
+                    // tree is not an event.
+                    if rec.info.state != MonitorState::Running {
+                        continue;
+                    }
                     if rec.batch_started.is_none() {
                         rec.batch_started = Some(Instant::now());
                     }
@@ -257,6 +291,8 @@ pub fn start(
                     }
                     if rec.batch.len() < MAX_EVENT_LINES {
                         rec.batch.push(text);
+                    } else {
+                        rec.dropped_lines += 1;
                     }
                 }
                 Err(_) => break,
@@ -315,14 +351,14 @@ pub fn start(
         let reg = registry();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(timeout_ms));
-            let mut g = reg.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(rec) = g.monitors.get_mut(&id) {
-                if rec.info.state == MonitorState::Running {
-                    if let Some(child) = rec.child.as_mut() {
-                        let _ = child.kill();
-                    }
-                    rec.info.state = MonitorState::TimedOut;
-                }
+            let pid = {
+                let mut g = reg.lock().unwrap_or_else(|e| e.into_inner());
+                g.monitors
+                    .get_mut(&id)
+                    .and_then(|rec| end_running(rec, MonitorState::TimedOut))
+            };
+            if let Some(pid) = pid {
+                kill_tree(pid);
             }
         });
     }
@@ -331,22 +367,77 @@ pub fn start(
 
 /// Stop a monitor by id. Kills the process; the reader thread reaps it.
 pub fn stop(id: u64) -> Result<String> {
-    let _registry = registry();
-    let mut g = _registry.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(rec) = g.monitors.get_mut(&id) else {
-        return Err(NurError::Tool(format!("unknown monitor {id}")));
+    let (pid, label) = {
+        let _registry = registry();
+        let mut g = _registry.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(rec) = g.monitors.get_mut(&id) else {
+            return Err(NurError::Tool(format!("unknown monitor {id}")));
+        };
+        if rec.info.state != MonitorState::Running {
+            return Ok(format!(
+                "monitor #{id} is already {}",
+                rec.info.state.as_str()
+            ));
+        }
+        (
+            end_running(rec, MonitorState::Cancelled),
+            rec.info.label.clone(),
+        )
     };
+    if let Some(pid) = pid {
+        kill_tree(pid);
+    }
+    Ok(format!("monitor #{id} stopped · {label}"))
+}
+
+/// Kill every running monitor's process tree. Called on exit so a
+/// persistent watch never outlives nur.
+pub fn stop_all() {
+    let pids: Vec<u32> = {
+        let _registry = registry();
+        let mut g = _registry.lock().unwrap_or_else(|e| e.into_inner());
+        g.monitors
+            .values_mut()
+            .filter_map(|rec| end_running(rec, MonitorState::Cancelled))
+            .collect()
+    };
+    for pid in pids {
+        kill_tree(pid);
+    }
+}
+
+/// Mark a running monitor as ended with `state` and return the pid to kill.
+/// The kill runs outside the registry lock (taskkill can be slow).
+fn end_running(rec: &mut MonitorRecord, state: MonitorState) -> Option<u32> {
     if rec.info.state != MonitorState::Running {
-        return Ok(format!(
-            "monitor #{id} is already {}",
-            rec.info.state.as_str()
-        ));
+        return None;
     }
-    if let Some(child) = rec.child.as_mut() {
-        let _ = child.kill();
+    rec.info.state = state;
+    rec.child.as_ref().map(|c| c.id())
+}
+
+/// Kill a monitor's whole process tree: the shell plus anything it started
+/// (a `tail -F` under `cmd /C` otherwise keeps the stdout pipe open).
+fn kill_tree(pid: u32) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(0x0800_0000)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
-    rec.info.state = MonitorState::Cancelled;
-    Ok(format!("monitor #{id} stopped · {}", rec.info.label))
+    #[cfg(unix)]
+    {
+        // The child leads its own process group (`process_group(0)`).
+        // SAFETY: kill(2) with a negative pid signals that group only.
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+    }
 }
 
 pub fn get(id: u64) -> Option<MonitorInfo> {
@@ -411,7 +502,7 @@ pub fn events_note_for(session: Option<&str>) -> Option<String> {
                 }
             }
             if dropped > 0 {
-                out.push_str(&format!("  … {dropped} lines dropped (pending cap)\n"));
+                out.push_str(&format!("  ... {dropped} lines dropped (cap)\n"));
             }
         }
         if !rec.exit_reported && rec.info.state != MonitorState::Running {
@@ -429,10 +520,7 @@ pub fn events_note_for(session: Option<&str>) -> Option<String> {
                 code
             ));
             if rec.info.state == MonitorState::Failed {
-                out.push_str(&format!(
-                    "  stderr: {}\n",
-                    rec.info.stderr_path
-                ));
+                out.push_str(&format!("  stderr: {}\n", rec.info.stderr_path));
             }
         }
     }
@@ -463,7 +551,7 @@ pub fn running_note(session: &str) -> Option<String> {
         return None;
     }
     running.sort_by_key(|m| m.id);
-    let mut s = String::from("[monitor] monitor(s) still running - events arrive as they stream:\n");
+    let mut s = String::from("[monitor] still running, events arrive as they stream:\n");
     for m in running {
         s.push_str(&format!(
             "  #{} · {} · {} · timeout {}s{}\n",
@@ -484,9 +572,13 @@ mod tests {
     // Batching: lines within 200ms are one event; a pause splits them.
     #[test]
     fn lines_within_200ms_batch_into_one_event() {
+        // Shell-neutral: the monitor runs under the bash tool's shell, which
+        // is Git Bash, pwsh or cmd depending on the machine.
+        let cmd = "python -u -c \"import time; print('a'); print('b'); time.sleep(1); print('c')\"";
         let id = start(
             "batch test",
-            "printf 'a\\nb\\n'; sleep 1; printf 'c\\n'",
+            cmd,
+            None,
             Some(60_000),
             false,
             Some("batch-test".into()),
@@ -506,7 +598,7 @@ mod tests {
 
     #[test]
     fn exit_is_reported_once_with_code() {
-        let id = start("exit test", "exit 3", Some(60_000), false, None).expect("start");
+        let id = start("exit test", "exit 3", None, Some(60_000), false, None).expect("start");
         for _ in 0..50 {
             thread::sleep(Duration::from_millis(100));
             if let Some(info) = get(id) {
@@ -526,9 +618,11 @@ mod tests {
 
     #[test]
     fn stderr_produces_no_events() {
+        let cmd = "python -u -c \"import sys; print('out'); print('err', file=sys.stderr)\"";
         let id = start(
             "stderr test",
-            "echo out; echo err 1>&2",
+            cmd,
+            None,
             Some(60_000),
             false,
             Some("stderr-test".into()),
@@ -538,5 +632,34 @@ mod tests {
         let events = take_events(id).expect("events");
         assert_eq!(events, vec![vec!["out".to_string()]]);
         let _ = stop(id);
+    }
+
+    // Failure mode: stop killed only the shell, a grandchild kept the stdout
+    // pipe open, and the reader never saw EOF (the process lived on).
+    #[test]
+    fn stop_kills_the_whole_tree() {
+        // A grandchild that inherits stdout and outlives a shell-only kill.
+        let cmd = "python -c \"import subprocess, sys; subprocess.run([sys.executable, '-c', 'import time; time.sleep(30)'])\"";
+        let id = start(
+            "tree test",
+            cmd,
+            None,
+            Some(60_000),
+            false,
+            Some("tree-test".into()),
+        )
+        .expect("start");
+        thread::sleep(Duration::from_millis(300));
+        stop(id).expect("stop");
+        let mut reaped = false;
+        for _ in 0..100 {
+            thread::sleep(Duration::from_millis(100));
+            if get(id).and_then(|m| m.finished_at).is_some() {
+                reaped = true;
+                break;
+            }
+        }
+        assert!(reaped, "reader saw EOF after stop");
+        assert_eq!(get(id).unwrap().state, MonitorState::Cancelled);
     }
 }
