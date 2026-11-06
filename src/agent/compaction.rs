@@ -465,6 +465,9 @@ pub(super) async fn compact_session_inner(
             if let Some(running) = crate::bg_jobs::running_note(&session.id) {
                 parts.push(running);
             }
+            if let Some(running) = crate::monitors::running_note(&session.id) {
+                parts.push(running);
+            }
         }
         if parts.is_empty() {
             String::new()

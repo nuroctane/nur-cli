@@ -12,6 +12,7 @@ pub mod debug_tool;
 pub use terminal_browser::is_read_only_action as terminal_browser_is_read_only;
 mod admission_tool;
 pub mod bg_tool;
+pub mod monitor_tool;
 mod connectome_tool;
 mod context_tool;
 mod docs_context;
@@ -153,6 +154,7 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "repl",
     "mem",
     "bg",
+    "monitor",
     "typesafe",
     // Skills + OptMem: a subagent told to "load your playbook" or "check
     // memory" silently no-oped without these (session 5b30168a: three audit
@@ -378,6 +380,7 @@ impl ToolHost {
             Box::new(t3code_tool::T3Code),
             Box::new(penecho_tool::Penecho),
             Box::new(bg_tool::Bg),
+            Box::new(monitor_tool::MonitorTool),
             Box::new(fractal_tool::Fractal),
             Box::new(headroom_tool::Headroom),
             Box::new(typesafe_tool::Typesafe),
@@ -598,6 +601,7 @@ impl ToolHost {
             "t3code" => t3code_tool::T3Code.execute(&args, ctx),
             "penecho" => penecho_tool::Penecho.execute(&args, ctx),
             "bg" => bg_tool::Bg.execute(&args, ctx),
+            "monitor" => monitor_tool::MonitorTool.execute(&args, ctx),
             "fractal" => fractal_tool::Fractal.execute(&args, ctx),
             "headroom" => headroom_tool::Headroom.execute(&args, ctx),
             "typesafe" => typesafe_tool::Typesafe.execute(&args, ctx),
@@ -939,6 +943,7 @@ mod tests {
             "t3code",
             "penecho",
             "bg",
+            "monitor",
             "fractal",
             "headroom",
             "typesafe",

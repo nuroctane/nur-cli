@@ -50,6 +50,7 @@ pub const LEAN_ALWAYS_ON: &[&str] = &[
     "goal",
     "message",
     "bg",
+    "monitor",
     "skill",
     "memory",
     "question",

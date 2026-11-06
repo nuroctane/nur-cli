@@ -1145,6 +1145,20 @@ impl AgentRunner {
                 }
             }
 
+            // Monitor events (stdout lines from a `monitor` watch) stream in
+            // the same way: drained once here so the model reacts to live
+            // output without polling. Subagents leave the drain to the
+            // parent, as with bg completions.
+            if !self.is_subagent {
+                if let Some(note) = crate::monitors::events_note_for(Some(&session.id)) {
+                    session.input_items.push(user_text_item(&note));
+                    self.persist_session(session);
+                    let _ = tx.send(AgentEvent::Status(
+                        "monitor · streamed events injected mid-turn".into(),
+                    ));
+                }
+            }
+
             // OMP-style dynamic context pruning (supersedeReads + dropUseless):
             // when the model reads the same target again, the newer observation
             // supersedes the old body; empty/error tool bodies outside the live

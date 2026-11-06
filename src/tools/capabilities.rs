@@ -159,6 +159,7 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "t3code" => crate::tools::t3code_tool::is_read_only_action(&args.to_string()),
         "penecho" => crate::tools::penecho_tool::is_read_only_action(&args.to_string()),
         "bg" => crate::tools::bg_tool::is_read_only_action(&args.to_string()),
+        "monitor" => crate::tools::monitor_tool::is_read_only_action(&args.to_string()),
         "fractal" => crate::tools::fractal_tool::is_read_only_action(&args.to_string()),
         "headroom" => crate::tools::headroom_tool::is_read_only_action(&args.to_string()),
         "typesafe" => crate::tools::typesafe_is_read_only(&args.to_string()),

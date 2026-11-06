@@ -33,6 +33,7 @@ mod lsp;
 mod mcp_http;
 mod mcp_oauth;
 mod mcp_stdio;
+mod monitors;
 mod notifications;
 mod oauth;
 mod open_uri;
