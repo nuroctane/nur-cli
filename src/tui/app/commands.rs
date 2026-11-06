@@ -3906,7 +3906,7 @@ impl App {
             |result| match result {
                 Ok(s) => Ok(format!(
                     "mcp servers (via executor gateway)\n{s}\n\n\
-                     add one:  `executor web` opens the gateway's integrations UI\n\
+                     add one:  `executor` opens the gateway's dashboard\n\
                      the agent uses the `executor` tool for OpenAPI/GraphQL/MCP calls\n\
                      Enclave is built in: /enclave"
                 )),

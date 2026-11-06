@@ -113,7 +113,7 @@ fn plan_install(name: &str) -> Result<(InstallPlan, Action), String> {
         ),
         "egaki" => npm_plan("egaki", "egaki", "image/video generation CLI"),
         "akarso" => npm_plan("akarso", "akarso", "run `akarso auth login` afterwards"),
-        "executor" => npm_plan("executor", "executor", "MCP gateway on :4788"),
+        "executor" => npm_plan("executor", "executor", "MCP gateway on :4312"),
         "graphjin" => npm_plan("graphjin", "graphjin", "governed GraphQL over SQL"),
         "ruflo" => npm_plan("ruflo", "ruflo", "agent memory/store"),
         "plur" => npm_plan(
