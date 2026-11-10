@@ -5918,6 +5918,7 @@ fn inline_image_paths(app: &App, cell: &Cell) -> Vec<std::path::PathBuf> {
     }
 }
 
+#[cfg(feature = "image-peek")]
 /// Each picture's rows inside a cell's final (wrapped, framed) layout:
 /// `(first row, row count)`, found by the picture-row marker rather than
 /// recomputed, so the card frame's edge rows cannot shift them.

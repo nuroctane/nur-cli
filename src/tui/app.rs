@@ -2328,8 +2328,10 @@ pub struct App {
     #[cfg(feature = "image-peek")]
     pub wrap_cache_latex: u64,
     /// `terminal_image::cache_revision` the transcript last wrapped at.
+    #[cfg(feature = "image-peek")]
     pub wrap_cache_images: u64,
     /// `terminal_image::settings_revision` the transcript last wrapped at.
+    #[cfg(feature = "image-peek")]
     pub wrap_cache_image_settings: u64,
     /// Inline pictures laid out this frame: where, which file, how wide.
     /// Painted last, after every popup, and only where nothing covered them.
@@ -2923,7 +2925,9 @@ pub(super) fn new_app(
         prose_cache_parts: Vec::new(),
         #[cfg(feature = "image-peek")]
         wrap_cache_latex: 0,
+        #[cfg(feature = "image-peek")]
         wrap_cache_images: 0,
+        #[cfg(feature = "image-peek")]
         wrap_cache_image_settings: 0,
         #[cfg(feature = "image-peek")]
         inline_overlays: Vec::new(),
