@@ -1,0 +1,20 @@
+{
+  "description": "With ast-grep absent (NUR_AST_GREP_BIN empty) ast_grep answers, not errors: the install line plus grep/sgrep as the alternatives, and no text-match fallback. ast-grep run through bash is refused and points at the tool.",
+  "env": {"NUR_AST_GREP_BIN": ""},
+  "setup_files": {"src/app.ts": "console.log(\"start\");\n"},
+  "prompt": "Find every console.log call.",
+  "script": [
+    {"tool_calls": [{"name": "ast_grep", "arguments": {"pattern": "console.log($$$ARGS)", "lang": "ts"}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"command": "ast-grep run -p 'console.log($A)' -l ts"}}]},
+    {"text": "ast-grep is not installed here."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 3,
+    "stdout_contains": ["ast-grep is not installed here."],
+    "tool_results": [
+      {"request": 2, "contains": ["[ast-grep is not installed. Install: npm i -g @ast-grep/cli", "grep pattern=", "sgrep query="], "lacks": ["src/app.ts:1"]},
+      {"request": 3, "contains": ["refused: ast-grep as a shell command - use the ast_grep tool"]}
+    ]
+  }
+}

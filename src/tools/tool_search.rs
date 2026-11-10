@@ -39,6 +39,7 @@ pub const LEAN_ALWAYS_ON: &[&str] = &[
     "hashline_edit",
     "bash",
     "sgrep",
+    "ast_grep",
     "grep",
     "glob",
     "web_fetch",

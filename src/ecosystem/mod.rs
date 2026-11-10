@@ -66,7 +66,8 @@ const ECOSYSTEM_MARKER: &str = "ecosystem.json";
 /// 29: cohesive terminal/HTTP/document stack update and owned skill snapshots.
 /// 30: bundled startup workflow router and expanded Jev engine resources.
 /// 31: sgrep local semantic search (cargo install + model warm-up).
-pub(crate) const ECOSYSTEM_SCHEMA: u32 = 31;
+/// 32: ast-grep structural search (pinned npm prebuilt, cargo fallback).
+pub(crate) const ECOSYSTEM_SCHEMA: u32 = 32;
 /// Re-run ensure at most once per this many seconds unless forced.
 const ENSURE_TTL_SECS: u64 = 86_400;
 
@@ -119,6 +120,9 @@ pub struct EcosystemStatus {
     /// sgrep - local semantic code search (Context.dev), the `sgrep` tool's engine.
     #[serde(default)]
     pub sgrep: ComponentStatus,
+    /// ast-grep - structural code search and rewrite, the `ast_grep` tool's engine.
+    #[serde(default)]
+    pub ast_grep: ComponentStatus,
     /// egaki - image/video generation CLI.
     #[serde(default)]
     pub egaki: ComponentStatus,
@@ -155,8 +159,9 @@ impl EcosystemStatus {
             }
         };
         format!(
-            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
+            "ecosystem · {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  {}  · packs {}",
             bit(self.sgrep.available, "sgrep"),
+            bit(self.ast_grep.available, "ast-grep"),
             bit(self.graphify.available, "graphify"),
             bit(self.plur.available, "plur"),
             bit(self.ruflo.available, "ruflo"),
@@ -188,8 +193,9 @@ impl EcosystemStatus {
     pub fn report(&self) -> String {
         let mut s = String::from("Nur ecosystem (auto-provisioned on install / open)\n");
         // Fixed names so older ecosystem.json markers (pre-field) still list every slot.
-        let comps: [(&str, &ComponentStatus); 22] = [
+        let comps: [(&str, &ComponentStatus); 23] = [
             ("sgrep", &self.sgrep),
+            ("ast-grep", &self.ast_grep),
             ("graphify", &self.graphify),
             ("plur", &self.plur),
             ("ruflo", &self.ruflo),
@@ -271,7 +277,7 @@ impl EcosystemStatus {
         }
         s.push_str(
             "\n  slash: /ecosystem /plur /ruflo /graphify /skills /akarso /openseo /tb\n\
-             tools:  sgrep graphify plur ruflo akarso executor omp browser terminal_browser excalidraw penecho tldraw skill dogwood\n\
+             tools:  sgrep ast_grep graphify plur ruflo akarso executor omp browser terminal_browser excalidraw penecho tldraw skill dogwood\n\
              packs:  design · clone-website · cybersecurity · Text-to-CAD · mobile-harness · opencode catalog · DCP patterns\n",
         );
         s
@@ -381,6 +387,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
             let h_optmem = s.spawn(|| std::panic::catch_unwind(ensure_optmem));
             let h_dogwood = s.spawn(|| std::panic::catch_unwind(ensure_dogwood));
             let h_sgrep = s.spawn(|| std::panic::catch_unwind(ensure_sgrep));
+            let h_ast_grep = s.spawn(|| std::panic::catch_unwind(ensure_ast_grep));
             let h_egaki = s.spawn(move || std::panic::catch_unwind(|| ensure_egaki(node_ok)));
             let h_fractal = s.spawn(|| std::panic::catch_unwind(ensure_fractal));
             let h_cua = s.spawn(|| std::panic::catch_unwind(ensure_cua));
@@ -405,6 +412,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
                 h_optmem.join(),
                 h_dogwood.join(),
                 h_sgrep.join(),
+                h_ast_grep.join(),
                 h_egaki.join(),
                 h_fractal.join(),
                 h_cua.join(),
@@ -428,7 +436,8 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
                 }
             };
         }
-        let (g, p, r, sc, ak, ex, om, gj, br, tb, ed, pe, hr, op, dg, sg, eg, fr, cu, akr, lp, ds) = res;
+        let (g, p, r, sc, ak, ex, om, gj, br, tb, ed, pe, hr, op, dg, sg, ag, eg, fr, cu, akr, lp, ds) =
+            res;
         set_component!(status.graphify, g, "graphify");
         set_component!(status.plur, p, "plur");
         set_component!(status.ruflo, r, "ruflo");
@@ -445,6 +454,7 @@ pub fn ensure_ecosystem(force: bool) -> EcosystemStatus {
         set_component!(status.optmem, op, "optmem");
         set_component!(status.dogwood, dg, "dogwood");
         set_component!(status.sgrep, sg, "sgrep");
+        set_component!(status.ast_grep, ag, "ast-grep");
         set_component!(status.egaki, eg, "egaki");
         set_component!(status.fractal, fr, "fractal");
         set_component!(status.cua, cu, "cua");
@@ -869,6 +879,35 @@ fn ensure_sgrep() -> ComponentStatus {
             Err(e) => c.detail = format!("CLI ready · model warm-up skipped: {e}"),
         }
     }
+    c
+}
+
+// ── ast-grep (structural code search and rewrite) ────────────────────────
+
+fn ensure_ast_grep() -> ComponentStatus {
+    let mut c = ComponentStatus {
+        name: "ast-grep".into(),
+        ..Default::default()
+    };
+    // The `ast_grep` tool is offered on every request, so a fresh install
+    // gets the engine: the pinned npm package ships prebuilt binaries (no
+    // compile), cargo is the fallback. Attempted at most once a week.
+    let bin = match crate::ast_grep::ast_grep_bin() {
+        Some(b) => Some(b),
+        None if !crate::ast_grep::install_attempted() => crate::ast_grep::install(),
+        None => None,
+    };
+    let Some(bin) = bin else {
+        c.detail = format!(
+            "not installed - {} (the ast_grep tool says so and points at grep/sgrep meanwhile)",
+            crate::ast_grep::INSTALL_HINT
+        );
+        return c;
+    };
+    c.available = true;
+    c.path = Some(bin.clone());
+    c.version = cmd_version(&bin, &["--version"]);
+    c.detail = "ready · structural search, scan, rewrite preview, apply".into();
     c
 }
 

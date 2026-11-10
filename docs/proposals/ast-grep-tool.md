@@ -1,10 +1,42 @@
 # Proposal: native ast-grep tool, sgrep-style
 
-Status: proposal (2026-11-09). Author: CIA agent, from the live ast-grep
+Status: implemented in v0.68.0 (proposed 2026-11-09). Author: CIA agent, from the live ast-grep
 CLI reference and the repo's own sgrep tool. This supersedes the Nov 9
 triage disposition of detection plus a thin skill: the user ordered a
 real tool that models call regularly, just like sgrep, scoped to
 ast-grep's most useful functions.
+
+**As built** (`src/ast_grep.rs`, `src/tools/ast_grep.rs`; docs in
+[tools.md](../tools.md#ast_grep)). Checked against ast-grep 0.51.1 on Windows.
+Where the build differs from the plan below:
+
+- `apply` never runs `--update-all`. It takes the replacements from the JSON
+  preview (`replacementOffsets` + `replacement`), checks each file still holds
+  the matched text, and writes through nur's commit path: proposal mode, file
+  ledger, one `/undo` checkpoint per file, post-edit LSP. The `--json` +
+  `--update-all` no-op was confirmed live and is moot. Nested matches keep the
+  outer one. `apply` also takes a rule's `fix` (`rule` / `inline_rule`).
+- A fifth action, `explain`: `--debug-query=ast` over empty `--stdin`, the
+  pattern's tree-sitter parse, for writing `kind`/rules and for a pattern that
+  matched nothing. A pattern with an ERROR node gets a hint on every action.
+- Install is the pinned npm package `@ast-grep/cli` (prebuilt, seconds), with
+  `cargo install ast-grep --locked` only without npm. On Windows nur runs the
+  package's `ast-grep.exe`, never the `.cmd` shim, which would re-parse `%`,
+  `"` and `^` in a pattern.
+- `--custom-languages ignore` on every run: a cloned repository's
+  `sgconfig.yml` cannot load native code.
+- Search output: `path:line:col`, the match's full lines numbered, then the
+  metavariable bindings (`$A = x · $$$ARGS = a, b`, separators dropped).
+- Shell refusal covers `ast-grep`, `npx`/`bunx ast-grep` and `sg` when its
+  arguments are ast-grep's; `sg docker -c ...` (setgroups) still runs.
+- Verified: compact JSON fields (0-indexed `line`/`column`, `byteOffset`,
+  `lines`, `charCount.leading`, `metaVariables.single/multi`), exit 1 on no
+  match, exit 2 on a bad `--lang`, exit 3 for `scan` without `sgconfig.yml`,
+  `--inline-rules` with raw YAML, `-l` aliases (`rs`, `ts`), language inferred
+  per file when `-l` is omitted.
+- E2E 175 (no binary: install line, no text fallback, shell refusal) and 176
+  (real binary: search across formatting variants, preview, apply; skipped
+  where ast-grep is not installed, via the harness's new `requires_bin`).
 
 ## 1. What ast-grep is
 
@@ -300,21 +332,21 @@ Two small companion edits, no new machinery:
 
 ## 5. Acceptance criteria
 
-- [ ] `ast_grep` search finds a construct grep would miss or
+- [x] `ast_grep` search finds a construct grep would miss or
       over-match (e.g. a call shape across formatting variants,
       skipping string/comment hits).
-- [ ] `ast_grep` is offered on every request in lean, root, core,
+- [x] `ast_grep` is offered on every request in lean, root, core,
       and subagent profiles, next to `sgrep`.
-- [ ] Models reach for it for shape questions without being told:
+- [x] Models reach for it for shape questions without being told:
       prompt text, description, and grep/bash routing all name it.
-- [ ] Rewrite preview never writes; apply never combines `--json`
+- [x] Rewrite preview never writes; apply never combines `--json`
       with `--update-all`; apply asks in manual mode and is denied in
       plan mode.
-- [ ] Binary missing: install message plus the grep/sgrep pointer,
+- [x] Binary missing: install message plus the grep/sgrep pointer,
       no crash, no silent text fallback.
-- [ ] `nur ecosystem ensure` installs it with cargo when missing;
+- [x] `nur ecosystem ensure` installs it with cargo when missing;
       `nur doctor` shows the resolved path.
-- [ ] No new dependencies; the tool shells out to the binary exactly
+- [x] No new dependencies; the tool shells out to the binary exactly
       like the sgrep tool does.
 
 ## 6. Out of scope

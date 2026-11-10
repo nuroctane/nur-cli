@@ -17,6 +17,18 @@ from fake_provider import State, make_handler
 TOKEN = 'ghp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5'
 
 
+def write_png(path, width, height, pixel):
+    """A truecolor PNG from `pixel(x, y) -> (r, g, b)`, stdlib only."""
+    import struct
+    import zlib
+    raw = b''.join(b'\x00' + b''.join(bytes(pixel(x, y)) for x in range(width)) for y in range(height))
+
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+    path.write_bytes(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+                     + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+
+
 def run(binary, scenario):
     work = OUT / f'{scenario}-{time.time_ns()}'
     work.mkdir(parents=True)
@@ -79,6 +91,11 @@ def run(binary, scenario):
     if scenario.startswith('secret-request'):
         script.insert(0, {'tool_calls': [{'name': 'secret', 'arguments': {
             'action': 'request', 'name': 'SERVICE_TOKEN', 'purpose': 'Access the test service'}}]})
+    if scenario in ('inline-image', 'inline-image-kitty'):
+        script = [
+            {'tool_calls': [{'name': 'look', 'arguments': {'path': 'shot.png'}}]},
+            {'text': 'IMAGE_SHOWN'},
+        ]
     if scenario == 'resume-controls':
         script = [{'status': 429, 'body': {'error': {
             'message': 'Usage limit reached', 'resets_in_seconds': 120}}}] * 4 + script
@@ -89,6 +106,8 @@ def run(binary, scenario):
     env.pop('NO_COLOR', None)
     if scenario == 'secret-reduced-motion':
         env['NUR_REDUCED_MOTION'] = '1'
+    if scenario == 'inline-image-kitty':
+        env['NUR_IMAGE_PROTOCOL'] = 'kitty'
     (home/'.nur/config.toml').write_text(
         f'provider = "vllm"\nmodel = "e2e-model"\nbase_url = "http://127.0.0.1:{server.server_port}/v1"\n'
         'theme = "gold"\necosystem_auto_ensure = false\nauto_update = false\nnative_memory = false\n'
@@ -207,6 +226,39 @@ def run(binary, scenario):
             command('List admissions for this session')
             term.until('NEW_SESSION_CHECKED', timeout=30)
             assert 'no admitted subagents in this session' in log.read_text(encoding='utf-8'), 'admission leaked into a new session'
+        elif scenario == 'inline-image-kitty':
+            # Kitty pinned: the overlay replaces the half-block rows under the
+            # look card with kitty's Unicode placeholders, starting on the row
+            # right below the card's compact line (the card frame's edge row
+            # must not shift it).
+            write_png(workspace/'shot.png', 64, 32, lambda x, y: (230, 20, 20) if x < 32 else (20, 40, 230))
+            command('Look at shot.png')
+            term.until('IMAGE_SHOWN', timeout=30)
+            term.pump(1.5)
+            rows = term.screen.display
+            card = next(y for y, row in enumerate(rows) if 'look shot.png' in row)
+            placeholder = '\U0010EEEE'
+            below = [y for y, row in enumerate(rows) if placeholder in row]
+            assert below, 'kitty placeholders were never drawn'
+            assert below[0] == card + 1, f'picture starts on row {below[0]}, card line is {card}'
+            assert not any('\u2580' in rows[y] for y in below), 'half-blocks left under the pixels'
+        elif scenario == 'inline-image':
+            # Left half red, right half blue: the transcript must draw both
+            # under the look card as half-block cells in those colours.
+            write_png(workspace/'shot.png', 64, 32, lambda x, y: (230, 20, 20) if x < 32 else (20, 40, 230))
+            command('Look at shot.png')
+            term.until('IMAGE_SHOWN', timeout=30)
+            term.pump(1.5)
+            from run_startup import frame_rgb
+            def coloured(want):
+                for row in term.screen.buffer.values():
+                    for ch in row.values():
+                        rgb = frame_rgb(ch)
+                        if ch.data in '\u2580\u2584' and rgb and all(abs(a - b) < 40 for a, b in zip(rgb, want)):
+                            return True
+                return False
+            assert coloured((230, 20, 20)) and coloured((20, 40, 230)), 'look image was not drawn inline'
+            assert 'shot.png' in term.flowed(), 'image card lost its caption'
         elif scenario == 'loop-session':
             command('/loop 2s Check the fixture')
             command('/new')
@@ -354,5 +406,6 @@ if __name__ == '__main__':
                                       'admission-new-session', 'worker-background-cancel',
                                       'worker-background-session', 'swarm-question',
                                       'swarm-question-session', 'swarm-question-queue',
-                                      'swarm-approval', 'swarm-approval-session']:
+                                      'swarm-approval', 'swarm-approval-session', 'inline-image',
+                                      'inline-image-kitty']:
         run(find_binary(args.bin), scenario)

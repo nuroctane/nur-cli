@@ -1,0 +1,30 @@
+{
+  "description": "ast_grep with the real binary: search finds the three real console.log calls across formatting variants (not the string or the comment that spell one), rewrite previews without writing, apply writes them in one call through nur's commit path, and the string and comment survive.",
+  "requires_bin": ["ast-grep"],
+  "setup_files": {
+    "src/app.ts": "console.log(\"start\");\nconsole.log(\n  \"multi\",\n  42,\n);\nconst s = \"console.log(fake)\"; // console.log(comment)\nfunction f() { console.log(  \"spaced\"  ); }\n"
+  },
+  "prompt": "Replace every console.log with logger.info.",
+  "script": [
+    {"tool_calls": [{"name": "ast_grep", "arguments": {"pattern": "console.log($$$ARGS)", "lang": "ts"}}]},
+    {"tool_calls": [{"name": "ast_grep", "arguments": {"action": "rewrite", "pattern": "console.log($$$ARGS)", "rewrite": "logger.info($$$ARGS)", "lang": "ts"}}]},
+    {"tool_calls": [{"name": "ast_grep", "arguments": {"action": "apply", "pattern": "console.log($$$ARGS)", "rewrite": "logger.info($$$ARGS)", "lang": "ts"}}]},
+    {"text": "Replaced."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 4,
+    "stdout_contains": ["Replaced."],
+    "tool_results": [
+      {"request": 2, "contains": ["3 matches in 1 file", "src/app.ts:1:1", "$$$ARGS = \"start\""], "lacks": ["fake", "comment"]},
+      {"request": 3, "contains": ["rewrite preview: 3 replacements in 1 file - nothing written", "  + logger.info(\"start\")"]},
+      {"request": 4, "contains": ["applied 3 replacements in 1 file", "undo: /undo restores one file per step"]}
+    ],
+    "files": {
+      "src/app.ts": {
+        "contains": ["logger.info(\"start\");", "logger.info(\"spaced\")", "\"console.log(fake)\"", "// console.log(comment)"],
+        "lacks": ["console.log(\"start\")", "console.log(  \"spaced\"", "console.log(\n"]
+      }
+    }
+  }
+}

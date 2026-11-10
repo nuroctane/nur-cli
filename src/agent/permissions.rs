@@ -253,6 +253,19 @@ pub fn canonical(tool: &str, args_json: &str) -> String {
             .to_string(),
         // One remote action covers tools of very different impact, so an
         // "always" rule names the Enclave tool it was granted for.
+        // An "always" for one rewrite covers that path only, not every later
+        // structural rewrite of the workspace.
+        "ast_grep" => {
+            let action = v.get("action").and_then(|c| c.as_str()).unwrap_or("search");
+            if action == "apply" {
+                format!(
+                    "apply {}",
+                    v.get("path").and_then(|c| c.as_str()).unwrap_or(".")
+                )
+            } else {
+                action.to_string()
+            }
+        }
         "secscan" => v
             .get("action")
             .and_then(|a| a.as_str())
@@ -297,13 +310,18 @@ const WRITE_TOOLS: &[&str] = &[
 /// run code on the next `git status`), CI workflows, editor tasks, and nur's
 /// own project rules. Returns that directory's name.
 pub fn protected_write_dir(tool: &str, args_json: &str) -> Option<&'static str> {
-    if !WRITE_TOOLS.contains(&tool) {
+    let args: serde_json::Value = serde_json::from_str(args_json).ok()?;
+    // `ast_grep` writes only with action=apply, over `path` (default the
+    // workspace); it never touches `.git` and skips the other protected
+    // directories unless `path` names them, which lands here.
+    let structural = tool == "ast_grep" && crate::tools::ast_grep::writes(&args);
+    if !WRITE_TOOLS.contains(&tool) && !structural {
         return None;
     }
-    let args: serde_json::Value = serde_json::from_str(args_json).ok()?;
     let path = args
-        .get("path")?
-        .as_str()?
+        .get("path")
+        .and_then(|p| p.as_str())
+        .or(structural.then_some("."))?
         .replace('\\', "/")
         .to_ascii_lowercase();
     let parts: Vec<&str> = path

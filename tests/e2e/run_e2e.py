@@ -536,6 +536,11 @@ def run_scenario(binary, scenario_path):
     if scenario.get("requires_bwrap") and not shutil.which("bwrap"):
         return {"scenario": name, "skipped": "bubblewrap unavailable", "passed": True, "failures": [],
                 "model_requests": 0, "seconds": 0}
+    missing = [b for b in scenario.get("requires_bin", []) if not shutil.which(b)]
+    if missing:
+        # A real third-party binary the scenario drives (CI may not have it).
+        return {"scenario": name, "skipped": f"{', '.join(missing)} not installed", "passed": True,
+                "failures": [], "model_requests": 0, "seconds": 0}
     if scenario.get("skip"):
         # An open product decision, recorded as a scenario so it stays visible.
         return {"scenario": name, "skipped": scenario["skip"], "passed": True, "failures": [],

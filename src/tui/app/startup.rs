@@ -131,6 +131,13 @@ impl App {
             self.background_ui(
                 move || super::prepare_image_picker(&cfg),
                 |app, picker| {
+                    crate::terminal_image::configure(
+                        app.cfg.theme_setup.inline_images,
+                        Some(crate::terminal_image::overlay_picker(
+                            &picker,
+                            &app.cfg.theme_setup.protocol,
+                        )),
+                    );
                     app.img_picker = Some(picker);
                 },
             );

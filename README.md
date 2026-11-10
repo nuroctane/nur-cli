@@ -147,6 +147,7 @@ Everything is **local**. Secrets never go into the git repo.
 | **uv** | **Graphify** |
 | **ripgrep (`rg`)** | Fast `grep` / `glob`, and the file walk behind `sgrep` |
 | **sgrep** | Semantic code search (`sgrep` tool); built with `cargo install --git https://github.com/context-dot-dev/sgrep --locked`, model (32 MB) downloaded once |
+| **ast-grep** | Structural search and rewrite (`ast_grep` tool); `npm i -g @ast-grep/cli` (prebuilt), or `cargo install ast-grep --locked` |
 | **ffmpeg** | `extract_frames` |
 
 #### B. NurCLI itself
@@ -241,7 +242,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 
 | Family | Tools |
 |--------|--------|
-| read | `read_file` `list_dir` `sgrep` (semantic, [Context.dev sgrep](https://github.com/context-dot-dev/sgrep), first choice for "where is the code that…") `grep` `glob` |
+| read | `read_file` `list_dir` `sgrep` (semantic, [Context.dev sgrep](https://github.com/context-dot-dev/sgrep), first choice for "where is the code that…") `ast_grep` (structural, [ast-grep](https://ast-grep.github.io): code shapes, rewrite preview and apply) `grep` `glob` |
 | edit | `write_file` `edit_file` `multi_edit` `apply_patch` |
 | shell | `bash` |
 | vision | `look` · `extract_frames` |

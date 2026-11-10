@@ -36,9 +36,9 @@ within that budget. If the path cannot fit, the result is truncated without a sp
 
 Which schemas ride on every request depends on `[tools] profile`:
 
-- **`lean` (default):** the editing shell and session tools are always offered (`read_file`, `list_dir`, the edit tools, `bash`, `sgrep`/`grep`/`glob`, `web_search`/`web_fetch`, `look`, `git_status`/`git_diff`, `context`, `goal`, `message`, `bg`, `monitor`, `skill`, `memory`, `question`, `secret`, `todo_write`, `submit_plan`, `agent`, `codemode`, `typesafe`, `tool_search`). Every other tool loads through `tool_search`; from the next request on the model calls it by its real name. The loaded set is read back from the conversation, so `/resume` keeps it.
+- **`lean` (default):** the editing shell and session tools are always offered (`read_file`, `list_dir`, the edit tools, `bash`, `sgrep`/`ast_grep`/`grep`/`glob`, `web_search`/`web_fetch`, `look`, `git_status`/`git_diff`, `context`, `goal`, `message`, `bg`, `monitor`, `skill`, `memory`, `question`, `secret`, `todo_write`, `submit_plan`, `agent`, `codemode`, `typesafe`, `tool_search`). Every other tool loads through `tool_search`; from the next request on the model calls it by its real name. The loaded set is read back from the conversation, so `/resume` keeps it.
 - **`full`:** every schema on every request.
-- **`core`:** 17 tools: the minimal editing shell and `typesafe`.
+- **`core`:** 18 tools: the minimal editing shell and `typesafe`.
 
 Capability flags (read-only / concurrency-safe / destructive) drive parallel batching and approvals.
 
@@ -96,6 +96,26 @@ Models trained on grep-first habits are held to this rather than reminded of it 
 When sgrep fails mid-call (timeout on a first index, a crash), grep's own result is returned, so routing never costs an answer. `sgrep_first = false` turns all three off.
 
 Install: `nur ecosystem ensure` builds it with `cargo install --git https://github.com/context-dot-dev/sgrep --locked` and warms the model; the installer scripts do the same. `nur doctor` shows the resolved path. `NUR_SGREP_BIN=<path>` pins the binary; `NUR_SGREP_BIN=` (empty) disables it.
+
+### `ast_grep`
+
+Structural code search and rewrite, the tool for a code *shape*: every call like `fetch(url, opts)`, every function returning `Result`, every `console.log` to replace. Backed by [ast-grep](https://ast-grep.github.io) (MIT, tree-sitter, local). A pattern is real code: `$VAR` matches one AST node, `$$$` zero or more (`$$$ARGS` names them, `$_` matches without capturing). It matches syntax, so formatting differences, strings and comments that spell the same text never match.
+
+| Action | Does |
+|--------|------|
+| `search` (default) | `pattern` (or `kind` alone). Each match as `path:line:col`, its full lines numbered, then what each metavariable caught (`$A = x · $$$ARGS = a, b`). `context` adds lines around it (max 5). |
+| `scan` | YAML rules: `rule` (a file), `inline_rule` (YAML text), or the project's `sgconfig.yml`. Findings sorted by severity, with the rule's message, note and `fix`. |
+| `rewrite` | `pattern` + `rewrite`: every replacement as `-` old / `+` new. Writes nothing. |
+| `apply` | The same `pattern` + `rewrite`, or a rule with a `fix`: writes every replacement in one call. |
+| `explain` | `pattern` + `lang`: the tree-sitter parse (node kinds; `metavariable` is a `$VAR`). For writing `kind` and rules, or finding why a pattern matched nothing. |
+
+Arguments: `pattern`, `rewrite`, `lang` (tree-sitter name or alias: `rust`/`rs`, `ts`, `tsx`, `js`, `python`, `go`, ...; omitted, it is inferred per file), `kind`, `path` (default cwd), `glob` (prefix `!` to exclude; a list works too), `rule`, `inline_rule`, `context`, `count` (default 20, max 100). `.gitignore` is honoured. One run is bounded at 60 s and killed on cancel.
+
+`apply` never runs ast-grep's `--update-all`. nur takes the replacements from ast-grep's JSON preview, checks that each file still holds the text ast-grep saw, and writes through the same commit path as the edit tools, so each write gets proposal mode, the file ledger, an `/undo` checkpoint (one per file) and post-edit LSP diagnostics. Nested matches keep the outer one. A file that changed since the preview, or is not UTF-8, is skipped and named. More than 200 replacements or 50 files in one call is refused: narrow with `path` or `glob` and apply in parts.
+
+`search`, `scan`, `rewrite` and `explain` are read-only (free in plan mode, parallel-safe, callable from `codemode`); `apply` asks in manual mode and is blocked in plan mode. A pattern that did not parse comes back with a hint and a pointer to `explain`. Native custom-language libraries are never loaded (`--custom-languages ignore`): a cloned repository's `sgconfig.yml` cannot make nur run its code. `ast-grep` (and `sg`, `npx ast-grep`) as a shell command is refused and points at the tool; `sg docker -c ...` (Linux `setgroups`) still runs.
+
+When the binary is missing the tool answers `[ast-grep is not installed. Install: ...]` and names `grep` (exact text) and `sgrep` (intent) as the alternatives. It never answers a shape query with text matches. `nur ecosystem ensure` installs the pinned npm package `@ast-grep/cli` (prebuilt, seconds), or `cargo install ast-grep --locked` without npm, retried at most weekly. `NUR_AST_GREP_BIN` pins the binary, or disables it when empty. nur runs the npm package's own executable, never the `.cmd` shim (patterns would be re-parsed by `cmd.exe`).
 
 ### `grep`
 

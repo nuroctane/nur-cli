@@ -17,6 +17,18 @@ pub struct Emitter {
     tool_calls: u32,
     layers: Option<Value>,
     started: Instant,
+    /// Draw tool images on stderr (text output to a terminal only).
+    #[cfg(feature = "image-peek")]
+    images: Option<InlineImages>,
+}
+
+/// What the CLI painter needs: the workspace (relative image paths), the
+/// pinned protocol, and each tool's last arguments (ToolEnd carries none).
+#[cfg(feature = "image-peek")]
+struct InlineImages {
+    cwd: std::path::PathBuf,
+    protocol: String,
+    args: std::collections::HashMap<String, String>,
 }
 
 /// Everything the final `result` object states about the run.
@@ -40,6 +52,61 @@ impl Emitter {
             tool_calls: 0,
             layers: None,
             started: Instant::now(),
+            #[cfg(feature = "image-peek")]
+            images: None,
+        }
+    }
+
+    /// Pictures a successful tool produced (screenshots, generated images,
+    /// `look`) drawn on stderr under the run's output, when stderr is a
+    /// terminal and the format is text. stdout stays the answer.
+    #[cfg(feature = "image-peek")]
+    pub fn with_inline_images(
+        mut self,
+        enabled: bool,
+        cwd: &std::path::Path,
+        protocol: &str,
+    ) -> Self {
+        use std::io::IsTerminal;
+        let term_ok = std::env::var("TERM").map(|t| t != "dumb").unwrap_or(true);
+        // Legacy conhost needs VT processing switched on before any escape.
+        #[cfg(windows)]
+        let term_ok = term_ok && crossterm::ansi_support::supports_ansi();
+        if enabled
+            && self.format == OutputFormat::Text
+            && std::io::stderr().is_terminal()
+            && term_ok
+        {
+            self.images = Some(InlineImages {
+                cwd: cwd.to_path_buf(),
+                protocol: protocol.to_string(),
+                args: Default::default(),
+            });
+        }
+        self
+    }
+
+    #[cfg(feature = "image-peek")]
+    fn draw_tool_images(&mut self, name: &str, ok: bool, result: &str) {
+        let Some(img) = self.images.as_mut() else {
+            return;
+        };
+        let args = img.args.remove(name).unwrap_or_default();
+        if !ok || !crate::terminal_image::shows_images(name) {
+            return;
+        }
+        let limit = if name == "look" { 3 } else { 1 };
+        let paths = crate::terminal_image::image_paths(&args, result, &img.cwd, limit);
+        let protocol = img.protocol.clone();
+        if paths.is_empty() {
+            return;
+        }
+        self.end_line();
+        let columns = crossterm::terminal::size().map(|(c, _)| c).unwrap_or(80);
+        let mut err = std::io::stderr();
+        for p in paths {
+            let _ = writeln!(err, "\x1b[2m  ◈ {name} · {}\x1b[0m", p.display());
+            let _ = crate::terminal_image::print_inline(&mut err, &p, columns, &protocol);
         }
     }
 
@@ -141,6 +208,10 @@ impl Emitter {
 
     pub fn tool_start(&mut self, name: &str, args: &str) {
         self.tool_calls += 1;
+        #[cfg(feature = "image-peek")]
+        if let Some(img) = self.images.as_mut() {
+            img.args.insert(name.to_string(), args.to_string());
+        }
         match self.format {
             OutputFormat::Text => {
                 if self.verbose {
@@ -166,6 +237,8 @@ impl Emitter {
                         truncate_line(result, 160)
                     ));
                 }
+                #[cfg(feature = "image-peek")]
+                self.draw_tool_images(name, ok, result);
             }
             OutputFormat::StreamJson => {
                 Self::line(json!({"type": "tool_end", "name": name, "ok": ok, "result": result}))

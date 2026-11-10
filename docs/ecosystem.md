@@ -17,6 +17,7 @@ complete snapshot was saved. It does not resolve credentials or install packages
 | Component | Role |
 |-----------|------|
 | **sgrep** | [Context.dev sgrep](https://github.com/context-dot-dev/sgrep) (MIT) local semantic code search behind the `sgrep` tool - static embeddings + BM25 over ripgrep's file list, exact identifiers first, piped rerank of a focused `rg` run. Built with `cargo install --git https://github.com/context-dot-dev/sgrep --locked` when cargo is present (retried at most weekly), then the 32 MB model is warmed once. `NUR_SGREP_BIN` pins or (empty) disables it. Docs: [tools.md](./tools.md#sgrep) |
+| **ast-grep** | [ast-grep](https://ast-grep.github.io) (MIT) structural search and rewrite on tree-sitter, behind the `ast_grep` tool. Installed from the pinned npm package `@ast-grep/cli` (prebuilt binaries), `cargo install ast-grep --locked` without npm, retried at most weekly. `NUR_AST_GREP_BIN` pins or (empty) disables it. Docs: [tools.md](./tools.md#ast_grep) |
 | **Graphify** | Code knowledge graph (`graphify-out/`) - query / path / explain |
 | **PLUR** | Shared engram memory across tools and sessions |
 | **Ruflo** | Vector memory + swarm / hive-mind patterns |
@@ -486,7 +487,7 @@ file; `scripts/check_skill_snapshot.py` fails when a pinned file is committed,
 the ignore file is stale, or a present mirror file has drifted from its pin.
 
 `nur ecosystem install <name>` shows the plan (source, pin, target directory)
-and does nothing without `--yes`. Known names: `penecho`, `sgrep`, `dogwood`,
+and does nothing without `--yes`. Known names: `penecho`, `sgrep`, `ast-grep`, `dogwood`,
 `headroom`, `graphjin`, `egaki`, `akarso`, `ruflo`, `plur`, `executor`,
 `agent-browser`, `excalidraw`, `skills`, `akm`, `graphify`, `fractal`,
 the skill-pack labels (`web3-skills`, `infinite-headcount`, …) and catalog

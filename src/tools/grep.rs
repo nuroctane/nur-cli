@@ -26,7 +26,9 @@ impl Tool for Grep {
         "Exact search: file contents by regex, for an identifier, string or pattern you already \
          know. Anything else is sgrep's job (semantic, plain-English, ranked chunks): a pattern \
          written as a description is answered by sgrep, and a search that overflows the default \
-         cap comes back ranked by sgrep instead of as a first page. Ripgrep when available; \
+         cap comes back ranked by sgrep instead of as a first page. A code shape (every call \
+         like f(x, y), every function returning Result) is ast_grep's job: it matches syntax, \
+         so formatting, strings and comments cannot fool it. Ripgrep when available; \
          respects .gitignore; skips node_modules/target/etc. at any depth; hidden files \
          included. Output is path:line:text, sorted by path. fixed_strings=true for literal text \
          (no escaping needed), glob/type to narrow files, context for surrounding lines. Set \

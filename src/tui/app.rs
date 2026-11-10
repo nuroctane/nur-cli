@@ -2327,6 +2327,14 @@ pub struct App {
     pub prose_cache_parts: Vec<Vec<ratatui::text::Line<'static>>>,
     #[cfg(feature = "image-peek")]
     pub wrap_cache_latex: u64,
+    /// `terminal_image::cache_revision` the transcript last wrapped at.
+    pub wrap_cache_images: u64,
+    /// `terminal_image::settings_revision` the transcript last wrapped at.
+    pub wrap_cache_image_settings: u64,
+    /// Inline pictures laid out this frame: where, which file, how wide.
+    /// Painted last, after every popup, and only where nothing covered them.
+    #[cfg(feature = "image-peek")]
+    pub inline_overlays: Vec<(ratatui::layout::Rect, std::path::PathBuf, u16)>,
     pub link_cache: super::links::LinkCache,
     /// Per wrapped transcript line: `Some(cell_idx)` when that line is a
     /// collapsible card header (click to expand/collapse).
@@ -2915,6 +2923,10 @@ pub(super) fn new_app(
         prose_cache_parts: Vec::new(),
         #[cfg(feature = "image-peek")]
         wrap_cache_latex: 0,
+        wrap_cache_images: 0,
+        wrap_cache_image_settings: 0,
+        #[cfg(feature = "image-peek")]
+        inline_overlays: Vec::new(),
         link_cache: Default::default(),
         hit_headers: Vec::new(),
         line_cells: Vec::new(),
@@ -11941,7 +11953,24 @@ pub fn approval_decision(key: KeyEvent) -> Option<ApprovalDecision> {
 
 /// Flatten a ratatui Line to plain text.
 pub fn line_to_plain(line: &ratatui::text::Line<'_>) -> String {
+    // A picture's half-block row copies as nothing, not as a run of `▀`.
+    if is_picture_row(line) {
+        return String::new();
+    }
     line.spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
+/// The indent that opens every inline picture row (`ui::halfblock_line`):
+/// a braille blank (draws as nothing) and a space. It marks the row for copy
+/// and for the pixel overlay, and keeps a fully transparent row from reading
+/// as a spacer the card frame would drop.
+pub const PICTURE_INDENT: &str = "\u{2800} ";
+
+/// An inline picture row.
+pub fn is_picture_row(line: &ratatui::text::Line<'_>) -> bool {
+    line.spans
+        .first()
+        .is_some_and(|s| s.content == PICTURE_INDENT)
 }
 
 fn cells_to_ui_log(cells: &[Cell]) -> Vec<crate::agent::session::UiLogItem> {

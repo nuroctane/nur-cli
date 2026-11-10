@@ -36,7 +36,9 @@ messages, and draft attachment count. `/context` still provides detailed
 context inspection.
 
 Completed successful tools occupy a compact summary row; consecutive ones share
-one frame. Running operations and errors retain their details. Click the chevron
+one frame. A tool that produced or looked at an image (a screenshot, `look`, a
+generated image) draws it under that row, and sent attachments draw under their
+`◈` row ([inline images](vision.md#inline-images)). Running operations and errors retain their details. Click the chevron
 to expand or **click to peek** for the full result. Every transcript piece sits
 in a theme-coloured frame (see [Card frames](#card-frames)), and the pinned
 prompt uses two rows. The composer stays visually still while idle.

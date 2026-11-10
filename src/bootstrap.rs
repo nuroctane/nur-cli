@@ -1561,6 +1561,7 @@ fn ensure_prereqs_best_effort() {
         );
     }
     ensure_sgrep_best_effort();
+    ensure_ast_grep_best_effort();
     #[cfg(not(windows))]
     {
         for (cmd, note) in [
@@ -1630,6 +1631,23 @@ fn ensure_sgrep_best_effort() {
         theme::print_info(&format!(
             "sgrep could not be auto-installed — {}",
             crate::sgrep::INSTALL_HINT
+        ));
+    }
+}
+
+/// ast-grep backs the always-on `ast_grep` tool; npm ships it prebuilt.
+fn ensure_ast_grep_best_effort() {
+    if crate::ast_grep::ast_grep_bin().is_some() {
+        theme::print_ok("ast-grep already installed");
+        return;
+    }
+    theme::print_info("installing ast-grep - structural code search and rewrite…");
+    if crate::ast_grep::install().is_some() {
+        theme::print_ok("ast-grep installed");
+    } else {
+        theme::print_info(&format!(
+            "ast-grep could not be auto-installed - {}",
+            crate::ast_grep::INSTALL_HINT
         ));
     }
 }

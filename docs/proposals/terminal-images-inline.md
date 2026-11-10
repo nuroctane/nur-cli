@@ -1,8 +1,45 @@
 # Proposal: inline terminal images, Hermes-style
 
-Status: proposal (2026-11-07). Author: CIA agent. Research: FBI field
+Status: implemented in v0.68.0 (proposed 2026-11-07). Author: CIA agent. Research: FBI field
 agent, from the Hermes Agent repo at tag `v0.23.0` (commit `2bd378e`,
 released Nov 5, 2026) and the repo's own vision code.
+
+**As built** (`src/terminal_image.rs`; docs in
+[vision.md](../vision.md#inline-images)). Where the build differs from the
+plan below:
+
+- One engine, two painters, but the pixel protocols are not hand-rolled a
+  second time: kitty, sixel and iTerm2 come from `ratatui-image` (already the
+  F4 peek's encoder; sixel through its `icy_sixel`), and half-blocks are the
+  engine's own. No new dependencies.
+- The TUI draws every inline picture as half-block rows first: ordinary text,
+  so the transcript measures, scrolls, selects and re-lays it out like any
+  row. Real pixels are drawn over those rows only for kitty and sixel, and
+  only while the picture is wholly on screen; their cells are rewritten as
+  text when it scrolls. iTerm2 images live on a layer of their own and would
+  linger, so they stay in the peek (and in `nur run`).
+- Decoding never runs on the UI thread: a background worker fills a 48-entry
+  cache and bumps a revision the transcript folds into its re-wrap check.
+  Rows are reserved from the header (EXIF orientation applied); 20 MB and
+  40 MP caps apply before any decode.
+- Tool images: a successful `look`, `browser` / `terminal_browser` /
+  `desktop` screenshot, `egaki`, `extract_frames`, `tldraw` / `excalidraw` /
+  `penecho` / `debug` export draws its local image under the compact tool
+  row; paths come from the call's arguments and result and must exist.
+- `nur run` draws the same images on stderr (stdout stays the answer), text
+  format and a terminal only: half-blocks one row per write, kitty
+  placeholders as text, sixel/iTerm2 over reserved rows (`ESC 7`, up, draw,
+  `ESC 8`).
+- Detection (§9 answered on the PC): Orca sets `ORCA_PANE_KEY` /
+  `ORCA_TERMINAL_HANDLE` / `ORCA_TAB_ID` and clears `TERM_PROGRAM`, so Orca is
+  told apart and gets half-blocks. Windows Terminal's sixel setting is not
+  visible to the environment, so sixel there is pinned
+  (`protocol = "sixel"`), never guessed; `nur doctor` says how. VS Code,
+  tmux and screen get half-blocks.
+- Not done: the VS Code XTSMGRAPHICS probe (§5.5, optional) and live pixel
+  checks in kitty/Ghostty/Windows Terminal with sixel on, which need a person
+  at those terminals. The half-block path is verified end to end in a real
+  ConPTY terminal (`run_release_ui.py inline-image`).
 
 ## 1. Goal
 

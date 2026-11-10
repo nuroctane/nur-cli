@@ -10,6 +10,7 @@ pub mod terminal_browser;
 pub mod desktop;
 pub mod debug_tool;
 pub use terminal_browser::is_read_only_action as terminal_browser_is_read_only;
+pub mod ast_grep;
 mod admission_tool;
 pub mod bg_tool;
 pub mod monitor_tool;
@@ -134,6 +135,7 @@ pub const SUBAGENT_TOOL_NAMES: &[&str] = &[
     "hashline_edit",
     "bash",
     "sgrep",
+    "ast_grep",
     "grep",
     "glob",
     "web_fetch",
@@ -186,6 +188,7 @@ pub(crate) const ROOT_CORE_TOOL_NAMES: &[&str] = &[
     "hashline_edit",
     "bash",
     "sgrep",
+    "ast_grep",
     "grep",
     "glob",
     "web_fetch",
@@ -227,6 +230,7 @@ pub const CORE_PROFILE_TOOL_NAMES: &[&str] = &[
     "hashline_edit",
     "bash",
     "sgrep",
+    "ast_grep",
     "grep",
     "glob",
     "web_fetch",
@@ -346,6 +350,7 @@ impl ToolHost {
             Box::new(hashline::HashlineEdit),
             Box::new(bash::Bash),
             Box::new(sgrep::Sgrep),
+            Box::new(ast_grep::AstGrep),
             Box::new(grep::Grep),
             Box::new(glob::GlobTool),
             Box::new(web_fetch::WebFetch),
@@ -501,8 +506,9 @@ impl ToolHost {
     /// Run one tool call. Edit tools are screened first: a private key is never
     /// written, and a live-looking token is written with a warning in the result.
     pub fn dispatch(&self, name: &str, arguments: &str, ctx: &ToolContext) -> Result<String> {
-        let secret = EDIT_TOOLS
-            .contains(&name)
+        let structural_write = name == "ast_grep"
+            && serde_json::from_str::<Value>(arguments).is_ok_and(|v| ast_grep::writes(&v));
+        let secret = (EDIT_TOOLS.contains(&name) || structural_write)
             .then(|| sensitive::secret_in_write(&sensitive::written_text(name, arguments)))
             .flatten();
         if secret == Some(sensitive::WriteSecret::PrivateKey) {
@@ -567,6 +573,7 @@ impl ToolHost {
             "hashline_edit" => hashline::HashlineEdit.execute(&args, ctx),
             "bash" => bash::Bash.execute(&args, ctx),
             "sgrep" => sgrep::Sgrep.execute(&args, ctx),
+            "ast_grep" => ast_grep::AstGrep.execute(&args, ctx),
             "lsp" => lsp_tool::Lsp.execute(&args, ctx),
             "debug" => debug_tool::DebugTool.execute(&args, ctx),
             "mcp" => mcp_tool::McpTool.execute(&args, ctx),
@@ -909,6 +916,7 @@ mod tests {
             "hashline_edit",
             "bash",
             "sgrep",
+            "ast_grep",
             "grep",
             "glob",
             "web_fetch",

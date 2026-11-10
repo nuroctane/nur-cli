@@ -14,6 +14,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     app.palette_hit = Default::default();
+    #[cfg(feature = "image-peek")]
+    app.inline_overlays.clear();
 
     // Too-small terminal: show a terse message instead of crashing.
     if area.width < 20 || area.height < 5 {
@@ -164,6 +166,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.peek_box = Rect::default();
         app.peek_close = Rect::default();
     }
+    #[cfg(feature = "image-peek")]
+    paint_inline_overlays(f, app);
 }
 
 fn draw_focused_modal(f: &mut Frame, app: &mut App, area: Rect) {
@@ -2649,6 +2653,26 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     };
     #[cfg(not(feature = "image-peek"))]
     let latex_changed = false;
+    // An inline image finished rendering (or the picker arrived): the cells
+    // that draw images re-wrap from their reserved rows to the pixels.
+    // Only cells still showing a reserved block re-wrap when a render lands
+    // (a finished picture keeps its rows even after the cache evicts it), so
+    // a long session's pictures cannot keep each other decoding; every
+    // picture cell re-wraps when the inline settings change.
+    #[cfg(feature = "image-peek")]
+    let (images_changed, image_settings_changed) = {
+        let generation = crate::terminal_image::cache_revision();
+        let settings = crate::terminal_image::settings_revision();
+        let changed = (
+            app.wrap_cache_images != generation,
+            app.wrap_cache_image_settings != settings,
+        );
+        app.wrap_cache_images = generation;
+        app.wrap_cache_image_settings = settings;
+        changed
+    };
+    #[cfg(not(feature = "image-peek"))]
+    let (images_changed, image_settings_changed) = (false, false);
     let content_changed = content_changed || latex_changed;
     app.wrap_cache_revision = app.transcript_revision;
     for (cell_idx, cell) in app.cells.iter().enumerate() {
@@ -2694,9 +2718,16 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         if app.startup_pending() && matches!(cell, Cell::Queued { .. }) {
             key ^= 0x1f43_dba8_096e_7201;
         }
-        let latex_refresh = latex_changed
+        let latex_refresh = (latex_changed
             && matches!(cell, Cell::Assistant { text, .. }
-            if text.contains("$$") || text.contains("\\["));
+            if text.contains("$$") || text.contains("\\[")))
+            || (draws_inline_images(cell)
+                && (image_settings_changed
+                    || (images_changed
+                        && app
+                            .wrap_cache_parts
+                            .get(cell_idx)
+                            .is_some_and(|parts| parts.iter().any(is_reserved_row)))));
         // A tool joining or leaving a tool run moves its frame edges without
         // changing its content.
         let (top, bottom) = cards::edges(&app.cells, cell_idx);
@@ -3044,7 +3075,14 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // User attachments are compact rows; pixels are rendered only in the explicit peek.
+    // Inline pictures: pixels over their half-block rows where the terminal
+    // speaks kitty or sixel (half-blocks alone everywhere else).
+    #[cfg(feature = "image-peek")]
+    {
+        let clear_from = if sticky.is_some() { vis_lo } else { top };
+        let plans = plan_inline_overlays(app, body_rect, top, clear_from);
+        app.inline_overlays = plans;
+    }
 
     if let Some(prompt) = sticky {
         let banner = Rect {
@@ -3423,6 +3461,13 @@ fn cell_lines(app: &App, cell: &Cell, cell_idx: usize, width: usize, out: &mut V
         } => {
             if *ok == Some(true) && !*expanded {
                 compact_tool_line(name, args, *duration, width, out);
+                #[cfg(feature = "image-peek")]
+                for (i, path) in tool_image_paths(app, name, args, result).iter().enumerate() {
+                    if i > 0 {
+                        out.push(Line::from(Span::raw("\u{2800}")));
+                    }
+                    inline_image_rows(path, width, out);
+                }
                 return;
             }
             out.push(Line::default());
@@ -4743,10 +4788,9 @@ enum SgCat {
 fn sg_cat_for_tool(name: &str) -> SgCat {
     match name {
         // search / read
-        "read_file" | "list_dir" | "sgrep" | "grep" | "glob" | "git_status" | "git_diff"
-        | "slop_scan" | "web_fetch" | "web_search" | "look" | "browser" | "terminal_browser" => {
-            SgCat::Search
-        }
+        "read_file" | "list_dir" | "sgrep" | "ast_grep" | "grep" | "glob" | "git_status"
+        | "git_diff" | "slop_scan" | "web_fetch" | "web_search" | "look" | "browser"
+        | "terminal_browser" => SgCat::Search,
         // editing
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "hashline_edit" => SgCat::Edit,
         // execution
@@ -5726,8 +5770,9 @@ fn draw_pane(
     }
 }
 
-/// Compact attachment reference. Pixels belong only in the explicit peek;
-/// transcript height never depends on image dimensions or terminal protocol.
+/// An attachment: the `◈ label · path` row, the picture inline under it
+/// when `[theme] inline_images` is on (half-block rows, real pixels drawn
+/// over them by `overlay_inline_images`), and the peek hint.
 fn image_cell_lines(path: &str, label: &str, width: usize, out: &mut Vec<Line<'static>>) {
     let w = width.max(12);
     let accent = Style::default().fg(theme::NUR_GOLD());
@@ -5744,10 +5789,250 @@ fn image_cell_lines(path: &str, label: &str, width: usize, out: &mut Vec<Line<'s
             faint,
         ),
     ]));
+    #[cfg(feature = "image-peek")]
+    if crate::terminal_image::enabled() {
+        inline_image_rows(std::path::Path::new(path), width, out);
+    }
     out.push(Line::from(Span::styled(
         "  click to peek",
         theme::style_faint(),
     )));
+}
+
+/// Cells whose layout includes inline images: attachments, and successful
+/// image-producing tools in their compact form.
+fn draws_inline_images(cell: &Cell) -> bool {
+    match cell {
+        Cell::Image { queued: false, .. } => true,
+        #[cfg(feature = "image-peek")]
+        Cell::Tool {
+            name,
+            ok: Some(true),
+            expanded: false,
+            ..
+        } => crate::terminal_image::shows_images(name),
+        _ => false,
+    }
+}
+
+/// Columns an inline image may use in a transcript `width` wide.
+#[cfg(feature = "image-peek")]
+fn inline_image_cols(width: usize) -> u16 {
+    width
+        .saturating_sub(4)
+        .min(crate::terminal_image::MAX_COLS as usize) as u16
+}
+
+/// The rows one inline image takes: half-blocks once rendered, the reserved
+/// height (from the file header) while the background worker decodes it, or
+/// one faint line saying why it cannot be shown.
+#[cfg(feature = "image-peek")]
+fn inline_image_rows(path: &std::path::Path, width: usize, out: &mut Vec<Line<'static>>) {
+    use crate::terminal_image::State;
+    let cols = inline_image_cols(width);
+    if cols < 4 {
+        return;
+    }
+    match crate::terminal_image::request(path, cols) {
+        State::Ready(r) => {
+            for row in &r.cells {
+                out.push(halfblock_line(row));
+            }
+        }
+        State::Pending(grid) => {
+            // Never blank rows: the card frame drops trailing spacers, and
+            // the reservation must hold the picture's full height.
+            for i in 0..grid.rows {
+                out.push(if i == 0 {
+                    Line::from(Span::styled(RESERVED_ROW, theme::style_faint()))
+                } else {
+                    Line::from(Span::raw("\u{2800}"))
+                });
+            }
+        }
+        State::Failed(why) => out.push(Line::from(Span::styled(
+            format!("  (no preview: {why})"),
+            theme::style_faint(),
+        ))),
+    }
+}
+
+/// The first row of a picture still decoding.
+const RESERVED_ROW: &str = "  ·  ·  ·";
+
+fn is_reserved_row(line: &Line<'_>) -> bool {
+    line.spans.first().is_some_and(|s| s.content == RESERVED_ROW)
+}
+
+/// One half-block row, indented like the label above it (the indent marks
+/// it as a picture row). The colours are the picture's own pixels, not
+/// theme roles.
+#[cfg(feature = "image-peek")]
+fn halfblock_line(row: &[crate::terminal_image::HalfCell]) -> Line<'static> {
+    let mut spans = vec![Span::raw(super::app::PICTURE_INDENT)];
+    for &cell in row {
+        let (ch, fg, bg) = crate::terminal_image::half_glyph(cell);
+        let mut style = Style::default();
+        if let Some([r, g, b]) = fg {
+            style = style.fg(ratatui::style::Color::Rgb(r, g, b));
+        }
+        if let Some([r, g, b]) = bg {
+            style = style.bg(ratatui::style::Color::Rgb(r, g, b));
+        }
+        spans.push(Span::styled(ch.to_string(), style));
+    }
+    Line::from(spans)
+}
+
+/// Images a successful compact tool card draws under its line.
+#[cfg(feature = "image-peek")]
+fn tool_image_paths(app: &App, name: &str, args: &str, result: &Option<String>) -> Vec<std::path::PathBuf> {
+    if !crate::terminal_image::enabled() || !crate::terminal_image::shows_images(name) {
+        return Vec::new();
+    }
+    let limit = if name == "look" { 3 } else { 1 };
+    crate::terminal_image::image_paths(args, result.as_deref().unwrap_or(""), &app.cwd, limit)
+}
+
+/// The pictures a cell draws, in layout order.
+#[cfg(feature = "image-peek")]
+fn inline_image_paths(app: &App, cell: &Cell) -> Vec<std::path::PathBuf> {
+    if !crate::terminal_image::enabled() {
+        return Vec::new();
+    }
+    match cell {
+        Cell::Image {
+            path,
+            queued: false,
+            ..
+        } => vec![std::path::PathBuf::from(path)],
+        Cell::Tool {
+            name,
+            args,
+            result,
+            ok: Some(true),
+            expanded: false,
+            ..
+        } => tool_image_paths(app, name, args, result),
+        _ => Vec::new(),
+    }
+}
+
+/// Each picture's rows inside a cell's final (wrapped, framed) layout:
+/// `(first row, row count)`, found by the picture-row marker rather than
+/// recomputed, so the card frame's edge rows cannot shift them.
+fn picture_runs(rows: &[Line<'_>]) -> Vec<(usize, usize)> {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut prev = false;
+    for (i, row) in rows.iter().enumerate() {
+        let here = super::app::is_picture_row(row);
+        match (here, prev) {
+            (true, true) => {
+                if let Some(last) = runs.last_mut() {
+                    last.1 += 1;
+                }
+            }
+            (true, false) => runs.push((i, 1)),
+            _ => {}
+        }
+        prev = here;
+    }
+    runs
+}
+
+/// Where real pixels may go this frame: pictures wholly inside the body
+/// below the sticky banner. Kitty and sixel only: their cells are rewritten
+/// as text when the picture scrolls, so nothing lingers.
+#[cfg(feature = "image-peek")]
+fn plan_inline_overlays(
+    app: &App,
+    body: Rect,
+    top: usize,
+    clear_from: usize,
+) -> Vec<(Rect, std::path::PathBuf, u16)> {
+    let mut plans = Vec::new();
+    if !crate::terminal_image::pixels() {
+        return plans;
+    }
+    let bottom = top + body.height as usize;
+    let mut seen = std::collections::HashSet::new();
+    for abs in top..bottom.min(app.transcript_rows.len()) {
+        let Some((Some(cell_idx), _)) = app.transcript_rows.get(abs) else {
+            continue;
+        };
+        if !seen.insert(cell_idx) {
+            continue;
+        }
+        let Some(cell) = app.cells.get(cell_idx) else {
+            continue;
+        };
+        let Some((start, _)) = app.transcript_rows.cell_rows(cell_idx) else {
+            continue;
+        };
+        let Some(rows) = app.wrap_cache_parts.get(cell_idx) else {
+            continue;
+        };
+        let cols = inline_image_cols(app.wrap_cache_width as usize);
+        let runs = picture_runs(rows);
+        for ((offset, len), path) in runs.into_iter().zip(inline_image_paths(app, cell)) {
+            let crate::terminal_image::State::Ready(r) = crate::terminal_image::request(&path, cols)
+            else {
+                continue;
+            };
+            if r.pixels.is_none() || len != r.grid.rows as usize {
+                continue;
+            }
+            let first = start + offset;
+            let last = first + r.grid.rows as usize;
+            if first < clear_from || last > bottom {
+                continue;
+            }
+            let rect = Rect {
+                x: body.x + 2,
+                y: body.y + (first - top) as u16,
+                width: r.grid.cols.min(body.width.saturating_sub(2)),
+                height: r.grid.rows,
+            };
+            plans.push((rect, path, cols));
+        }
+    }
+    plans
+}
+
+/// Paint the planned pixels last, after every popup, palette and toast,
+/// and only where each cell still holds the half-block this frame drew:
+/// anything drawn on top keeps the half-blocks there, so a sixel never
+/// leaves holes and a kitty transmit is never hidden under a modal.
+#[cfg(feature = "image-peek")]
+fn paint_inline_overlays(f: &mut Frame, app: &App) {
+    for (rect, path, cols) in &app.inline_overlays {
+        let crate::terminal_image::State::Ready(r) = crate::terminal_image::request(path, *cols)
+        else {
+            continue;
+        };
+        let Some(proto) = r.pixels.as_ref() else {
+            continue;
+        };
+        let buf = f.buffer_mut();
+        let uncovered = r.cells.iter().enumerate().all(|(y, row)| {
+            row.iter().enumerate().all(|(x, &cell)| {
+                let (ch, fg, _) = crate::terminal_image::half_glyph(cell);
+                let (px, py) = (rect.x + x as u16, rect.y + y as u16);
+                if ch == ' ' || px >= rect.right() || py >= rect.bottom() {
+                    return true;
+                }
+                let at = &buf[(px, py)];
+                at.symbol().starts_with(ch)
+                    && fg.is_some_and(|[r, g, b]| at.fg == ratatui::style::Color::Rgb(r, g, b))
+            })
+        });
+        if !uncovered {
+            continue;
+        }
+        if let Ok(p) = proto.lock() {
+            f.render_widget(ratatui_image::Image::new(&p), *rect);
+        };
+    }
 }
 
 fn user_prompt_card(text: &str, _width: usize, out: &mut Vec<Line<'static>>) {
@@ -7993,8 +8278,35 @@ pub fn tool_file_peek_body(name: &str, args: &str, result: Option<&str>) -> Stri
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
+/// `ast_grep` card line: the shape, and `→ replacement` when it rewrites.
+fn ast_grep_summary(v: &serde_json::Value) -> String {
+    let field = |k: &str| v.get(k).and_then(|x| x.as_str()).filter(|s| !s.is_empty());
+    let action = field("action").unwrap_or("search");
+    let shape = field("pattern")
+        .map(str::to_string)
+        .or_else(|| field("kind").map(|k| format!("kind {k}")))
+        .or_else(|| field("rule").map(|r| format!("rule {r}")))
+        .or_else(|| field("inline_rule").map(|_| "inline rule".to_string()))
+        .unwrap_or_else(|| "project rules".to_string());
+    let scope = match (field("path"), field("glob")) {
+        (Some(p), Some(g)) => format!(" in {p} ({g})"),
+        (Some(p), None) => format!(" in {p}"),
+        (None, Some(g)) => format!(" ({g})"),
+        (None, None) => String::new(),
+    };
+    let line = match (action, field("rewrite")) {
+        ("rewrite" | "apply", Some(r)) => format!("{action} {shape} → {r}{scope}"),
+        _ if action == "search" => format!("{shape}{scope}"),
+        _ => format!("{action} {shape}{scope}"),
+    };
+    truncate(&line, 80)
+}
+
 fn summarize_args(tool: &str, args: &str) -> String {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+        if tool == "ast_grep" {
+            return ast_grep_summary(&v);
+        }
         let key = match tool {
             "bash" => "command",
             "read_file" | "write_file" | "edit_file" | "multi_edit" | "apply_patch"

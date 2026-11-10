@@ -1,6 +1,7 @@
 mod ade;
 mod agent;
 mod api;
+mod ast_grep;
 mod auth;
 mod bench;
 mod bg_jobs;
@@ -52,6 +53,7 @@ mod skills_market;
 mod startup;
 mod t3code;
 mod terminal_browser;
+mod terminal_image;
 #[cfg(test)]
 mod test_alloc;
 mod theme;
@@ -1549,11 +1551,25 @@ fn run_doctor() -> Result<()> {
     println!();
     let sh = tools::shell_backend();
     theme::print_ok(&format!("shell   {}", sh.label));
+    #[cfg(feature = "image-peek")]
+    {
+        let (protocol, inline) = load_config()
+            .map(|c| (c.theme_setup.protocol.clone(), c.theme_setup.inline_images))
+            .unwrap_or_else(|_| ("auto".into(), true));
+        theme::print_ok(&format!(
+            "images  {}",
+            terminal_image::doctor_line(&protocol, inline)
+        ));
+    }
 
     // Optional tools on PATH
-    for name in ["rg", "sgrep", "git", "node", "npm", "uv", "bun", "ffmpeg"] {
+    for name in [
+        "rg", "sgrep", "ast-grep", "git", "node", "npm", "uv", "bun", "ffmpeg",
+    ] {
         let found = if name == "sgrep" {
             sgrep::sgrep_bin()
+        } else if name == "ast-grep" {
+            ast_grep::ast_grep_bin()
         } else {
             which_bin(name)
         };
@@ -1563,6 +1579,11 @@ fn run_doctor() -> Result<()> {
             theme::print_info(&format!(
                 "sgrep   not installed (semantic search falls back to ripgrep) - {}",
                 sgrep::INSTALL_HINT
+            ));
+        } else if name == "ast-grep" {
+            theme::print_info(&format!(
+                "ast-grep not installed (no structural search) - {}",
+                ast_grep::INSTALL_HINT
             ));
         } else if name == "ffmpeg" {
             theme::print_info(
@@ -1652,7 +1673,14 @@ async fn run_headless(
 ) -> Result<i32> {
     use headless::{Emitter, Outcome};
     ade::disable_terminal_title();
-    let mut out = Emitter::new(output_format, verbose);
+    let out = Emitter::new(output_format, verbose);
+    #[cfg(feature = "image-peek")]
+    let out = out.with_inline_images(
+        cfg.theme_setup.inline_images,
+        &cwd,
+        &cfg.theme_setup.protocol,
+    );
+    let mut out = out;
     let peer_session_id = std::env::var("NUR_SESSION_ID").unwrap_or_else(|_| session.id.clone());
     let peer_cwd = cwd.to_string_lossy().into_owned();
     let session_id = session.id.clone();

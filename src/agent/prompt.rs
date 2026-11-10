@@ -503,7 +503,8 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
             let mut prompt = format!(
                 "{role}\n\nWorkspace: {}\nOS: {} · shell: {}\nPermission mode: {permission}\n\n\
                  # Focused tools\n{}\n\n\
-                 sgrep (plain-English, semantic) is the search tool; grep only for an exact \
+                 sgrep (plain-English, semantic) for intent and ast_grep (code with $VAR / $$$ \
+                 wildcards, structural) for shape are the search tools; grep only for an exact \
                  identifier or regex, glob for file names (shell searches are refused), \
                  read_file/list_dir for file contents, and \
                  git_status/git_diff for repository state. Prefer dedicated edit tools over \
@@ -539,21 +540,22 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
         // prose; both variants stay fixed for the whole session so the
         // provider's cached prefix holds.
         let plan_lists = if self.core_profile {
-            "Free: read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, question,\n\
-             todo_write, submit_plan, and bash for the read-only set above.\n\
+            "Free: read_file, list_dir, sgrep, ast_grep(search|scan|rewrite|explain), grep, glob,\n\
+             web_fetch, web_search, question, todo_write, submit_plan, and bash for the read-only set above.\n\
              BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):\n\
-             - Authoring code: write_file, edit_file, multi_edit, apply_patch, hashline_edit.\n\
+             - Authoring code: write_file, edit_file, multi_edit, apply_patch, hashline_edit, ast_grep(apply).\n\
              - Mutating the repo via shell: git commit/push/add/reset/checkout/restore/stash/\n\
              merge/rebase/pull, and dependency installs (npm/pip/cargo/… install/add)."
         } else {
-            "Free (always-on in lean): read_file, list_dir, sgrep, grep, glob, web_fetch, web_search, look,\n\
+            "Free (always-on in lean): read_file, list_dir, sgrep, ast_grep(search|scan|rewrite|explain),\n\
+             grep, glob, web_fetch, web_search, look,\n\
              git_status, git_diff, skill, memory(read), todo_write, submit_plan, codemode, tool_search,\n\
              and bash for the read-only set above. Free after a `tool_search` load (lean) or in\n\
              full profile: extract_frames, graphify(query|path|explain|status|report|affected),\n\
              excalidraw(status|reference), plur(recall|status|…), ruflo(memory_search|status|…),\n\
              executor(search|status), enclave(status|tools).\n\
              BLOCKED in plan mode (do NOT attempt - they need manual/auto via Shift+Tab):\n\
-             - Authoring code: write_file, edit_file, multi_edit, apply_patch, hashline_edit.\n\
+             - Authoring code: write_file, edit_file, multi_edit, apply_patch, hashline_edit, ast_grep(apply).\n\
              - Submitting/mutating the repo via shell: git commit/push/add/reset/checkout/\n\
              restore/stash/merge/rebase/pull, gh pr create/merge, and dependency installs\n\
              (npm/pnpm/yarn/pip/cargo/… install/add).\n\
@@ -564,7 +566,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
         let lean_catalog;
         let tools_catalog = if self.core_profile {
             "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, hashline_edit,\n\
-             bash, sgrep, grep, glob, web_fetch, web_search, todo_write, question, submit_plan, typesafe"
+             bash, sgrep, ast_grep, grep, glob, web_fetch, web_search, todo_write, question, submit_plan, typesafe"
         } else if self.lean_profile {
             lean_catalog = format!(
                 "{}\n\nLoaded on demand - call `tool_search` with the names you need (or a \
@@ -580,7 +582,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
             lean_catalog.as_str()
         } else {
             "read_file, list_dir, write_file, edit_file, multi_edit, apply_patch, hashline_edit, bash,\n\
-             sgrep, grep, glob,\n\
+             sgrep, ast_grep, grep, glob,\n\
              web_fetch, web_search, look, extract_frames, git_status, git_diff,\n\
              context (RLM store), anydoc (docs→md), goal, proposal, harness (continual refine),\n\
              connectome (agent-native memory + chronicle continuity), repl (persistent Python REPL),\n\
@@ -594,7 +596,7 @@ If asked your name or who you are: say you are **Nur** (NurCLI). The backend pro
              feed each other and you only need part of the result - read these files and\n\
              count the matches, grep then open each hit, walk a directory tree - write one\n\
              `codemode` script instead: it calls `tools.<name>(args)` in a loop and only\n\
-             what it prints comes back. For independent reads inside the script, use `tools.parallel([{tool, args}, ...])`: it fans the batch out on a worker pool and returns results in batch order. Plain `tools.<name>()` calls inside a script run one after another; `Promise.all` does not overlap them. Mutating work stays in ordinary tool calls."
+             what it prints comes back. For independent reads inside the script, use `tools.parallel([{tool, args}, ...])`: it fans the batch out on a worker pool and returns results in batch order. Plain `tools.<name>()` calls inside a script run one after another; `Promise.all` does not overlap them. Shape searches fan out the same way: `tools.parallel` over several `ast_grep` patterns (every `unwrap()`, every `expect($_)`, every `panic!($$$)`) and print one tally. Mutating work stays in ordinary tool calls."
         };
         let ecosystem_bullets = if self.core_profile {
             ""
@@ -732,17 +734,17 @@ background job and its result arrives on its own, so keep doing useful work
 instead of polling it.{codemode_note}
 
 ## Tool policy - search and failure handling
-- SEARCH - `sgrep` is the search tool; `grep` and `glob` are its two narrow exceptions; the shell is not a search path. `sgrep` is semantic search (Context.dev sgrep, local, ripgrep-backed): describe what the code does in plain English - "where are retries with backoff", "code that validates the session token" - and it returns the few ranked chunks that matter, exact identifier hits first. Every search starts there: orienting in unfamiliar code, finding where behavior lives, anything that would otherwise be a grep over more than a screen; pass `pattern` to have it rerank a regex's matches by intent. `grep` is only for an exact identifier, string or regex you already know (and it enforces this: a pattern written as a description is answered by sgrep, and a result past the default cap comes back reranked by sgrep unless you set `max_matches` yourself); `glob` is only for file names. Shell searches (`grep`, `rg`, `ag`, `findstr`, `Select-String` as the command, or behind `cat`) are refused; `find`, `ls`, `Get-ChildItem` are the wrong tool too - `glob` and `list_dir`. When sgrep is not installed it says so and answers with grep, so leading with it is never a wasted call. For a definition, reference list, or symbol list in a typed language, load `lsp` with `tool_search` first (lean) and use it instead of regex search; it answers from the language server, not from text matches. `repo_map` is only a cheap fallback sketch when sgrep and `lsp` are both unavailable, not a peer search tool.
+- SEARCH - `sgrep` is the search tool for intent, `ast_grep` the search tool for shape; `grep` and `glob` are their two narrow exceptions; the shell is not a search path. `ast_grep` is structural search (ast-grep, tree-sitter, local): when the target is a code shape - every call shaped like X, every function with Y parameters, every `console.log` to replace - write the shape as real code with `$VAR` for one node and `$$$` for zero or more (`fetch($URL, $$$)`, `$X.unwrap()`); it matches syntax, so formatting, strings and comments cannot fool it. A change of the same shape across files is `ast_grep` action=rewrite (preview) then action=apply (one call, undoable), not a run of edit_file calls; action=explain shows how a pattern parsed when it matched nothing. `sgrep` is semantic search (Context.dev sgrep, local, ripgrep-backed): describe what the code does in plain English - "where are retries with backoff", "code that validates the session token" - and it returns the few ranked chunks that matter, exact identifier hits first. Start with sgrep when you know what the code does (orienting in unfamiliar code, finding where behavior lives, anything that would otherwise be a grep over more than a screen; pass `pattern` to have it rerank a regex's matches by intent), with ast_grep when you can write the shape. `grep` is only for an exact identifier, string or regex you already know (and it enforces this: a pattern written as a description is answered by sgrep, and a result past the default cap comes back reranked by sgrep unless you set `max_matches` yourself); `glob` is only for file names. Shell searches (`grep`, `rg`, `ag`, `findstr`, `Select-String` as the command, or behind `cat`) are refused; `find`, `ls`, `Get-ChildItem` are the wrong tool too - `glob` and `list_dir`. When sgrep is not installed it says so and answers with grep, so leading with it is never a wasted call. For a definition, reference list, or symbol list in a typed language, load `lsp` with `tool_search` first (lean) and use it instead of regex search; it answers from the language server, not from text matches. `repo_map` is only a cheap fallback sketch when sgrep and `lsp` are both unavailable, not a peer search tool.
 - FILE IO - dedicated tools: `list_dir` for directory shape, `read_file` for contents. Avoid bash `cat`, `type`, `ls`, `dir`, `head`, `tail` for reading the workspace - the tools are cheaper, faster, and never hang.
 - GIT - use `git_status` / `git_diff` tools, not `bash git ...` - they are approval-free and structured. Reserve bash git only when the tool does not cover the needed flag.
 - BASH: real shell when available (Git Bash/pwsh). The result is the stdout alone; `Stderr:` and `Exit code: N` sections appear only when non-empty / non-zero (no `Exit code` line means 0), `(no output)` when nothing was printed. Long output keeps head and tail around a `...N bytes truncated; complete output in <path>...` marker (`max_output_length` sets the cap; `read_file` the path when the middle matters). Prefer non-interactive one-shot commands; pipelines and `&&` chains are fine. Default timeout 60s (hard max 600s); a command still producing output at the deadline is handed to a background job whose result arrives in a later turn, a silent one is killed and may be retried once with a larger `timeout_ms` or `background=true`. The harness refuses identical retries of a command that hung or was cancelled, and refuses hang-prone patterns (dev servers, watch, `read -p`, `while true`).
 - FAILURE RECOVERY - mandatory: If ANY tool returns error, `exit_code != 0`, timeout, idle-kill, or cancellation:
   1) STOP - read exit_code/stdout/stderr.
   2) Do NOT retry the identical failing command (harness will refuse anyway).
-  3) SWITCH to the canonical tool: failed `ls` -> `list_dir`, failed `cat` -> `read_file`, failed `grep` via bash -> `sgrep`/`grep` tool, failed `find` -> `glob`/`grep`.
+  3) SWITCH to the canonical tool: failed `ls` -> `list_dir`, failed `cat` -> `read_file`, failed `grep` via bash -> `sgrep`/`grep` tool, failed `ast-grep` via bash -> `ast_grep` tool, failed `find` -> `glob`/`grep`.
   4) If a base command repeatedly fails (e.g. command not found on Windows), immediately use the dedicated tool and never hang the turn.
   5) On timeout/idle-kill, do not bump timeout_ms - change approach. Do not re-run the same failing script - that wastes the turn. Self-correct immediately.
-- HANG PREVENTION: Never run interactive, watch, or long-lived server commands. Prefer `sgrep`/`grep`/`list_dir`/`read_file`/`glob`.
+- HANG PREVENTION: Never run interactive, watch, or long-lived server commands. Prefer `sgrep`/`ast_grep`/`grep`/`list_dir`/`read_file`/`glob`.
 - Paths are sandboxed to the workspace - never scan drive roots (`/`, `C:\`, `~`).
 - web_search -> find docs/errors; web_fetch -> read a result url (text only - not video)
 - skill: action=list / action=search / action=read - load one skill by name when needed. Skills are **not**
@@ -753,7 +755,7 @@ instead of polling it.{codemode_note}
   appears in the conversation, follow it for the turn.
 - todo_write: maintain a live task list for multi-step work (always keep one in_progress)
 {secret_policy}- submit_plan: formal plan artifact in plan mode
-- Prefer, in order: edit_file for one exact replacement, multi_edit for several replacements in one file, apply_patch for multi-hunk or multi-file changes, hashline_edit for line-number changes after a read, over full rewrites
+- Prefer, in order: edit_file for one exact replacement, multi_edit for several replacements in one file, apply_patch for multi-hunk or multi-file changes, hashline_edit for line-number changes after a read, ast_grep action=apply for one structural change at every site it occurs (rename a call shape, swap an API, drop a wrapper), over full rewrites
 - hashline_edit: read_file heads every file with `[path#TAG]`; hashline_edit changes lines by those
   numbers (`PUT N.=M:` + `+` rows, `PUT >N:`, `CUT N.=M`) with the tag, so you never retype old
   text. A stale tag means the file changed: read it again. Use it when the old text is long or
@@ -772,7 +774,7 @@ instead of polling it.{codemode_note}
         s.push_str(
             r#"
 # Workflow
-1. Orient - git_status + sgrep for intent, grep for names, lsp for definitions/references/symbols (load it with tool_search first in lean), then read
+1. Orient - git_status + sgrep for intent, ast_grep for shape, grep for names, lsp for definitions/references/symbols (load it with tool_search first in lean), then read
 2. Plan - todo_write for multi-step; submit_plan in plan mode
 3. Implement - smallest correct change; verify with tests/build
 4. Report - what changed, how to verify

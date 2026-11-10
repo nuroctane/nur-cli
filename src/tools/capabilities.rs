@@ -160,6 +160,7 @@ pub fn is_read_only(name: &str, args: &Value) -> bool {
         "penecho" => crate::tools::penecho_tool::is_read_only_action(&args.to_string()),
         "bg" => crate::tools::bg_tool::is_read_only_action(&args.to_string()),
         "monitor" => crate::tools::monitor_tool::is_read_only_action(&args.to_string()),
+        "ast_grep" => crate::tools::ast_grep::is_read_only_action(&args.to_string()),
         "fractal" => crate::tools::fractal_tool::is_read_only_action(&args.to_string()),
         "headroom" => crate::tools::headroom_tool::is_read_only_action(&args.to_string()),
         "typesafe" => crate::tools::typesafe_is_read_only(&args.to_string()),
@@ -185,6 +186,7 @@ fn is_concurrency_safe_inner(name: &str, _args: &Value) -> bool {
         "read_file"
             | "list_dir"
             | "sgrep"
+            | "ast_grep"
             | "grep"
             | "glob"
             | "web_fetch"
@@ -236,6 +238,7 @@ pub fn is_destructive(name: &str, args: &Value) -> bool {
         "enclave" => !is_read_only("enclave", args),
         "mcp" => !is_read_only("mcp", args),
         "secscan" => !is_read_only("secscan", args),
+        "ast_grep" => !is_read_only("ast_grep", args),
         _ => false,
     }
 }

@@ -14,7 +14,8 @@
     "akarso": "0.3.0",
     "@plur-ai/cli": "0.23.0",
     "@plur-ai/mcp": "0.23.0",
-    "ruflo": "3.72.2"
+    "ruflo": "3.72.2",
+    "@ast-grep/cli": "0.51.1"
   },
   "pypi": {
     "headroom-ai": "0.43.1",

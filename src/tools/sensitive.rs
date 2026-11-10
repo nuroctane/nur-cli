@@ -78,6 +78,8 @@ pub fn written_text(tool: &str, arguments: &str) -> String {
             }
         }
         "edit_file" => s(&args, "new_string"),
+        // A structural rewrite writes its template (or an inline rule's fix).
+        "ast_grep" => format!("{}\n{}", s(&args, "rewrite"), s(&args, "inline_rule")),
         "multi_edit" => args
             .get("edits")
             .and_then(|e| e.as_array())

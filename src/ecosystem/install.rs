@@ -153,6 +153,11 @@ fn plan_install(name: &str) -> Result<(InstallPlan, Action), String> {
             "runtime verification CLI",
         ),
         "sgrep" => cargo_git_plan("sgrep", "sgrep", "sgrep", "local semantic code search"),
+        "ast-grep" | "ast_grep" => npm_plan(
+            "ast-grep",
+            crate::ast_grep::NPM_PACKAGE,
+            "structural code search and rewrite (prebuilt binary)",
+        ),
         other => {
             // Skill packs (by label) and default plugins (by catalog id).
             if let Some(pin) = lock::pack_pin(other) {
@@ -191,7 +196,7 @@ fn plan_install(name: &str) -> Result<(InstallPlan, Action), String> {
                 return Err(format!(
                     "unknown ecosystem component '{name}'. Known: penecho, egaki, akarso, executor, \
                      graphjin, ruflo, plur, skills, akm, agent-browser, excalidraw, headroom, \
-                     fractal, graphify, dogwood, sgrep, skill packs ({}), plugins in /plugins",
+                     fractal, graphify, dogwood, sgrep, ast-grep, skill packs ({}), plugins in /plugins",
                     crate::ecosystem::packs::pack_labels().join(", ")
                 ));
             }

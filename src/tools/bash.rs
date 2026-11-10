@@ -58,7 +58,7 @@ impl Tool for Bash {
          Idle commands with no output are killed; the whole process tree dies with the command. \
          Output keeps head+tail within max_output_length (full text spilled to disk). \
          Not for search or file reads: a grep/rg/findstr/Select-String command is refused \
-         (use sgrep/grep/glob; list_dir/read_file for contents). \
+         (use sgrep/ast_grep/grep/glob; list_dir/read_file for contents). \
          A command that hit its deadline may be retried once with a larger timeout_ms or \
          background=true; identical idle/cancelled commands are refused for 15 minutes."
     }
@@ -359,7 +359,12 @@ fn refuse_shell_search(cmd: &str) -> Option<String> {
             .next()
             .unwrap_or(first)
             .to_ascii_lowercase();
-        Some(base.trim_end_matches(".exe").to_string())
+        let base = [".exe", ".cmd", ".bat", ".ps1"]
+            .iter()
+            .find_map(|ext| base.strip_suffix(ext))
+            .unwrap_or(&base)
+            .to_string();
+        Some(base)
     };
     // `cd src && rg foo` is still a search; skip the setup segments.
     const SETUP: [&str; 5] = ["cd", "pushd", "export", "set", "source"];
@@ -367,6 +372,9 @@ fn refuse_shell_search(cmd: &str) -> Option<String> {
         .iter()
         .position(|seg| base_of(seg).is_some_and(|b| !SETUP.contains(&b.as_str())))?;
     let first = base_of(segments[start])?;
+    if let Some(reason) = refuse_structural_search(&first, segments[start]) {
+        return Some(reason);
+    }
     let searcher = if SEARCHERS.contains(&first.as_str()) {
         first
     } else if READERS.contains(&first.as_str()) {
@@ -380,10 +388,67 @@ fn refuse_shell_search(cmd: &str) -> Option<String> {
     Some(format!(
         "refused: `{searcher}` as a shell command - search goes through the tools. \
          sgrep query=\"<what the code does>\" ranks passages by intent (exact identifier hits \
-         first); grep pattern=<regex> for an identifier or string you already know \
+         first); ast_grep pattern=\"<code with $VAR / $$$>\" matches a code shape; grep \
+         pattern=<regex> for an identifier or string you already know \
          (fixed_strings=true for literal text, glob/type to narrow); glob for file names. \
          Filtering another command's output (`git log | grep fix`) still runs."
     ))
+}
+
+/// `ast-grep` (and its `sg` alias, when the arguments are ast-grep's) is the
+/// `ast_grep` tool's job: run through the tool it honours the workspace
+/// sandbox, renders matches with line numbers and writes through `/undo`.
+/// On Linux `sg` is also `setgroups` (`sg docker -c ...`), which still runs.
+fn refuse_structural_search(first: &str, segment: &str) -> Option<String> {
+    // Only the search and rewrite forms are the tool's job; `ast-grep test`
+    // (a repo's rule tests), `new`, `lsp` and `--version` still run.
+    let searches = |next: Option<&str>| {
+        matches!(
+            next,
+            Some(
+                "run"
+                    | "scan"
+                    | "rewrite"
+                    | "-p"
+                    | "--pattern"
+                    | "-r"
+                    | "--rewrite"
+                    | "--rule"
+                    | "--inline-rules"
+                    | "-U"
+                    | "--update-all"
+                    | "-k"
+                    | "--kind"
+            )
+        )
+    };
+    let words: Vec<&str> = strip_env_assigns(segment).split_whitespace().collect();
+    let looks_like_ast_grep = match first {
+        "ast-grep" | "sg" => searches(words.get(1).copied()),
+        // Package runners start the same binary: `npx ast-grep`, `bunx
+        // @ast-grep/cli`, `npm exec`, `pnpm dlx`, `yarn dlx`.
+        "npx" | "bunx" | "npm" | "pnpm" | "yarn" => {
+            let rest = match (first, words.get(1).copied()) {
+                ("npx" | "bunx", _) => &words[1.min(words.len())..],
+                ("npm", Some("exec" | "x")) | ("pnpm" | "yarn", Some("dlx" | "exec")) => {
+                    &words[2..]
+                }
+                _ => &[][..],
+            };
+            rest.iter()
+                .position(|t| !t.starts_with('-'))
+                .filter(|&i| rest[i] == "ast-grep" || rest[i].starts_with("@ast-grep/cli"))
+                .is_some_and(|i| searches(rest.get(i + 1).copied()))
+        }
+        _ => false,
+    };
+    looks_like_ast_grep.then(|| {
+        "refused: ast-grep as a shell command - use the ast_grep tool: \
+         ast_grep pattern=\"<code with $VAR / $$$>\" (lang=..., path=...) to search, \
+         action=rewrite rewrite=\"...\" to preview, action=apply to write it (undoable), \
+         action=scan for YAML rules."
+            .to_string()
+    })
 }
 
 fn command_segments(cmd: &str) -> Vec<&str> {
@@ -1067,5 +1132,29 @@ mod tests {
         assert!(win.starts_with("refused: `rg`"), "{win}");
         assert!(refuse_shell_search("Select-String -Path *.rs -Pattern foo").is_some());
         assert!(refuse_shell_search("sls foo *.rs").is_some());
+    }
+
+    // Failure modes: vendored skills that say "run ast-grep" bypassed the
+    // tool (no sandbox, no /undo for -U); refusing every `sg` broke Linux's
+    // `sg docker -c ...` (setgroups).
+    #[test]
+    fn ast_grep_in_the_shell_points_at_the_tool_but_setgroups_runs() {
+        let r = refuse_shell_search("ast-grep run -p 'foo($A)' -l rust").unwrap();
+        assert!(r.contains("use the ast_grep tool"), "{r}");
+        assert!(refuse_shell_search("cd src && sg -p 'console.log($A)' -U").is_some());
+        assert!(refuse_shell_search("npx -y ast-grep scan").is_some());
+        assert!(refuse_shell_search("npx prettier --write .").is_none());
+        assert!(refuse_shell_search("pnpm dlx @ast-grep/cli run -p x").is_some());
+        assert!(refuse_shell_search("npm exec -- ast-grep scan").is_some());
+        assert!(refuse_shell_search("ast-grep.cmd run -p 'f($A)'").is_some());
+        assert!(refuse_shell_search("npm test").is_none());
+        // A repo's own rule tests and scaffolding are not searches.
+        assert!(refuse_shell_search("ast-grep test").is_none());
+        assert!(refuse_shell_search("ast-grep --version").is_none());
+        assert!(refuse_shell_search("npx ast-grep new rule").is_none());
+        let r = refuse_shell_search("ast-grep scan").unwrap();
+        assert!(!r.contains("  "), "no stray runs of spaces: {r}");
+        assert!(refuse_shell_search("sg docker -c 'docker ps'").is_none());
+        assert!(refuse_shell_search("echo ast-grep").is_none());
     }
 }
