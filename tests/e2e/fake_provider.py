@@ -280,6 +280,8 @@ def make_handler(state, mcp=None):
                 # Files a scenario serves (`serve_files`), e.g. a skill at a
                 # pinned commit standing in for raw.githubusercontent.com.
                 return self._raw(path[len("/raw/"):])
+            if path.startswith("/tinyfish-search"):
+                return self._tinyfish_search()
             # /v1/models probes: answer with the one scripted model.
             self._json(200, {"object": "list", "data": [{"id": "e2e-model", "object": "model"}]})
 
@@ -472,6 +474,22 @@ def make_handler(state, mcp=None):
                 self._event("content_block_stop", {"type":"content_block_stop", "index":i})
             self._event("message_delta", {"type":"message_delta", "delta":{"stop_reason":stop, "stop_sequence":None}, "usage":{"output_tokens":5}})
             self._event("message_stop", {"type":"message_stop"})
+
+        def _tinyfish_search(self):
+            """A stand-in for TinyFish Search (GET /?query=...). It refuses a
+            call without X-API-Key and returns rows out of rank order plus one
+            without a url, so a passing scenario proves nur sorts and drops them."""
+            from urllib.parse import urlparse, parse_qs
+            if self.headers.get("x-api-key") in (None, "", "e2e-bad-key"):
+                return self._json(401, {"error": "Invalid API key"})
+            query = parse_qs(urlparse(self.path).query).get("query", [""])[0]
+            self._json(200, {"query": query, "total_results": 3, "page": 0, "results": [
+                {"position": 2, "site_name": "second", "title": "Second hit",
+                 "url": "https://second.example/", "snippet": "ranked second"},
+                {"position": 1, "site_name": "tinyfish", "title": "TinyFish Search",
+                 "url": "https://docs.tinyfish.ai/search-api", "snippet": f"free search for {query}"},
+                {"position": 3, "title": "No url row", "snippet": "dropped"},
+            ]})
 
         def _treg(self, tool, body):
             """A stand-in for treg.to's routed web jobs. It refuses calls without

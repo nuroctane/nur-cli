@@ -1,4 +1,5 @@
-//! Web search via DuckDuckGo Lite (no API key). Returns title · url · snippet.
+//! Web search: treg, Exa, Brave, TinyFish when their keys are set, else the
+//! DuckDuckGo HTML scrape (no key). Returns title · url · snippet.
 
 use super::{arg_str, arg_u64, Tool, ToolContext};
 use crate::error::{NurError, Result};
@@ -13,7 +14,8 @@ impl Tool for WebSearch {
 
     fn description(&self) -> &str {
         "Search the web (treg when TREG_TOKEN is set, Exa with EXA_API_KEY, Brave with \
-         BRAVE_API_KEY, else DuckDuckGo - no key needed). Returns top results \
+         BRAVE_API_KEY, TinyFish with TINYFISH_API_KEY, else DuckDuckGo - no key needed). \
+         Returns top results \
          as title, url, snippet. Use for docs, error messages, APIs; follow up with web_fetch \
          on a result url."
     }
@@ -76,47 +78,85 @@ impl Tool for WebSearch {
             }
         }
 
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(20))
-            .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(|e| NurError::Tool(e.to_string()))?;
-
-        let resp = client
-            .post("https://html.duckduckgo.com/html/")
-            .form(&[("q", query.as_str())])
-            .send()
-            .map_err(|e| NurError::Tool(format!("search failed: {e}")))?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(NurError::Tool(format!("search failed: HTTP {status}")));
-        }
-        // Bounded like web_fetch: an unexpectedly large proxy/HTML response must
-        // not be buffered whole.
-        let body = {
-            use std::io::Read;
-            let mut capped = String::new();
-            let _ = resp
-                .take(2_000_000)
-                .read_to_string(&mut capped)
-                .map_err(|e| NurError::Tool(format!("search read: {e}")))?;
-            capped
-        };
-
-        let results = parse_ddg_html(&body, max);
-        if results.is_empty() {
-            return Ok(format!("no results for: {query}"));
-        }
-        let mut out = format!("results for: {query}\n\n");
-        for (i, r) in results.iter().enumerate() {
-            out.push_str(&format!("{}. {}\n   {}\n", i + 1, r.title, r.url));
-            if !r.snippet.is_empty() {
-                out.push_str(&format!("   {}\n", r.snippet));
+        // TinyFish Search (free structured search) when a key is set; any
+        // failure falls through to the DuckDuckGo scrape, and a key or
+        // allowance problem is named in the answer.
+        let mut notice = None;
+        if let Some(key) = super::tinyfish::key() {
+            match super::tinyfish::search(&key, &query, max) {
+                Ok(rows) if !rows.is_empty() => {
+                    let rows: Vec<SearchResult> = rows
+                        .into_iter()
+                        .map(|(title, url, snippet)| SearchResult {
+                            title,
+                            url,
+                            snippet,
+                        })
+                        .collect();
+                    return Ok(render_results(&query, "tinyfish", &rows));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!("{e}");
+                    notice = e.account_notice();
+                }
             }
-            out.push('\n');
         }
-        Ok(out.trim_end().to_string())
+
+        let answer = search_ddg(&query, max);
+        match notice {
+            None => answer,
+            Some(n) => match answer {
+                Ok(out) => Ok(format!("{out}\n\n{n}, answered by DuckDuckGo")),
+                Err(NurError::Tool(e)) => Err(NurError::Tool(format!("{e}\n{n}"))),
+                Err(other) => Err(other),
+            },
+        }
     }
+}
+
+/// The no-key last resort: DuckDuckGo's HTML endpoint, parsed.
+fn search_ddg(query: &str, max: usize) -> Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent(format!("nur-cli/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| NurError::Tool(e.to_string()))?;
+
+    let resp = client
+        .post("https://html.duckduckgo.com/html/")
+        .form(&[("q", query)])
+        .send()
+        .map_err(|e| NurError::Tool(format!("search failed: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(NurError::Tool(format!("search failed: HTTP {status}")));
+    }
+    // Bounded like web_fetch: an unexpectedly large proxy/HTML response must
+    // not be buffered whole.
+    let body = {
+        use std::io::Read;
+        let mut capped = String::new();
+        let _ = resp
+            .take(2_000_000)
+            .read_to_string(&mut capped)
+            .map_err(|e| NurError::Tool(format!("search read: {e}")))?;
+        capped
+    };
+
+    let results = parse_ddg_html(&body, max);
+    if results.is_empty() {
+        return Ok(format!("no results for: {query}"));
+    }
+    let mut out = format!("results for: {query}\n\n");
+    for (i, r) in results.iter().enumerate() {
+        out.push_str(&format!("{}. {}\n   {}\n", i + 1, r.title, r.url));
+        if !r.snippet.is_empty() {
+            out.push_str(&format!("   {}\n", r.snippet));
+        }
+        out.push('\n');
+    }
+    Ok(out.trim_end().to_string())
 }
 
 struct SearchResult {

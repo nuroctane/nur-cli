@@ -535,6 +535,7 @@ In `stream-json` output a stopped answer shows as a `stream_restart` event.
 | `TREG_TOKEN` | Token from [treg](https://treg.to/web-access) (`treg login`). Turns on treg as `web_search`'s first backend and `web_fetch`'s fallback for blocked or JavaScript-only pages; each call prefers the free vendor and is capped at $0.02. `NUR_TREG_BASE` points at a self-hosted treg. |
 | `EXA_API_KEY` | Enables Exa as a `web_search` backend after treg. |
 | `BRAVE_API_KEY` | Enables Brave as a `web_search` backend after Exa. |
+| `TINYFISH_API_KEY` | Key from [TinyFish](https://docs.tinyfish.ai) (free: Search 30 requests/min and 12,000/day, Fetch 150 URLs/min and 1,000/day). Enables TinyFish Search as a `web_search` backend after Brave, and TinyFish Fetch as `web_fetch`'s fallback after treg for blocked or JavaScript-only pages (each one spends a daily fetch). A rejected key, a used-up allowance or a rate limit is named in the answer. |
 | `NUR_SCRATCH` | Set by nur for every shell command: `<workspace>/.nur/scratch`, the model's scratch folder (created on demand with a `.gitignore` of `*`). Not read from your environment. |
 | `NUR_PROVIDER_IDLE_TIMEOUT_SECS` | How long a provider connection may stay completely silent (no bytes, headers included) before Nur treats it as dead and reconnects (default `300`). A response that is still streaming is never cut off |
 | `NUR_PROVIDER_TURN_TIMEOUT_SECS` | Optional hard cap on one provider request, every transport including the Cursor Agent and Droid CLIs. Unset (the default) means no cap |

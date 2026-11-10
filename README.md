@@ -245,7 +245,7 @@ Docs: **[nuroctane.xyz/cli](https://www.nuroctane.xyz/cli)** · [docs/setup.md](
 | edit | `write_file` `edit_file` `multi_edit` `apply_patch` |
 | shell | `bash` |
 | vision | `look` · `extract_frames` |
-| web | `web_search` `web_fetch` (treg fallback for blocked or JavaScript-only pages with `TREG_TOKEN`) |
+| web | `web_search` `web_fetch` (treg or TinyFish fallback for blocked or JavaScript-only pages with `TREG_TOKEN` / `TINYFISH_API_KEY`) |
 | browser | real default browser via agent-browser-cli |
 | terminal_browser | in-terminal Chromium ([terminal-browser.com](https://terminal-browser.com/)); Windows host fallback |
 | desktop | native accessibility snapshots and actions through [agent-desktop](https://github.com/vercel-labs/agent-desktop) |

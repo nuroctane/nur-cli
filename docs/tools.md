@@ -231,11 +231,11 @@ Extract keyframes from video via ffmpeg. Output goes to `.nur/frames/<name>/`.
 
 ### `web_search`
 
-Search the web. When configured, [treg](https://treg.to/web-access) runs first, followed by Exa (`EXA_API_KEY`) and Brave (`BRAVE_API_KEY`). Empty or failed results fall through to the next configured service, then DuckDuckGo.
+Search the web. When configured, [treg](https://treg.to/web-access) runs first, followed by Exa (`EXA_API_KEY`), Brave (`BRAVE_API_KEY`) and [TinyFish Search](https://docs.tinyfish.ai/search-api/reference) (`TINYFISH_API_KEY`, free). Empty or failed results fall through to the next configured service, then DuckDuckGo.
 
 ### `web_fetch`
 
-Fetch a public URL (SSRF-checked on every redirect hop). With `TREG_TOKEN` set, a page that refuses the request (401, 403, 429, 5xx) or only renders with JavaScript (x.com, most single-page apps) is read through `treg.web.extract` and returned as markdown. treg calls prefer the free vendor and carry a 2-cent ceiling each; without a token nothing goes to treg.
+Fetch a public URL (SSRF-checked on every redirect hop). With `TREG_TOKEN` set, a page that refuses the request (401, 403, 429, 5xx) or only renders with JavaScript (x.com, most single-page apps) is read through `treg.web.extract` and returned as markdown. treg calls prefer the free vendor and carry a 2-cent ceiling each; without a token nothing goes to treg. With `TINYFISH_API_KEY` set, the same pages go to [TinyFish Fetch](https://docs.tinyfish.ai/fetch-api/reference) (Chromium-rendered, markdown) when treg is not configured or fails.
 
 ---
 

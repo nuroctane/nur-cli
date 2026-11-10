@@ -1,0 +1,24 @@
+{
+  "description": "A TinyFish key the service rejects (401) does not fail web_search: it falls through to DuckDuckGo, and the answer names the rejected key whether DuckDuckGo answers or not.",
+  "prompt": "Search the web for tinyfish search.",
+  "env": {
+    "TINYFISH_API_KEY": "e2e-bad-key",
+    "NUR_TINYFISH_SEARCH_BASE": "http://127.0.0.1:{port}/tinyfish-search"
+  },
+  "script": [
+    {"tool_calls": [{"name": "web_search", "arguments": {"query": "tinyfish search"}}]},
+    {"text": "Key problem reported."}
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": ["Key problem reported."],
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": ["tinyfish: key rejected (HTTP 401)"],
+        "lacks": ["(via tinyfish)", "e2e-bad-key"]
+      }
+    ]
+  }
+}

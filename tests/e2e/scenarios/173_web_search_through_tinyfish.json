@@ -1,0 +1,45 @@
+{
+  "description": "With TINYFISH_API_KEY set and no treg/Exa/Brave keys, web_search asks TinyFish Search with the key header, returns rows in rank order, and drops a row without a url; the stand-in refuses calls missing the key.",
+  "prompt": "Search the web for tinyfish search.",
+  "env": {
+    "TINYFISH_API_KEY": "e2e-tinyfish-key",
+    "NUR_TINYFISH_SEARCH_BASE": "http://127.0.0.1:{port}/tinyfish-search"
+  },
+  "script": [
+    {
+      "tool_calls": [
+        {
+          "name": "web_search",
+          "arguments": {
+            "query": "tinyfish search"
+          }
+        }
+      ]
+    },
+    {
+      "text": "TinyFish answered."
+    }
+  ],
+  "expect": {
+    "exit_code": 0,
+    "requests": 2,
+    "stdout_contains": [
+      "TinyFish answered."
+    ],
+    "tool_results": [
+      {
+        "request": 2,
+        "contains": [
+          "(via tinyfish)",
+          "1. TinyFish Search\n   https://docs.tinyfish.ai/search-api",
+          "free search for tinyfish search",
+          "2. Second hit"
+        ],
+        "lacks": [
+          "No url row",
+          "e2e-tinyfish-key"
+        ]
+      }
+    ]
+  }
+}

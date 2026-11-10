@@ -70,6 +70,7 @@ mod skill_tool;
 mod slop_scan;
 pub mod spill;
 mod submit_plan;
+pub mod tinyfish;
 pub mod tldraw;
 mod todo_write;
 pub mod tool_search;

@@ -19,9 +19,9 @@ impl Tool for WebFetch {
 
     fn description(&self) -> &str {
         "Fetch a public HTTP(S) URL and return text content (HTML/JSON/plain). \
-         Max 500KB. Use for docs and APIs — not for authenticated/private resources. \
-         With TREG_TOKEN set, a page that refuses the request or needs JavaScript is \
-         read through treg instead and comes back as markdown."
+         Max 500KB. Use for docs and APIs, not for authenticated/private resources. \
+         With TREG_TOKEN or TINYFISH_API_KEY set, a page that refuses the request or needs \
+         JavaScript is read through treg or TinyFish instead and comes back as markdown."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -60,7 +60,15 @@ impl Tool for WebFetch {
                 Ok(resp) => resp,
                 Err(e) => {
                     let failure = format!("fetch failed: {e}");
-                    return through_treg(&current, max).unwrap_or(Err(NurError::Tool(failure)));
+                    // Keep nur's own error: when the fallback fails too, a
+                    // dead host must not read as a quota problem.
+                    return match rendered_fallback(&current, max) {
+                        None => Err(NurError::Tool(failure)),
+                        Some(Ok(out)) => Ok(out),
+                        Some(Err(f)) => {
+                            Err(NurError::Tool(format!("{failure}\nrendered fallback: {f}")))
+                        }
+                    };
                 }
             };
 
@@ -97,12 +105,12 @@ impl Tool for WebFetch {
             let slice = if truncated { &buf[..max] } else { &buf[..] };
             let text = String::from_utf8_lossy(slice);
 
+            let mut fallback_failed = None;
             if super::treg::should_fall_back(status.as_u16(), &ctype, &text) {
-                if let Some(answer) = through_treg(&current, max) {
-                    match answer {
-                        Ok(out) => return Ok(out),
-                        Err(e) => tracing::debug!("treg fallback for {current}: {e}"),
-                    }
+                match rendered_fallback(&current, max) {
+                    Some(Ok(out)) => return Ok(out),
+                    Some(Err(e)) => fallback_failed = Some(e),
+                    None => {}
                 }
             }
             let mut out = format!("url: {current}\nstatus: {status}\ncontent-type: {ctype}\n\n");
@@ -110,12 +118,46 @@ impl Tool for WebFetch {
             if truncated {
                 out.push_str(&format!("\n\n[truncated at {max} bytes]"));
             }
+            if let Some(e) = fallback_failed {
+                out.push_str(&format!("\n\n[rendered fallback failed: {e}]"));
+            }
             return Ok(out);
         }
         Err(NurError::Tool(format!(
             "too many redirects (>{MAX_REDIRECTS}): {url}"
         )))
     }
+}
+
+/// Read a page nur's own request could not: treg first, then TinyFish Fetch.
+/// `None` when neither is configured, so callers keep their own answer; when
+/// both fail, both errors.
+fn rendered_fallback(url: &str, max: usize) -> Option<std::result::Result<String, String>> {
+    let treg = through_treg(url, max).map(|r| {
+        r.map_err(|e| match e {
+            NurError::Tool(m) => format!("treg: {m}"),
+            other => format!("treg: {other}"),
+        })
+    });
+    if let Some(Ok(out)) = treg {
+        return Some(Ok(out));
+    }
+    match (treg, through_tinyfish(url, max)) {
+        (_, Some(Ok(out))) => Some(Ok(out)),
+        (Some(Err(t)), Some(Err(f))) => Some(Err(format!("{t}; {f}"))),
+        (treg, tinyfish) => tinyfish.or(treg),
+    }
+}
+
+/// Read `url` through TinyFish Fetch when a key is set (Chromium-rendered,
+/// returned as markdown).
+fn through_tinyfish(url: &str, max: usize) -> Option<std::result::Result<String, String>> {
+    let key = super::tinyfish::key()?;
+    Some(
+        super::tinyfish::fetch(&key, url)
+            .map(|(text, final_url)| super::tinyfish::fetched(&final_url, &text, max))
+            .map_err(|e| e.account_notice().unwrap_or(e.message)),
+    )
 }
 
 /// Read `url` through treg when a token is configured: `None` without one, so
