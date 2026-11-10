@@ -1,5 +1,5 @@
 {
-  "total_skills": 1805,
+  "total_skills": 1829,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -864,6 +864,38 @@
       "aliases": []
     },
     {
+      "name": "agent-platform-access-audit",
+      "description": "Audits AI agent data access, blast radius, and blocked policy operations in Google Cloud by querying Cloud Audit Logs via BigQuery. Use when investigating what resources or services an agent accessed, identifying top originating principals the agent is acting as, or triaging PERMISSION_DENIED errors",
+      "path": "skills/agent-platform-access-audit/SKILL.md",
+      "triggers": [
+        "/agent platform access audit",
+        "/agent-platform-access-audit",
+        "agent platform access audit",
+        "agent-platform-access-audit",
+        "/agent platform access",
+        "/agent-platform-access",
+        "/platform access audit",
+        "/platform-access-audit",
+        "agent platform access",
+        "agent-platform-access",
+        "platform access audit",
+        "platform-access-audit"
+      ],
+      "keywords": [
+        "platform",
+        "access",
+        "audit",
+        "audits",
+        "data",
+        "blast",
+        "radius",
+        "blocked",
+        "policy",
+        "operations"
+      ],
+      "aliases": []
+    },
+    {
       "name": "agent-platform-alert-configuration",
       "description": "Configures best-practice alerting policies for AI agents using OpenTelemetry (OTel) metrics, generating output as Terraform (.tf) configuration files. Use when analyzing, writing, or deploying alerting policies to monitor agent latency, error rates, token usage, and quality metrics. Don't use for st",
       "path": "skills/agent-platform-alert-configuration/SKILL.md",
@@ -892,6 +924,38 @@
         "policies",
         "opentelemetry",
         "otel"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "agent-platform-architecture",
+      "description": "Designs, engineers, and validates enterprise Gemini platform architectures. Use when designing multi-project hierarchies (Host, Central Governance Hub, Runtime Spoke, Tool/MCP Spoke), configuring Agent Gateway, authoring Agent Connectivity Templates (ALL_TRAFFIC vs PRIVATE_RANGES_ONLY), deploying Se",
+      "path": "skills/agent-platform-architecture/SKILL.md",
+      "triggers": [
+        "/agent platform architecture",
+        "/agent-platform-architecture",
+        "agent platform architecture",
+        "agent-platform-architecture",
+        "/platform architecture",
+        "/platform-architecture",
+        "platform architecture",
+        "platform-architecture",
+        "designs engineers",
+        "/agent platform",
+        "/agent-platform",
+        "agent platform"
+      ],
+      "keywords": [
+        "platform",
+        "architecture",
+        "designs",
+        "engineers",
+        "validates",
+        "enterprise",
+        "gemini",
+        "architectures",
+        "designing",
+        "multi"
       ],
       "aliases": []
     },
@@ -1185,7 +1249,7 @@
     },
     {
       "name": "agent-platform-troubleshooting",
-      "description": "Troubleshoots Google Cloud Gemini Enterprise Agent Platform issues (Agent Gateway, Registry, Identity, Policies, Model Armor, Identity-Aware Proxy (IAP)). Use when agent requests fail with 403 (especially unauthorized egress), Agent Runtime queries return 500, or gateway/IAP logs show permission err",
+      "description": "Troubleshoots Google Cloud Gemini Enterprise Agent Platform issues across Agent Gateway, Agent Connectivity Templates (ACT), Agent Registry, Agent Identity, Identity-Aware Proxy (IAP), Unified Access Policies (UAP), Model Armor, Semantic Governance Policies (SGP), Cloud DNS peering, Private CA Trust",
       "path": "skills/agent-platform-troubleshooting/SKILL.md",
       "triggers": [
         "/agent platform troubleshooting",
@@ -1210,8 +1274,8 @@
         "gemini",
         "enterprise",
         "issues",
-        "gateway",
-        "registry"
+        "across",
+        "gateway"
       ],
       "aliases": []
     },
@@ -4084,7 +4148,7 @@
     },
     {
       "name": "animation-performance",
-      "description": "Keep web animations inside the frame budget \u2014 animate composite-only properties, keep motion off the main thread when the page is busy, and find the cause when an animation drops frames. Covers the layout/paint/composite pipeline, cheaper property swaps, CSS vs WAAPI vs requestAnimationFrame, Framer",
+      "description": "Keep web animations inside the frame budget \u2014 animate composite-only properties, keep motion off the main thread when the page is busy, and find the cause when an animation drops frames. Covers the layout/paint/composite pipeline, cheaper property swaps, CSS vs WAAPI vs requestAnimationFrame, Motion",
       "path": "skills/animation-performance/SKILL.md",
       "triggers": [
         "/animation performance",
@@ -4271,6 +4335,70 @@
         "context",
         "protocol",
         "public"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "api-gateway-openapi-spec-authoring",
+      "description": "Writes, migrates, and fixes OpenAPI specs for Google Cloud API Gateway. Use when converting an OpenAPI 2.0 (Swagger) spec to OpenAPI 3.x, writing a new OpenAPI 3.x spec, or fixing a failed \"gcloud api-gateway api-configs create\", such as \"extension is only supported in OpenAPI 2.x\". Also use when qu",
+      "path": "skills/api-gateway-openapi-spec-authoring/SKILL.md",
+      "triggers": [
+        "/api gateway openapi spec authoring",
+        "/api-gateway-openapi-spec-authoring",
+        "api gateway openapi spec authoring",
+        "api-gateway-openapi-spec-authoring",
+        "/openapi spec authoring",
+        "/openapi-spec-authoring",
+        "openapi spec authoring",
+        "openapi-spec-authoring",
+        "/gateway openapi spec",
+        "/gateway-openapi-spec",
+        "/api gateway openapi",
+        "/api-gateway-openapi"
+      ],
+      "keywords": [
+        "gateway",
+        "openapi",
+        "spec",
+        "authoring",
+        "writes",
+        "migrates",
+        "fixes",
+        "specs",
+        "google",
+        "cloud"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "api-gateway-troubleshooting",
+      "description": "Diagnoses failing requests and deployment errors on Google Cloud API Gateway. Use when calls through a gateway return 4xx or 5xx errors, including 429 and other quota errors, time out, or fail a CORS preflight; when `api-configs create` fails with a service account, concurrency, or limit error, or `",
+      "path": "skills/api-gateway-troubleshooting/SKILL.md",
+      "triggers": [
+        "/api gateway troubleshooting",
+        "/api-gateway-troubleshooting",
+        "api gateway troubleshooting",
+        "api-gateway-troubleshooting",
+        "/gateway troubleshooting",
+        "/gateway-troubleshooting",
+        "gateway troubleshooting",
+        "gateway-troubleshooting",
+        "diagnoses failing",
+        "/api gateway",
+        "/api-gateway",
+        "api gateway"
+      ],
+      "keywords": [
+        "gateway",
+        "troubleshooting",
+        "diagnoses",
+        "failing",
+        "requests",
+        "deployment",
+        "errors",
+        "google",
+        "cloud",
+        "calls"
       ],
       "aliases": []
     },
@@ -5674,6 +5802,38 @@
       "aliases": []
     },
     {
+      "name": "axiom-build-dashboard",
+      "description": "Designs and builds Axiom dashboards via API. Covers chart types, APL and metrics/MPL query patterns, SmartFilters, layout, and configuration options. Use when creating dashboards, migrating from Splunk, or configuring chart options.",
+      "path": "skills/axiom-build-dashboard/SKILL.md",
+      "triggers": [
+        "/axiom build dashboard",
+        "/axiom-build-dashboard",
+        "axiom build dashboard",
+        "axiom-build-dashboard",
+        "/build dashboard",
+        "/build-dashboard",
+        "build dashboard",
+        "build-dashboard",
+        "designs builds",
+        "/axiom build",
+        "/axiom-build",
+        "axiom build"
+      ],
+      "keywords": [
+        "axiom",
+        "build",
+        "dashboard",
+        "designs",
+        "builds",
+        "dashboards",
+        "covers",
+        "chart",
+        "types",
+        "metrics"
+      ],
+      "aliases": []
+    },
+    {
       "name": "axiom-building-dashboards",
       "description": "Designs and builds Axiom dashboards via API. Covers chart types, APL and metrics/MPL query patterns, SmartFilters, layout, and configuration options. Use when creating dashboards, migrating from Splunk, or configuring chart options.",
       "path": "skills/axiom-building-dashboards/SKILL.md",
@@ -5706,6 +5866,38 @@
       "aliases": []
     },
     {
+      "name": "axiom-control-costs",
+      "description": "Analyzes Axiom query patterns to find unused data, then builds dashboards and monitors for cost optimization. Use when asked to reduce Axiom costs, find unused columns or field values, identify data waste, or track ingest spend.",
+      "path": "skills/axiom-control-costs/SKILL.md",
+      "triggers": [
+        "/axiom control costs",
+        "/axiom-control-costs",
+        "axiom control costs",
+        "axiom-control-costs",
+        "/axiom control",
+        "/axiom-control",
+        "/control costs",
+        "/control-costs",
+        "analyzes axiom",
+        "axiom control",
+        "axiom-control",
+        "control costs"
+      ],
+      "keywords": [
+        "axiom",
+        "control",
+        "costs",
+        "analyzes",
+        "query",
+        "patterns",
+        "find",
+        "unused",
+        "data",
+        "builds"
+      ],
+      "aliases": []
+    },
+    {
       "name": "axiom-controlling-costs",
       "description": "Analyzes Axiom query patterns to find unused data, then builds dashboards and monitors for cost optimization. Use when asked to reduce Axiom costs, find unused columns or field values, identify data waste, or track ingest spend.",
       "path": "skills/axiom-controlling-costs/SKILL.md",
@@ -5734,6 +5926,38 @@
         "unused",
         "data",
         "builds"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "axiom-create-org",
+      "description": "Provision a temporary Axiom organization with one unauthenticated API call, store its one-time token securely, and hand the claim URL to the user. Use when an agent needs an Axiom org and the user has none configured, or asks for a new or throwaway one.",
+      "path": "skills/axiom-create-org/SKILL.md",
+      "triggers": [
+        "provision temporary",
+        "/axiom create org",
+        "/axiom-create-org",
+        "axiom create org",
+        "axiom-create-org",
+        "/axiom create",
+        "/axiom-create",
+        "axiom create",
+        "axiom-create",
+        "/create org",
+        "/create-org",
+        "create org"
+      ],
+      "keywords": [
+        "axiom",
+        "create",
+        "provision",
+        "temporary",
+        "organization",
+        "unauthenticated",
+        "call",
+        "store",
+        "time",
+        "token"
       ],
       "aliases": []
     },
@@ -8908,7 +9132,7 @@
     },
     {
       "name": "cad",
-      "description": "Creates and edits parametric CAD parts and assemblies as Python build123d models that cadgen's engine builds and the CAD Viewer shows live; exports STEP, STL, 3MF, GLB and xbf files on request; resolves prompt references, measures geometry, and articulates or animates assemblies. Use for 3D CAD mode",
+      "description": "Creates and edits parametric CAD parts and assemblies as Python build123d models that text-to-cad's server builds and the CAD Viewer shows live; exports STEP, STL, 3MF, GLB and xbf files on request; resolves prompt references, measures geometry, and articulates or animates assemblies. Use for 3D CAD",
       "path": "skills/cad/SKILL.md",
       "triggers": [
         "creates edits"
@@ -8922,8 +9146,8 @@
         "python",
         "build123d",
         "models",
-        "cadgen",
-        "engine"
+        "text",
+        "server"
       ],
       "aliases": []
     },
@@ -9256,10 +9480,10 @@
     },
     {
       "name": "ce-compound",
-      "description": "Document a solved problem as a durable repo learning. Use when verified work produced non-obvious reasoning absent from its final code, tests, or existing docs; avoid routine fixes whose artifacts already explain the lesson.",
+      "description": "Capture a solved problem's lesson in its cheapest durable form, a test or lint rule, a coding standard, or a repo learning, or refresh existing learnings against the codebase. Use when verified work produced non-obvious reasoning absent from its final code, tests, or existing docs, or when auditing ",
       "path": "skills/ce-compound/SKILL.md",
       "triggers": [
-        "document solved",
+        "capture solved",
         "/ce compound",
         "/ce-compound",
         "ce compound",
@@ -9267,21 +9491,21 @@
       ],
       "keywords": [
         "compound",
-        "document",
+        "capture",
         "solved",
         "problem",
+        "lesson",
+        "cheapest",
         "durable",
-        "repo",
-        "learning",
-        "verified",
-        "produced",
-        "obvious"
+        "form",
+        "test",
+        "lint"
       ],
       "aliases": []
     },
     {
       "name": "ce-compound-refresh",
-      "description": "Refresh the repo's captured learnings against the current codebase. Use when auditing stale, overlapping, superseded, or drifted learnings; avoid general refactor, debugging, or code review unless the learnings store is explicit.",
+      "description": "Old name for refreshing learnings, which now lives in `ce-compound`. Use only when a prompt or standing instruction names `ce-compound-refresh`; use `ce-compound` for every other learnings audit.",
       "path": "skills/ce-compound-refresh/SKILL.md",
       "triggers": [
         "/ce compound refresh",
@@ -9292,22 +9516,22 @@
         "/compound-refresh",
         "compound refresh",
         "compound-refresh",
+        "name refreshing",
         "/ce compound",
         "/ce-compound",
-        "refresh repo",
         "ce compound"
       ],
       "keywords": [
         "compound",
         "refresh",
-        "repo",
-        "captured",
+        "name",
+        "refreshing",
         "learnings",
-        "against",
-        "current",
-        "codebase",
-        "auditing",
-        "stale"
+        "lives",
+        "prompt",
+        "standing",
+        "instruction",
+        "names"
       ],
       "aliases": []
     },
@@ -9435,6 +9659,31 @@
         "user",
         "selected",
         "continuity"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "ce-help",
+      "description": "Help and orientation for Compound Engineering: place the user's work on the compounding loop and recommend the next command, without running it. Use when the user invokes ce-help to ask which skill fits, what comes next, how setup, configuration, cost, or upgrades work, or why a skill misbehaved.",
+      "path": "skills/ce-help/SKILL.md",
+      "triggers": [
+        "orientation compound",
+        "/ce help",
+        "/ce-help",
+        "ce help",
+        "ce-help"
+      ],
+      "keywords": [
+        "orientation",
+        "compound",
+        "engineering",
+        "place",
+        "user",
+        "compounding",
+        "loop",
+        "recommend",
+        "next",
+        "command"
       ],
       "aliases": []
     },
@@ -9781,7 +10030,7 @@
     },
     {
       "name": "ce-setup",
-      "description": "Check Compound Engineering health and repo-local config, or scaffold a Compound Pack with `pack:<id>`.",
+      "description": "Check Compound Engineering's tools and repo config and fix what it finds, scaffold a Compound Pack with `pack:<id>`, or draft and refresh coding standards and review docs from pull request history. Use when setting up or diagnosing Compound Engineering, or when creating or updating CODING_STANDARDS.",
       "path": "skills/ce-setup/SKILL.md",
       "triggers": [
         "check compound",
@@ -9795,10 +10044,10 @@
         "check",
         "compound",
         "engineering",
-        "health",
+        "tools",
         "repo",
-        "local",
         "config",
+        "finds",
         "scaffold",
         "pack"
       ],
@@ -10108,6 +10357,29 @@
         "session",
         "ordinating",
         "subagents"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "choreograph",
+      "description": "Coordinate several elements that animate together \u2014 decide what moves, in what order, how much they overlap, and what stays still \u2014 so a group reads as one intentional motion instead of a pile of separate animations. Use when building or fixing a staggered list, a hero entrance, a view swap inside a",
+      "path": "skills/choreograph/SKILL.md",
+      "triggers": [
+        "coordinate several",
+        "/choreograph",
+        "choreograph"
+      ],
+      "keywords": [
+        "choreograph",
+        "coordinate",
+        "several",
+        "elements",
+        "animate",
+        "together",
+        "decide",
+        "moves",
+        "order",
+        "much"
       ],
       "aliases": []
     },
@@ -10687,6 +10959,38 @@
       "aliases": []
     },
     {
+      "name": "cloud-monitoring-alert-configuration",
+      "description": "Configures Cloud Monitoring alerting policies using Terraform and PromQL across Cloud Run, Google Kubernetes Engine (GKE), Compute Engine, AI Hypercomputer reservations, Vertex AI Agent Engine, and generic Google Cloud resources. Use when creating, reviewing, migrating, or deduplicating Terraform al",
+      "path": "skills/cloud-monitoring-alert-configuration/SKILL.md",
+      "triggers": [
+        "/cloud monitoring alert configuration",
+        "/cloud-monitoring-alert-configuration",
+        "cloud monitoring alert configuration",
+        "cloud-monitoring-alert-configuration",
+        "/monitoring alert configuration",
+        "/monitoring-alert-configuration",
+        "monitoring alert configuration",
+        "monitoring-alert-configuration",
+        "/cloud monitoring alert",
+        "/cloud-monitoring-alert",
+        "cloud monitoring alert",
+        "cloud-monitoring-alert"
+      ],
+      "keywords": [
+        "cloud",
+        "monitoring",
+        "alert",
+        "configuration",
+        "configures",
+        "alerting",
+        "policies",
+        "terraform",
+        "promql",
+        "across"
+      ],
+      "aliases": []
+    },
+    {
       "name": "cloud-monitoring-chart-generation",
       "description": "Generates Cloud Monitoring Server-Driven UI (SDUI) Widget and XyChart Protocol Buffer textprotos on Google Cloud from resolved PromQL or ListTimeSeries queries. Use when: - Generating valid google.monitoring.dashboard.v1.Widget textprotos, containing PrometheusQuery or TimeSeriesFilter datasets, for",
       "path": "skills/cloud-monitoring-chart-generation/SKILL.md",
@@ -10879,6 +11183,31 @@
       "aliases": []
     },
     {
+      "name": "cloud-operator",
+      "description": "Google Cloud (GCP) assistant and operator via the autocloud MCP server. Use for any GCP request: how-to, resources, Terraform/Kubernetes/Helm, rollouts, incidents, costs. Invoke it before answering a GCP question from your own knowledge or documentation search, and before proposing an architecture o",
+      "path": "skills/cloud-operator/SKILL.md",
+      "triggers": [
+        "/cloud operator",
+        "/cloud-operator",
+        "cloud operator",
+        "cloud-operator",
+        "google cloud"
+      ],
+      "keywords": [
+        "cloud",
+        "operator",
+        "google",
+        "assistant",
+        "autocloud",
+        "server",
+        "request",
+        "resources",
+        "terraform",
+        "kubernetes"
+      ],
+      "aliases": []
+    },
+    {
       "name": "cloud-run-alert-configuration",
       "description": "Configures best-practice, high-signal alerting policies for Cloud Run resources on Google Cloud (services, jobs, and worker pools) based on seasoned SRE practices. Use when analyzing, recommending, writing, or deploying Terraform PromQL alerting policies to monitor Cloud Run error rates (4xx/5xx), r",
       "path": "skills/cloud-run-alert-configuration/SKILL.md",
@@ -11008,7 +11337,7 @@
     },
     {
       "name": "cloudflare",
-      "description": "Discover and choose Cloudflare products for apps, APIs, AI agents, storage, networking, and security. Use for architecture and product selection, including when the user describes a need without naming a Cloudflare product; then find the relevant skill or documentation.",
+      "description": "Discover and choose Cloudflare products for apps, APIs, AI agents, storage, networking, and security. Use for architecture and product selection, including when the user describes a need without naming a Cloudflare product; then find the relevant skill or documentation. Also use when a Cloudflare-pr",
       "path": "skills/cloudflare/SKILL.md",
       "triggers": [
         "discover choose",
@@ -11654,6 +11983,70 @@
         "existing",
         "components",
         "variants"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "compute-future-reservations",
+      "description": "Evaluates future GPU and TPU reservation feasibility and calendar-mode booking options in Google Compute Engine (GCE). Use when planning future AI/ML training runs, checking reservation availability windows, verifying accelerator cluster topologies, or assessing future capacity lead times. Don't use",
+      "path": "skills/compute-future-reservations/SKILL.md",
+      "triggers": [
+        "/compute future reservations",
+        "/compute-future-reservations",
+        "compute future reservations",
+        "compute-future-reservations",
+        "/future reservations",
+        "/future-reservations",
+        "future reservations",
+        "future-reservations",
+        "evaluates future",
+        "/compute future",
+        "/compute-future",
+        "compute future"
+      ],
+      "keywords": [
+        "compute",
+        "future",
+        "reservations",
+        "evaluates",
+        "reservation",
+        "feasibility",
+        "calendar",
+        "mode",
+        "booking",
+        "options"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "compute-on-demand-reservations",
+      "description": "Inspects, verifies, and manages Google Compute Engine (GCE) On-Demand reservations and analyzes consumed versus available reserved capacity. Use when checking active reservation capacity, determining whether reserved VMs are available or exhausted, verifying reservation targeting (automatic versus s",
+      "path": "skills/compute-on-demand-reservations/SKILL.md",
+      "triggers": [
+        "/compute on demand reservations",
+        "/compute-on-demand-reservations",
+        "compute on demand reservations",
+        "compute-on-demand-reservations",
+        "/on demand reservations",
+        "/on-demand-reservations",
+        "on demand reservations",
+        "on-demand-reservations",
+        "/demand reservations",
+        "/demand-reservations",
+        "demand reservations",
+        "demand-reservations"
+      ],
+      "keywords": [
+        "compute",
+        "demand",
+        "reservations",
+        "inspects",
+        "verifies",
+        "manages",
+        "google",
+        "engine",
+        "analyzes",
+        "consumed"
       ],
       "aliases": []
     },
@@ -13477,6 +13870,38 @@
       "aliases": []
     },
     {
+      "name": "create-ai-avatar",
+      "description": "Make an AI avatar of yourself that looks and sounds like you. A HeyGen digital twin trained on a couple of minutes of your own footage says lines you never recorded, in your own ElevenLabs voice, lip-synced from the audio, on the engine whose mouth moves most like yours. Covers picking and joining t",
+      "path": "skills/create-ai-avatar/SKILL.md",
+      "triggers": [
+        "/create ai avatar",
+        "/create-ai-avatar",
+        "create ai avatar",
+        "create-ai-avatar",
+        "avatar yourself",
+        "/ai avatar",
+        "/ai-avatar",
+        "/create ai",
+        "/create-ai",
+        "ai avatar",
+        "ai-avatar",
+        "create ai"
+      ],
+      "keywords": [
+        "create",
+        "avatar",
+        "yourself",
+        "looks",
+        "sounds",
+        "heygen",
+        "digital",
+        "twin",
+        "trained",
+        "couple"
+      ],
+      "aliases": []
+    },
+    {
       "name": "create-canvas",
       "description": "Build a freeform canvas to explore, compare, and iterate on anything.",
       "path": "skills/create-canvas/SKILL.md",
@@ -15065,7 +15490,7 @@
     },
     {
       "name": "design-taste-frontend",
-      "description": "tasteskill v2, the anti-slop frontend skill. Art direction for websites, distilled from a study of 247 curated gallery sites (One Page Love, Awwwards Sites of the Day). Deals researched directions (idea, composition, type, palette, photographs, section blueprints) from a library, enforces a strict n",
+      "description": "tasteskill 2.5.0, the anti-slop frontend skill. Builds professional company websites at the level of figma.com and x.ai: plain copy, one system, one section per screen, equal edges, real photographs and real product UI (product renders when there are no photographs), with shader effects, scenes and ",
       "path": "skills/taste-skill/SKILL.md",
       "triggers": [
         "/design taste frontend",
@@ -15092,10 +15517,10 @@
         "tasteskill",
         "anti",
         "slop",
-        "direction",
-        "websites",
-        "distilled",
-        "study"
+        "builds",
+        "professional",
+        "company",
+        "websites"
       ],
       "aliases": [
         "taste-skill"
@@ -19131,7 +19556,7 @@
     },
     {
       "name": "dxf",
-      "description": "Generates, regenerates and validates 2D DXF drawings from Python build123d models, exported by cadgen. Use for DXF files, `.py` drawing scripts, 2D profiles, outlines, templates, gaskets, panels, flat patterns, laser/plasma/waterjet cut layouts, and 2D drawing exports of CAD geometry. Opens and visu",
+      "description": "Generates, regenerates and validates 2D DXF drawings from Python build123d models, exported by text-to-cad. Use for DXF files, `.py` drawing scripts, 2D profiles, outlines, templates, gaskets, panels, flat patterns, laser/plasma/waterjet cut layouts, and 2D drawing exports of CAD geometry. Opens and",
       "path": "skills/dxf/SKILL.md",
       "triggers": [
         "generates regenerates"
@@ -19145,7 +19570,7 @@
         "build123d",
         "models",
         "exported",
-        "cadgen",
+        "text",
         "files"
       ],
       "aliases": []
@@ -19927,7 +20352,7 @@
     },
     {
       "name": "executor-gateway",
-      "description": "Executor MCP gateway \u2014 one catalog for OpenAPI/GraphQL/MCP integrations shared across agents. Use for external APIs, multi-agent tool routing, policies.",
+      "description": "Executor MCP gateway: one catalog for OpenAPI/GraphQL/MCP integrations shared across agents. Use for external APIs, multi-agent tool routing, policies.",
       "path": "skills/executor-gateway/SKILL.md",
       "triggers": [
         "/executor gateway",
@@ -23982,7 +24407,7 @@
     },
     {
       "name": "gke-observability",
-      "description": "Configures GKE observability, including Cloud Logging, Cloud Monitoring, and managed Prometheus. Use when configuring GKE monitoring, setting up GKE logging, or configuring Prometheus metrics collection, and to troubleshoot Managed Service for Prometheus (GMP) issues such as missing metrics, unhealt",
+      "description": "Configures GKE observability, including Cloud Logging, Cloud Monitoring, and managed Prometheus. Use when configuring GKE monitoring, setting up GKE logging, or configuring Prometheus metrics collection, to diagnose GKE control plane, API server, admission webhook, etcd storage, node registration or",
       "path": "skills/gke-observability/SKILL.md",
       "triggers": [
         "configures observability",
@@ -25548,6 +25973,38 @@
       "aliases": []
     },
     {
+      "name": "google-cloud-storage-diagnostic",
+      "description": "Troubleshoots and diagnoses Cloud Storage on Google Cloud (also known colloquially as GCS) access and permission denials (403 Permission Denied or Insufficient Permission) and access control conflicts. Use whenever a user encounters or asks to analyze a 403 error on a bucket or object - including an",
+      "path": "skills/google-cloud-storage-diagnostic/SKILL.md",
+      "triggers": [
+        "/google cloud storage diagnostic",
+        "/google-cloud-storage-diagnostic",
+        "google cloud storage diagnostic",
+        "google-cloud-storage-diagnostic",
+        "/cloud storage diagnostic",
+        "/cloud-storage-diagnostic",
+        "cloud storage diagnostic",
+        "cloud-storage-diagnostic",
+        "troubleshoots diagnoses",
+        "/google cloud storage",
+        "/google-cloud-storage",
+        "google cloud storage"
+      ],
+      "keywords": [
+        "google",
+        "cloud",
+        "storage",
+        "diagnostic",
+        "troubleshoots",
+        "diagnoses",
+        "known",
+        "colloquially",
+        "access",
+        "permission"
+      ],
+      "aliases": []
+    },
+    {
       "name": "google-cloud-storage-fuse",
       "description": "Mounts Cloud Storage buckets on Google Cloud as a POSIX file system with Cloud Storage FUSE (gcsfuse). Use when interacting with gcsfuse or Cloud Storage FUSE mounts: decide whether FUSE, native gs:// reads, or Filestore/Managed Lustre fits a workload, deploy tuned mounts on GKE, Compute Engine, or ",
       "path": "skills/google-cloud-storage-fuse/SKILL.md",
@@ -26191,6 +26648,31 @@
       "aliases": []
     },
     {
+      "name": "gstack-investigate",
+      "description": "Use when a test fails, code errors or output is wrong: find and prove the root cause before any fix, then fix it with a regression test. (gstack)",
+      "path": "skills/gstack/qm/sandbox/skills/gstack-investigate/SKILL.md",
+      "triggers": [
+        "/gstack investigate",
+        "/gstack-investigate",
+        "gstack investigate",
+        "gstack-investigate",
+        "test fails"
+      ],
+      "keywords": [
+        "gstack",
+        "investigate",
+        "test",
+        "fails",
+        "code",
+        "errors",
+        "output",
+        "wrong",
+        "find",
+        "prove"
+      ],
+      "aliases": []
+    },
+    {
       "name": "gstack-openclaw-ceo-review",
       "description": "Use when asked to review a plan, challenge a proposal, run a CEO review, poke holes in an approach, think bigger about scope, or decide whether to expand or reduce the plan.",
       "path": "skills/gstack/openclaw/skills/gstack-openclaw-ceo-review/SKILL.md",
@@ -26315,6 +26797,56 @@
         "commit",
         "history",
         "patterns"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "gstack-plan",
+      "description": "Use before building a feature: challenge the scope, then review architecture, code quality, tests and performance, and end with a plan to build. (gstack)",
+      "path": "skills/gstack/qm/sandbox/skills/gstack-plan/SKILL.md",
+      "triggers": [
+        "building feature",
+        "/gstack plan",
+        "/gstack-plan",
+        "gstack plan",
+        "gstack-plan"
+      ],
+      "keywords": [
+        "gstack",
+        "plan",
+        "building",
+        "feature",
+        "challenge",
+        "scope",
+        "review",
+        "architecture",
+        "code",
+        "quality"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "gstack-review",
+      "description": "Use before merging a branch or PR: review the diff for bugs that pass CI but break production, fix the obvious ones and ask about the rest. (gstack)",
+      "path": "skills/gstack/qm/sandbox/skills/gstack-review/SKILL.md",
+      "triggers": [
+        "/gstack review",
+        "/gstack-review",
+        "merging branch",
+        "gstack review",
+        "gstack-review"
+      ],
+      "keywords": [
+        "gstack",
+        "review",
+        "merging",
+        "branch",
+        "diff",
+        "bugs",
+        "pass",
+        "break",
+        "production",
+        "obvious"
       ],
       "aliases": []
     },
@@ -26831,6 +27363,38 @@
         "recording",
         "style",
         "window"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "html-explainer-video",
+      "description": "Turn a product, a feature or an idea into a finished one-minute explainer video in any look: a script (hook, benefit, quick tutorial, try it), a voice whose words are the clock, HTML scenes drawn from that one clock and rendered frame by frame at 2\u00d7, and an edit in Fil's video editor over MCP with c",
+      "path": "skills/html-explainer-video/SKILL.md",
+      "triggers": [
+        "/html explainer video",
+        "/html-explainer-video",
+        "html explainer video",
+        "html-explainer-video",
+        "/explainer video",
+        "/explainer-video",
+        "/html explainer",
+        "/html-explainer",
+        "explainer video",
+        "explainer-video",
+        "html explainer",
+        "html-explainer"
+      ],
+      "keywords": [
+        "html",
+        "explainer",
+        "video",
+        "turn",
+        "product",
+        "feature",
+        "idea",
+        "finished",
+        "minute",
+        "look"
       ],
       "aliases": []
     },
@@ -34684,21 +35248,24 @@
     },
     {
       "name": "investigate",
-      "description": "Systematic debugging with root cause investigation. (gstack)",
+      "description": "Use when a test fails, code errors or output is wrong: find the root cause, then fix it. (gstack)",
       "path": "skills/gstack/investigate/SKILL.md",
       "triggers": [
-        "systematic debugging",
         "/investigate",
-        "investigate"
+        "investigate",
+        "test fails"
       ],
       "keywords": [
         "investigate",
-        "systematic",
-        "debugging",
+        "test",
+        "fails",
+        "code",
+        "errors",
+        "output",
+        "wrong",
+        "find",
         "root",
-        "cause",
-        "investigation",
-        "gstack"
+        "cause"
       ],
       "aliases": []
     },
@@ -36177,7 +36744,7 @@
     },
     {
       "name": "modernize",
-      "description": "Bring an aging pull request onto its current base and decide whether it should still exist: MODERNIZE, REWORK or CLOSE, with range-diff proof before any push. (gstack)",
+      "description": "Bring an aging PR onto its current base and decide: MODERNIZE, REWORK or CLOSE. (gstack)",
       "path": "skills/gstack/modernize/SKILL.md",
       "triggers": [
         "bring aging",
@@ -36188,13 +36755,13 @@
         "modernize",
         "bring",
         "aging",
-        "pull",
-        "request",
         "onto",
         "current",
         "base",
         "decide",
-        "whether"
+        "rework",
+        "close",
+        "gstack"
       ],
       "aliases": []
     },
@@ -43903,15 +44470,12 @@
     },
     {
       "name": "qa",
-      "description": "Fix browser/API/CLI/job/worker/webhook bugs. (gstack)",
+      "description": "Use when you test the site, API or CLI and fix bugs. (gstack)",
       "path": "skills/gstack/qa/SKILL.md",
-      "triggers": [
-        "browser worker"
-      ],
+      "triggers": [],
       "keywords": [
-        "browser",
-        "worker",
-        "webhook",
+        "test",
+        "site",
         "bugs",
         "gstack"
       ],
@@ -44963,16 +45527,16 @@
     },
     {
       "name": "review",
-      "description": "Pre-landing PR review. (gstack)",
+      "description": "Use when you review this PR's diff. (gstack)",
       "path": "skills/gstack/review/SKILL.md",
       "triggers": [
-        "landing review",
+        "review diff",
         "/review",
         "review"
       ],
       "keywords": [
         "review",
-        "landing",
+        "diff",
         "gstack"
       ],
       "aliases": []
@@ -45917,6 +46481,31 @@
         "hive",
         "mind",
         "hooks"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "runaway-stopper",
+      "description": "Find runaway Capy threads and subagents, stop or rotate them safely, and prevent repeats. (gstack)",
+      "path": "skills/gstack/runaway-stopper/SKILL.md",
+      "triggers": [
+        "/runaway stopper",
+        "/runaway-stopper",
+        "runaway stopper",
+        "runaway-stopper",
+        "find runaway"
+      ],
+      "keywords": [
+        "runaway",
+        "stopper",
+        "find",
+        "capy",
+        "threads",
+        "subagents",
+        "stop",
+        "rotate",
+        "safely",
+        "prevent"
       ],
       "aliases": []
     },
@@ -47435,23 +48024,23 @@
     },
     {
       "name": "ship",
-      "description": "Ship workflow: detect + merge base branch, run tests, review diff, bump VERSION, update CHANGELOG, commit, push, create PR. (gstack)",
+      "description": "Ship it: merge the base, run tests, review the diff, bump VERSION and CHANGELOG, push and create a PR. (gstack)",
       "path": "skills/gstack/ship/SKILL.md",
       "triggers": [
-        "ship workflow",
+        "ship merge",
         "/ship"
       ],
       "keywords": [
         "ship",
-        "workflow",
-        "detect",
         "merge",
         "base",
-        "branch",
         "tests",
         "review",
         "diff",
-        "bump"
+        "bump",
+        "version",
+        "changelog",
+        "push"
       ],
       "aliases": []
     },
@@ -47859,6 +48448,30 @@
         "shared",
         "styling",
         "viewer"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "software-factory",
+      "description": "Shared language for designing a software factory: the tasks it runs and the services it plugs into.",
+      "path": "skills/software-factory/SKILL.md",
+      "triggers": [
+        "/software factory",
+        "/software-factory",
+        "software factory",
+        "software-factory",
+        "shared language"
+      ],
+      "keywords": [
+        "software",
+        "factory",
+        "shared",
+        "language",
+        "designing",
+        "tasks",
+        "runs",
+        "services",
+        "plugs"
       ],
       "aliases": []
     },
@@ -50826,7 +51439,7 @@
     },
     {
       "name": "urdf",
-      "description": "URDF robot description authoring and validation. Use when creating, editing, inspecting, validating, or debugging `.urdf` files, robot links, joints, limits, inertials, visual/collision geometry, mesh references, frame conventions, or robot-description artifacts. Use the SRDF skill for MoveIt2 seman",
+      "description": "URDF robot description authoring and validation. Use when creating, editing, inspecting, validating, or debugging `.urdf` files, robot links, joints, limits, inertials, visual/collision geometry, mesh references, frame conventions, or robot-description artifacts. Covers the robot's structure, not Mo",
       "path": "skills/urdf/SKILL.md",
       "triggers": [
         "urdf robot",
@@ -50843,6 +51456,38 @@
         "inspecting",
         "validating",
         "debugging"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "url-to-motion-design",
+      "description": "Turn a launch film, product video or post at a URL (an X or Twitter post, YouTube, Vimeo, a direct video link) into Fil HTML motion scenes. Captures the film's best 5 to 10 distinct motion-graphics shots as screenshots and clips, rebuilds each as an original Fil motion scene in its look with Fil's o",
+      "path": "skills/url-to-motion-design/SKILL.md",
+      "triggers": [
+        "/url to motion design",
+        "/url-to-motion-design",
+        "url to motion design",
+        "url-to-motion-design",
+        "/to motion design",
+        "/to-motion-design",
+        "to motion design",
+        "to-motion-design",
+        "/motion design",
+        "/motion-design",
+        "/url to motion",
+        "/url-to-motion"
+      ],
+      "keywords": [
+        "motion",
+        "design",
+        "turn",
+        "launch",
+        "film",
+        "product",
+        "video",
+        "post",
+        "twitter",
+        "youtube"
       ],
       "aliases": []
     },
@@ -51453,6 +52098,30 @@
       "aliases": []
     },
     {
+      "name": "vercel-schedules",
+      "description": "Vercel Schedules guidance \u2014 run a private function, route, or Vercel Queues topic on a cron cadence or once at a set time. Covers static schedules in vercel.json, dynamic per-user schedules with @vercel/schedules, handleSchedule, the vercel schedules CLI, environments, jitter, and migrating from Cro",
+      "path": "skills/vercel-schedules/SKILL.md",
+      "triggers": [
+        "/vercel schedules",
+        "/vercel-schedules",
+        "vercel schedules",
+        "vercel-schedules"
+      ],
+      "keywords": [
+        "vercel",
+        "schedules",
+        "guidance",
+        "private",
+        "function",
+        "route",
+        "queues",
+        "topic",
+        "cron",
+        "cadence"
+      ],
+      "aliases": []
+    },
+    {
       "name": "vercel-services",
       "description": "Configure and troubleshoot Vercel Services for multiple frontends and backends in one project. Use when composing a polyglot or multi-service application on one Vercel deployment; defining the `services` key, service-targeted rewrites, or service bindings in `vercel.json`; or running all services wi",
       "path": "skills/vercel-services/SKILL.md",
@@ -51578,6 +52247,28 @@
         "creating",
         "requires",
         "running"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "verify",
+      "description": "Use when coding: run the checks and tests /ship picks until green. (gstack)",
+      "path": "skills/gstack/verify/SKILL.md",
+      "triggers": [
+        "coding checks",
+        "/verify",
+        "verify"
+      ],
+      "keywords": [
+        "verify",
+        "coding",
+        "checks",
+        "tests",
+        "ship",
+        "picks",
+        "until",
+        "green",
+        "gstack"
       ],
       "aliases": []
     },
