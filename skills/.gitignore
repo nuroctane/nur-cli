@@ -96,6 +96,7 @@
 /axiom-ingest/
 /axiom-metrics-chart/
 /axiom-spl-to-apl/
+/axiom-sre/
 /background-grid-webgl/
 /bambu-labs/
 /baseline-ui/
@@ -238,6 +239,7 @@
 /cloud-run-basics/
 /cloud-sql-basics/
 /cloud-trace-querying/
+/cloudflare-app-bootstrap/
 /cloudflare-email-service/
 /cloudflare-one-migrations/
 /cloudflare-one/
@@ -317,6 +319,7 @@
 /diagnosing-bugs/
 /diagnosing-superpowers/
 /diagram/
+/digital-twin/
 /discernment-nudge/
 /dispatching-parallel-agents/
 /distill/
@@ -377,6 +380,7 @@
 /factory/
 /falling-leaves/
 /fantasy/
+/fea/
 /feature-sliced-design/
 /fiction/
 /finalize/
@@ -393,6 +397,7 @@
 /flat/
 /framed-grid-layout/
 /framed-tech-dark-border-gradient/
+/frameworks-on-cloudflare/
 /freeze/
 /friendly/
 /frontend-ui-engineering/
@@ -409,6 +414,7 @@
 /gemini-live-api/
 /generate-reference-inspired-brand-worlds/
 /geometric/
+/gestures/
 /git-guardrails-claude-code/
 /git-workflow-and-versioning/
 /gke-ai-troubleshooting-handle-disruption-gpu-tpu/
@@ -592,6 +598,7 @@
 /lightning-energy-skill-vfx/
 /lingo/
 /liquid-metal-border/
+/litert-google-tensor/
 /loop-me/
 /make-pdf/
 /managed-airflow-dag-authoring/
@@ -651,6 +658,8 @@
 /paper-cinder-transition/
 /paper/
 /parsing-artifacts-with-eric-zimmerman-tools/
+/pathways-workload/
+/pcb/
 /pdf/
 /performance-optimization/
 /performance-profiling/
@@ -672,6 +681,7 @@
 /pr/
 /premium/
 /pricing-page/
+/print3d/
 /product-proof-saas/
 /professional/
 /progressive-blur/
@@ -696,6 +706,7 @@
 /release/
 /remember/
 /remove-animations/
+/render/
 /requesting-code-review/
 /research/
 /resolving-merge-conflicts/
@@ -707,6 +718,7 @@
 /review/
 /rewind/
 /riso/
+/robot-simulation/
 /roku/
 /routing-middleware/
 /runaway-stopper/
@@ -1679,6 +1691,7 @@
 /webmcp/
 /wizard/
 /workers-best-practices/
+/workers-development/
 /workers-profiling/
 /workflow-progress-screenshots/
 /workflow-score-to-target/

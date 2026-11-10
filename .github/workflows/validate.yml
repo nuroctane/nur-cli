@@ -24,21 +24,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           filter: blob:none
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: '1.97.0'
           # Exactly what rust-toolchain.toml lists: a missing one is
           # auto-installed by the first rustc call, which collided with the
           # runner image's cargo-fmt on ubuntu-latest.
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: validate-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
-      - uses: taiki-e/install-action@3b728f3d612841223d50b6bc8f2addad110e6918 # nextest
+      - uses: taiki-e/install-action@7c48f0a661edab95fdc666d1526d9ef945205245 # nextest
         with:
           tool: nextest@0.9.150
       - name: Install Linux sandbox backend
@@ -69,7 +69,7 @@ jobs:
       - run: python tests/e2e/run_startup.py --bin target/debug/nur${{ runner.os == 'Windows' && '.exe' || '' }}
       - run: python tests/e2e/run_release_ui.py --bin target/debug/nur${{ runner.os == 'Windows' && '.exe' || '' }}
       - run: python tests/e2e/run_regressions.py --bin target/debug/nur${{ runner.os == 'Windows' && '.exe' || '' }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: harness-${{ matrix.os }}

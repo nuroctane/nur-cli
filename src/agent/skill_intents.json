@@ -1,5 +1,5 @@
 {
-  "total_skills": 1829,
+  "total_skills": 1842,
   "note": "Comprehensive skill intent index - 700+ skills, expanded NL triggers. Must be updated when adding skills per AGENTS.md. Run: python scripts/generate_skill_intents.py",
   "skills": [
     {
@@ -5723,7 +5723,7 @@
     },
     {
       "name": "autoplan",
-      "description": "Auto-review pipeline \u2014 reads the full CEO, design, eng, and DX review skills from disk and runs them sequentially with auto-decisions using 6 decision principles. (gstack)",
+      "description": "Auto-review pipeline \u2014 runs the CEO, design, eng (architecture, edge cases, failure modes, tests) and DX reviews (lean run: one reviewer), auto-deciding. (gstack)",
       "path": "skills/autoplan/SKILL.md",
       "triggers": [
         "auto review",
@@ -5735,12 +5735,12 @@
         "auto",
         "review",
         "pipeline",
-        "reads",
-        "full",
-        "design",
-        "disk",
         "runs",
-        "sequentially"
+        "design",
+        "architecture",
+        "edge",
+        "cases",
+        "failure"
       ],
       "aliases": []
     },
@@ -6052,15 +6052,13 @@
     {
       "name": "axiom-sre",
       "description": "Expert SRE investigator for incidents and debugging. Uses hypothesis-driven methodology and systematic triage. Can query Axiom observability when available. Use for incident response, root cause analysis, production debugging, or log investigation.",
-      "path": "skills/sre/SKILL.md",
+      "path": "skills/axiom-sre/SKILL.md",
       "triggers": [
         "expert investigator",
         "/axiom sre",
         "/axiom-sre",
         "axiom sre",
-        "axiom-sre",
-        "sre",
-        "/sre"
+        "axiom-sre"
       ],
       "keywords": [
         "axiom",
@@ -6074,9 +6072,7 @@
         "methodology",
         "systematic"
       ],
-      "aliases": [
-        "sre"
-      ]
+      "aliases": []
     },
     {
       "name": "background-grid-webgl",
@@ -9132,7 +9128,7 @@
     },
     {
       "name": "cad",
-      "description": "Creates and edits parametric CAD parts and assemblies as Python build123d models that text-to-cad's server builds and the CAD Viewer shows live; exports STEP, STL, 3MF, GLB and xbf files on request; resolves prompt references, measures geometry, and articulates or animates assemblies. Use for 3D CAD",
+      "description": "Creates and edits parametric CAD parts, assemblies and 2D profiles as Python build123d models that text-to-cad's server builds and the CAD Viewer shows live; exports STEP, STL, 3MF, GLB, DXF and xbf files on request; resolves prompt references, measures geometry, checks whether a part can be machine",
       "path": "skills/cad/SKILL.md",
       "triggers": [
         "creates edits"
@@ -9143,11 +9139,11 @@
         "parametric",
         "parts",
         "assemblies",
+        "profiles",
         "python",
         "build123d",
         "models",
-        "text",
-        "server"
+        "text"
       ],
       "aliases": []
     },
@@ -11359,6 +11355,38 @@
       "aliases": []
     },
     {
+      "name": "cloudflare-app-bootstrap",
+      "description": "Get a Cloudflare Workers app to a working local request by connecting its bindings, secrets, and initial data, then verifying real application behavior. Use for app setup or onboarding after the project exists; use frameworks-on-cloudflare or cf-cli to create or configure the project, and wrangler o",
+      "path": "skills/cloudflare-app-bootstrap/SKILL.md",
+      "triggers": [
+        "/cloudflare app bootstrap",
+        "/cloudflare-app-bootstrap",
+        "cloudflare app bootstrap",
+        "cloudflare-app-bootstrap",
+        "cloudflare workers",
+        "/cloudflare app",
+        "/cloudflare-app",
+        "/app bootstrap",
+        "/app-bootstrap",
+        "cloudflare app",
+        "cloudflare-app",
+        "app bootstrap"
+      ],
+      "keywords": [
+        "cloudflare",
+        "bootstrap",
+        "workers",
+        "local",
+        "request",
+        "connecting",
+        "bindings",
+        "secrets",
+        "initial",
+        "data"
+      ],
+      "aliases": []
+    },
+    {
       "name": "cloudflare-composition-root",
       "description": "Composition roots for Hono and Cloudflare. Use when adding a binding-backed service or refactoring raw runtime dependencies out of inner code.",
       "path": "skills/cloudflare-composition-root/SKILL.md",
@@ -11424,7 +11452,7 @@
     },
     {
       "name": "cloudflare-one",
-      "description": "Design, configure, troubleshoot, or review Cloudflare One Zero Trust and SASE deployments. Use cloudflare-one-migrations for migration planning from other vendors.",
+      "description": "Design, configure, troubleshoot, or review Cloudflare One Zero Trust and SASE deployments. Use cloudflare-one-migrations for migration planning from other vendors. Also use when an agent, script, crawler, or other non-browser client needs to reach a webpage or API protected by Cloudflare Access.",
       "path": "skills/cloudflare-one/SKILL.md",
       "triggers": [
         "design configure",
@@ -15416,7 +15444,7 @@
     },
     {
       "name": "design-review",
-      "description": "Designer's eye QA: finds visual inconsistency, spacing issues, hierarchy problems, AI slop patterns, and slow interactions \u2014 then fixes them. (gstack)",
+      "description": "Designer's eye QA: finds visual inconsistency, spacing issues, hierarchy problems, AI slop patterns, and slow interactions \u2014 then fixes them; --build checks UI while you build it. (gstack)",
       "path": "skills/design-review/SKILL.md",
       "triggers": [
         "/design review",
@@ -15490,7 +15518,7 @@
     },
     {
       "name": "design-taste-frontend",
-      "description": "tasteskill 2.5.0, the anti-slop frontend skill. Builds professional company websites at the level of figma.com and x.ai: plain copy, one system, one section per screen, equal edges, real photographs and real product UI (product renders when there are no photographs), with shader effects, scenes and ",
+      "description": "tasteskill 2.5.1, the anti-slop frontend skill. Builds professional company websites at the level of figma.com and x.ai: plain copy in a voice of its own, one system, one section per screen, equal edges, real photographs and real product UI (licensed stand-in photographs when the client has none; a ",
       "path": "skills/taste-skill/SKILL.md",
       "triggers": [
         "/design taste frontend",
@@ -18717,7 +18745,7 @@
     },
     {
       "name": "developing-genkit-dart",
-      "description": "Generates code and provides documentation for the Genkit Dart SDK. Use when the user asks to build AI agents in Dart, use Genkit flows, or integrate LLMs into Dart/Flutter applications.",
+      "description": "Provides guidance on developing AI-powered applications using the Genkit Dart SDK. Use when the user asks to build AI agents in Dart, use Genkit flows, or integrate LLMs into Dart/Flutter applications. Don't use for Genkit in JavaScript/TypeScript, Go, or Python.",
       "path": "skills/developing-genkit-dart/SKILL.md",
       "triggers": [
         "/developing genkit dart",
@@ -18728,7 +18756,7 @@
         "/developing-genkit",
         "developing genkit",
         "developing-genkit",
-        "generates code",
+        "provides guidance",
         "/genkit dart",
         "/genkit-dart",
         "genkit dart"
@@ -18737,10 +18765,10 @@
         "developing",
         "genkit",
         "dart",
-        "generates",
-        "code",
         "provides",
-        "documentation",
+        "guidance",
+        "powered",
+        "applications",
         "user",
         "asks",
         "build"
@@ -18749,7 +18777,7 @@
     },
     {
       "name": "developing-genkit-go",
-      "description": "Develop AI-powered applications using Genkit in Go. Use when the user asks to build AI features, agents, flows, or tools in Go using Genkit, or when working with Genkit Go code involving generation, prompts, streaming, tool calling, or model providers.",
+      "description": "Provides guidance on developing AI-powered applications using Genkit in Go. Use when the user asks to build AI features, agents, flows, or tools in Go using Genkit, or when working with Genkit Go code involving generation, prompts, streaming, tool calling, or model providers. Don't use for Genkit in",
       "path": "skills/developing-genkit-go/SKILL.md",
       "triggers": [
         "/developing genkit go",
@@ -18760,7 +18788,7 @@
         "/developing-genkit",
         "developing genkit",
         "developing-genkit",
-        "develop powered",
+        "provides guidance",
         "/genkit go",
         "/genkit-go",
         "genkit go"
@@ -18768,20 +18796,20 @@
       "keywords": [
         "developing",
         "genkit",
-        "develop",
+        "provides",
+        "guidance",
         "powered",
         "applications",
         "user",
         "asks",
         "build",
-        "features",
-        "flows"
+        "features"
       ],
       "aliases": []
     },
     {
       "name": "developing-genkit-js",
-      "description": "Develop AI-powered applications using Genkit in Node.js/TypeScript. Use when the user asks about Genkit, AI agents, flows, or tools in JavaScript/TypeScript, or when encountering Genkit errors, validation issues, type errors, or API problems.",
+      "description": "Provides guidance on developing AI-powered applications using Genkit in Node.js/TypeScript. Use when the user asks about Genkit, AI agents, flows, or tools in JavaScript/TypeScript, or when encountering Genkit errors, validation issues, type errors, or API problems. Don't use for Genkit in Python, G",
       "path": "skills/developing-genkit-js/SKILL.md",
       "triggers": [
         "/developing genkit js",
@@ -18792,7 +18820,7 @@
         "/developing-genkit",
         "developing genkit",
         "developing-genkit",
-        "develop powered",
+        "provides guidance",
         "/genkit js",
         "/genkit-js",
         "genkit js"
@@ -18800,20 +18828,20 @@
       "keywords": [
         "developing",
         "genkit",
-        "develop",
+        "provides",
+        "guidance",
         "powered",
         "applications",
         "node",
         "typescript",
         "user",
-        "asks",
-        "flows"
+        "asks"
       ],
       "aliases": []
     },
     {
       "name": "developing-genkit-python",
-      "description": "Develop AI-powered applications using Genkit in Python. Use when the user asks about Genkit, AI agents, flows, or tools in Python, or when encountering Genkit errors, import issues, or API problems.",
+      "description": "Provides guidance on developing AI-powered applications using Genkit Python (0.13) and migrating Genkit Python 0.12 projects to 0.13. Use when building AI agents, flows, tools, structured outputs, or FastAPI routes in Python, upgrading from Genkit 0.12, or debugging Genkit imports, config errors, or",
       "path": "skills/developing-genkit-python/SKILL.md",
       "triggers": [
         "/developing genkit python",
@@ -18824,7 +18852,7 @@
         "/developing-genkit",
         "developing genkit",
         "developing-genkit",
-        "develop powered",
+        "provides guidance",
         "/genkit python",
         "/genkit-python",
         "genkit python"
@@ -18833,13 +18861,13 @@
         "developing",
         "genkit",
         "python",
-        "develop",
+        "provides",
+        "guidance",
         "powered",
         "applications",
-        "user",
-        "asks",
-        "flows",
-        "tools"
+        "migrating",
+        "projects",
+        "building"
       ],
       "aliases": []
     },
@@ -19004,6 +19032,31 @@
         "controls",
         "dials",
         "knobs"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "digital-twin",
+      "description": "Build a digital twin of yourself, meaning photoreal stills of you in your own real room, talking video clips of you, and lines in your own cloned voice, that people who know you accept as you. It's a proven workflow (160+ numbered stills over two dozen rounds, 20+ talking drafts and a voice taken fr",
+      "path": "skills/digital-twin/SKILL.md",
+      "triggers": [
+        "/digital twin",
+        "/digital-twin",
+        "build digital",
+        "digital twin",
+        "digital-twin"
+      ],
+      "keywords": [
+        "digital",
+        "twin",
+        "build",
+        "yourself",
+        "meaning",
+        "photoreal",
+        "stills",
+        "real",
+        "room",
+        "talking"
       ],
       "aliases": []
     },
@@ -22215,6 +22268,27 @@
       "aliases": []
     },
     {
+      "name": "fea",
+      "description": "Checks whether a part or an assembly of bonded parts holds under its loads, as a linear static stress study of a STEP, an xbf or a text-to-cad model, meshed by netgen and solved by CalculiX, giving peak von Mises stress, safety factor against yield and deflection drawn on the part. Use when the pers",
+      "path": "skills/fea/SKILL.md",
+      "triggers": [
+        "checks whether"
+      ],
+      "keywords": [
+        "checks",
+        "whether",
+        "part",
+        "assembly",
+        "bonded",
+        "parts",
+        "holds",
+        "loads",
+        "linear",
+        "static"
+      ],
+      "aliases": []
+    },
+    {
       "name": "feature-sliced-design",
       "description": "Official Feature-Sliced Design (FSD) v2.1 skill for applying the methodology to frontend projects. Use when the task involves organizing project structure with FSD layers, deciding where code belongs, placing static assets (images, icons, fonts, PDFs), grouping closely related slices, defining publi",
       "path": "skills/feature-sliced-design/SKILL.md",
@@ -22584,7 +22658,7 @@
     },
     {
       "name": "flags-sdk",
-      "description": "Implement feature flags in Next.js or SvelteKit code with the Flags SDK (`flags` npm package). Use when installing or configuring the SDK, declaring flags with `flag()`, wiring a provider adapter (`@flags-sdk/vercel`, Statsig, LaunchDarkly, PostHog, GrowthBook, Global Config, OpenFeature, and others",
+      "description": "Implement feature flags in Next.js or SvelteKit code with the Flags SDK (`flags` npm package). Use when installing or configuring the SDK, declaring flags with `flag()`, reading a connected same-team project's flags through Project Connections (`createVercelAdapter({ projectId })`), wiring a provide",
       "path": "skills/flags-sdk/SKILL.md",
       "triggers": [
         "implement feature",
@@ -22776,6 +22850,38 @@
         "design",
         "system",
         "shells"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "frameworks-on-cloudflare",
+      "description": "Build, migrate, and deploy web-framework applications on Cloudflare Workers. Use when a framework project such as Astro, SvelteKit, React Router, TanStack Start, Nuxt, Hono, or a React or Vue SPA targets Cloudflare, or when a framework repository contains Workers deployment configuration.",
+      "path": "skills/frameworks-on-cloudflare/SKILL.md",
+      "triggers": [
+        "/frameworks on cloudflare",
+        "/frameworks-on-cloudflare",
+        "frameworks on cloudflare",
+        "frameworks-on-cloudflare",
+        "/frameworks on",
+        "/frameworks-on",
+        "/on cloudflare",
+        "/on-cloudflare",
+        "build migrate",
+        "frameworks on",
+        "frameworks-on",
+        "on cloudflare"
+      ],
+      "keywords": [
+        "frameworks",
+        "cloudflare",
+        "build",
+        "migrate",
+        "deploy",
+        "framework",
+        "applications",
+        "workers",
+        "project",
+        "astro"
       ],
       "aliases": []
     },
@@ -23438,6 +23544,29 @@
         "precise",
         "shapes",
         "intuitive"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "gestures",
+      "description": "Build drag, swipe, and sheet interactions that track the finger 1:1 and stay interruptible. Use when building or fixing anything the user drags, swipes, flings, holds, or dismisses with a gesture \u2014 drawers, sheets, swipe-to-dismiss toasts and cards, drag-to-reorder, pull-to-refresh, hold-to-confirm ",
+      "path": "skills/gestures/SKILL.md",
+      "triggers": [
+        "build drag",
+        "/gestures",
+        "gestures"
+      ],
+      "keywords": [
+        "gestures",
+        "build",
+        "drag",
+        "swipe",
+        "sheet",
+        "interactions",
+        "track",
+        "finger",
+        "stay",
+        "interruptible"
       ],
       "aliases": []
     },
@@ -26650,7 +26779,7 @@
     {
       "name": "gstack-investigate",
       "description": "Use when a test fails, code errors or output is wrong: find and prove the root cause before any fix, then fix it with a regression test. (gstack)",
-      "path": "skills/gstack/qm/sandbox/skills/gstack-investigate/SKILL.md",
+      "path": "skills/gstack-investigate/SKILL.md",
       "triggers": [
         "/gstack investigate",
         "/gstack-investigate",
@@ -26707,7 +26836,7 @@
     {
       "name": "gstack-openclaw-investigate",
       "description": "Use when asked to debug, fix a bug, investigate an error, or do root cause analysis, and when users report errors, stack traces, unexpected behavior, or say something stopped working.",
-      "path": "skills/gstack/openclaw/skills/gstack-openclaw-investigate/SKILL.md",
+      "path": "skills/gstack-openclaw-investigate/SKILL.md",
       "triggers": [
         "/gstack openclaw investigate",
         "/gstack-openclaw-investigate",
@@ -26828,7 +26957,7 @@
     {
       "name": "gstack-review",
       "description": "Use before merging a branch or PR: review the diff for bugs that pass CI but break production, fix the obvious ones and ask about the rest. (gstack)",
-      "path": "skills/gstack/qm/sandbox/skills/gstack-review/SKILL.md",
+      "path": "skills/gstack-review/SKILL.md",
       "triggers": [
         "/gstack review",
         "/gstack-review",
@@ -35249,7 +35378,7 @@
     {
       "name": "investigate",
       "description": "Use when a test fails, code errors or output is wrong: find the root cause, then fix it. (gstack)",
-      "path": "skills/gstack/investigate/SKILL.md",
+      "path": "skills/investigate/SKILL.md",
       "triggers": [
         "/investigate",
         "investigate",
@@ -35887,6 +36016,38 @@
         "react",
         "package",
         "buttons"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "litert-google-tensor",
+      "description": "Compiles LiteRT (.tflite) models ahead-of-time for Google Tensor TPUs (Tensor G5 on Pixel 10, Tensor G6 on Pixel 11) locally on Linux x86_64 or on Google Colab (--colab on macOS, Windows, or ARM hosts), benchmarks them on a USB-attached Pixel with LiteRT's benchmark_model (NPU latency, peak memory, ",
+      "path": "skills/litert-google-tensor/SKILL.md",
+      "triggers": [
+        "/litert google tensor",
+        "/litert-google-tensor",
+        "litert google tensor",
+        "litert-google-tensor",
+        "compiles litert",
+        "/google tensor",
+        "/google-tensor",
+        "/litert google",
+        "/litert-google",
+        "google tensor",
+        "google-tensor",
+        "litert google"
+      ],
+      "keywords": [
+        "litert",
+        "google",
+        "tensor",
+        "compiles",
+        "tflite",
+        "models",
+        "ahead",
+        "time",
+        "tpus",
+        "pixel"
       ],
       "aliases": []
     },
@@ -38168,6 +38329,52 @@
         "forensic",
         "mftecmd",
         "prefetch"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "pathways-workload",
+      "description": "Debugs failed, crashing or hung Pathways on Cloud workloads (JAX training or inference on Cloud TPU in GKE, run as a JobSet, PathwaysJob or LeaderWorkerSet). Reads Cloud Logging for every Pathways container (user workload, IFRT proxy, pathways-rm, pathways-worker, colocated Python sidecar), node ker",
+      "path": "skills/pathways-workload/SKILL.md",
+      "triggers": [
+        "/pathways workload",
+        "/pathways-workload",
+        "pathways workload",
+        "pathways-workload",
+        "debugs failed"
+      ],
+      "keywords": [
+        "pathways",
+        "workload",
+        "debugs",
+        "failed",
+        "crashing",
+        "hung",
+        "cloud",
+        "workloads",
+        "training",
+        "inference"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "pcb",
+      "description": "Create, edit, lay out and review native KiCad circuit boards (.kicad_pcb) and their schematics (.kicad_sch) - parts and nets, ERC, placement and routing, DRC, and a review before ordering (fab limits, decoupling, track width for current, assembly and BOM sourcing for JLCPCB, PCBWay or another fab); ",
+      "path": "skills/pcb/SKILL.md",
+      "triggers": [
+        "create edit"
+      ],
+      "keywords": [
+        "create",
+        "edit",
+        "review",
+        "native",
+        "kicad",
+        "circuit",
+        "boards",
+        "schematics",
+        "parts",
+        "nets"
       ],
       "aliases": []
     },
@@ -44187,6 +44394,29 @@
       "aliases": []
     },
     {
+      "name": "print3d",
+      "description": "Prints a part - slices an `.stl`, `.3mf` or `.obj` into printer-ready G-code with OrcaSlicer, headless or in the app, with built-in profiles for most FDM printers (Prusa, Bambu Lab, Creality, Voron), and sends it to a Bambu Lab printer through Bambu Connect or Bambu Studio. Use when the person wants",
+      "path": "skills/print3d/SKILL.md",
+      "triggers": [
+        "prints part",
+        "/print3d",
+        "print3d"
+      ],
+      "keywords": [
+        "print3d",
+        "prints",
+        "part",
+        "slices",
+        "printer",
+        "ready",
+        "code",
+        "orcaslicer",
+        "headless",
+        "built"
+      ],
+      "aliases": []
+    },
+    {
       "name": "prior-art-first",
       "description": "Look for maintained, clearly licensed open-source implementations before building unfamiliar functionality from scratch. Use when a task needs a feature, algorithm, protocol, parser or integration you have not built before, or before adding a dependency.",
       "path": "skills/prior-art-first/SKILL.md",
@@ -45085,6 +45315,29 @@
         "actions",
         "high",
         "frequency"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "render",
+      "description": "Renders photoreal images and videos of a text-to-cad model, a STEP or an xbf with Blender, for people to look at, such as a hero shot, a README picture, a product post, a turntable or a film of a model's motion or animation. Exports a GLB, loads it with cad.blender, lights and frames it in a bpy scr",
+      "path": "skills/render/SKILL.md",
+      "triggers": [
+        "renders photoreal",
+        "/render",
+        "render"
+      ],
+      "keywords": [
+        "render",
+        "renders",
+        "photoreal",
+        "images",
+        "videos",
+        "text",
+        "model",
+        "step",
+        "blender",
+        "people"
       ],
       "aliases": []
     },
@@ -46415,6 +46668,31 @@
       "aliases": []
     },
     {
+      "name": "robot-simulation",
+      "description": "Robot and world descriptions (URDF, SRDF, SDF) for ROS, MoveIt and Gazebo. Use for ROS robot_description files (links, joints, limits, inertials, meshes), MoveIt planning groups, end effectors, group states and disabled collision pairs, Gazebo/gz models and worlds (sensors, plugins, physics), and op",
+      "path": "skills/robot-simulation/SKILL.md",
+      "triggers": [
+        "/robot simulation",
+        "/robot-simulation",
+        "robot simulation",
+        "robot-simulation",
+        "robot world"
+      ],
+      "keywords": [
+        "robot",
+        "simulation",
+        "world",
+        "descriptions",
+        "urdf",
+        "srdf",
+        "moveit",
+        "gazebo",
+        "description",
+        "files"
+      ],
+      "aliases": []
+    },
+    {
       "name": "roku",
       "description": "App dashboard with purple-themed aesthetic, top-bar navigation, card-based layouts, and developer-first workflows.",
       "path": "skills/roku/SKILL.md",
@@ -46438,7 +46716,7 @@
     },
     {
       "name": "routing-middleware",
-      "description": "Vercel Routing Middleware guidance \u2014 request interception before cache, rewrites, redirects, personalization. Works with any framework. Supports Edge, Node.js, and Bun runtimes. Use when intercepting requests at the platform level.",
+      "description": "Vercel Routing Middleware guidance \u2014 request interception before cache, rewrites, redirects, personalization. Works with any framework. Supports Edge, Node.js, Bun, and Python runtimes. Use when intercepting requests at the platform level.",
       "path": "skills/routing-middleware/SKILL.md",
       "triggers": [
         "/routing middleware",
@@ -46533,6 +46811,33 @@
         "shared"
       ],
       "aliases": []
+    },
+    {
+      "name": "sandbox",
+      "description": "Creates isolated Linux MicroVMs using Vercel Sandbox SDK. Use when building code execution environments, running untrusted code, spinning up dev servers, testing in isolation, or when the user mentions \"sandbox\", \"microvm\", \"isolated execution\", or \"@vercel/sandbox\".",
+      "path": "skills/vercel-sandbox/upstream/SKILL.md",
+      "triggers": [
+        "creates isolated",
+        "/sandbox",
+        "sandbox",
+        "upstream",
+        "/upstream"
+      ],
+      "keywords": [
+        "sandbox",
+        "creates",
+        "isolated",
+        "linux",
+        "microvms",
+        "vercel",
+        "building",
+        "code",
+        "execution",
+        "environments"
+      ],
+      "aliases": [
+        "upstream"
+      ]
     },
     {
       "name": "sandbox-migrate-to-next",
@@ -51872,7 +52177,7 @@
     },
     {
       "name": "vercel-flags",
-      "description": "Feature flags, A/B tests, and gradual rollouts with Vercel Flags, in any app or framework. Use whenever the user is planning, adding, or changing a feature flag, toggle, kill switch, experiment, percentage rollout, or targeting rule, or wants to gate or hide a feature for some users, even before a l",
+      "description": "Feature flags, A/B tests, and gradual rollouts with Vercel Flags, in any app or framework. Use whenever the user is planning, adding, changing, or cleaning up a feature flag, toggle, kill switch, experiment, percentage rollout, or targeting rule, or wants to gate or hide a feature for some users, ev",
       "path": "skills/vercel-flags/SKILL.md",
       "triggers": [
         "/vercel flags",
@@ -51897,7 +52202,7 @@
     },
     {
       "name": "vercel-functions",
-      "description": "Vercel Functions expert guidance \u2014 Node.js/Bun/Python runtimes, Fluid Compute, long-duration (30 min) functions, large functions (5 GB bundles), Docker/OCI container images, plan limits, streaming, WebSockets, and Cron Jobs. Use when configuring, debugging, or optimizing server-side code running on ",
+      "description": "Vercel Functions expert guidance \u2014 Node.js/Bun/Python runtimes, Fluid Compute, long-duration (30 min) functions, large functions (5 GB bundles), Docker/OCI container images, plan limits, streaming, WebSockets, and legacy Cron Jobs (new scheduled work belongs to vercel-schedules). Use when configurin",
       "path": "skills/vercel-functions/SKILL.md",
       "triggers": [
         "/vercel functions",
@@ -52924,6 +53229,31 @@
         "writing",
         "reviewing",
         "configuring"
+      ],
+      "aliases": []
+    },
+    {
+      "name": "workers-development",
+      "description": "Run, inspect, and debug Cloudflare Workers during local development with cf dev, wrangler dev, or the Cloudflare Vite plugin, using Local Explorer to read and seed binding data and query local traces and logs. Also routes production debugging to Workers observability. Use for debugging requests whet",
+      "path": "skills/workers-development/SKILL.md",
+      "triggers": [
+        "/workers development",
+        "/workers-development",
+        "workers development",
+        "workers-development",
+        "inspect debug"
+      ],
+      "keywords": [
+        "workers",
+        "development",
+        "inspect",
+        "debug",
+        "cloudflare",
+        "local",
+        "wrangler",
+        "vite",
+        "plugin",
+        "explorer"
       ],
       "aliases": []
     },

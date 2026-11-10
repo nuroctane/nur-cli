@@ -1,12 +1,12 @@
 {
   "schema": 1,
-  "resolved_at": "2026-11-06",
+  "resolved_at": "2026-11-10",
   "npm": {
     "skills": "1.7.6",
-    "akm-cli": "0.10.261022",
-    "executor": "2.0.0-beta.37",
-    "graphjin": "3.21.18",
-    "@oh-my-pi/pi-coding-agent": "18.17.0",
+    "akm-cli": "0.10.261117",
+    "executor": "2.0.0-beta.39",
+    "graphjin": "3.21.19",
+    "@oh-my-pi/pi-coding-agent": "18.18.6",
     "@sleepinsummer/agent-browser-cli": "0.3.7",
     "penecho": "1.4.2",
     "excalidraw-cli": "0.0.2",
@@ -14,13 +14,13 @@
     "akarso": "0.3.0",
     "@plur-ai/cli": "0.23.0",
     "@plur-ai/mcp": "0.23.0",
-    "ruflo": "3.72.2",
+    "ruflo": "3.75.2",
     "@ast-grep/cli": "0.51.1"
   },
   "pypi": {
-    "headroom-ai": "0.43.1",
+    "headroom-ai": "0.44.0",
     "plasma-fractal": "1.4.0",
-    "graphifyy": "0.9.103"
+    "graphifyy": "0.9.105"
   },
   "packs": {
     "startup-skill": {
@@ -29,11 +29,11 @@
     },
     "design": {
       "repo": "emilkowalski/skills",
-      "commit": "c8a79627b59d72d764d6ab6f2c87c09a48169833"
+      "commit": "715c1807e08c497cfd1dc4feb450a2a3300ef2a9"
     },
     "clone-website": {
       "repo": "JCodesMore/ai-website-cloner-template",
-      "commit": "ee3f5a2f31fd549b9593fa4f7cf6d2955ee593bb"
+      "commit": "5426e0e2ec35dbc173a7a18f47a3dfe2a765313e"
     },
     "cybersecurity": {
       "repo": "mukul975/Anthropic-Cybersecurity-Skills",
@@ -57,7 +57,7 @@
     },
     "text-to-cad": {
       "repo": "earthtojake/text-to-cad",
-      "commit": "4099cac3ddc56a5e696138c53fd7bee685e8ad9d"
+      "commit": "05ae4284e95251a0e34ea0260e70f7cadc6804bf"
     },
     "mobile-harness": {
       "repo": "droidrun/mobile-harness",

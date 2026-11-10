@@ -1,6 +1,6 @@
 [package]
 name = "nur-cli"
-version = "0.68.1"
+version = "0.69.0"
 edition = "2021"
 description = "NurCLI - fully loaded multi-provider coding agent (TUI, inline kitty/sixel vision, tools, sandbox, TypeSafe/Jev typed judgments with local engines, Graphify/PLUR/Ruflo/Executor + sc-research whitehat pack + historical SC vuln library)."
 license = "GPL-3.0-or-later"
@@ -68,8 +68,8 @@ anydoc = { version = "0.2.4", optional = true }
 # toolchain, no ambient fs/net/process), so the tool bridge really is the only
 # way out of a script. Optional so a lean build can drop the engine.
 boa_engine = { version = "0.22", default-features = false, optional = true }
-jsonschema = { version = "0.60.2", default-features = false }
-agent-client-protocol = { version = "=5.0.0", features = ["stdio"] }
+jsonschema = { version = "0.61.1", default-features = false }
+agent-client-protocol = { version = "=5.1.0", features = ["stdio"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_Diagnostics_ToolHelp", "Win32_Globalization"] }

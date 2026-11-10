@@ -219,13 +219,15 @@ def is_cyber(url: str) -> bool:
 
 def clone_one(url: str, dest: Path) -> tuple[str, bool, str]:
     if (dest / ".git").is_dir():
-        r = run(["git", "fetch", "--depth", "1", "origin"], cwd=dest, timeout=300)
+        r = run(["git", "-c", "core.longpaths=true", "fetch", "--depth", "1", "origin"], cwd=dest, timeout=300)
         if r.returncode == 0:
-            r = run(["git", "checkout", "--detach", "FETCH_HEAD"], cwd=dest)
+            r = run(["git", "-c", "core.longpaths=true", "checkout", "--detach", "FETCH_HEAD"], cwd=dest)
     else:
         dest.mkdir(parents=True, exist_ok=True)
         r = run(
-            ["git", "clone", "--depth", "1", "--single-branch", url, str(dest)],
+            # Deep skill trees (NVIDIA/skills) pass Windows' 260-character path limit.
+            ["git", "-c", "core.longpaths=true", "clone", "--depth", "1", "--single-branch",
+             "--config", "core.longpaths=true", url, str(dest)],
             timeout=300,
         )
     if r.returncode != 0:
