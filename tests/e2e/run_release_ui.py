@@ -4,6 +4,7 @@ Uses only an isolated home and scripted loopback provider. No clipboard access.
 Run with --bin PATH [secret-cancel|secret-click|secret-repeat|resume-controls].
 """
 import argparse
+import os
 import json
 import re
 import threading
@@ -30,6 +31,11 @@ def write_png(path, width, height, pixel):
 
 
 def run(binary, scenario):
+    if scenario == 'inline-image-kitty' and os.name != 'nt':
+        # pyte cannot place kitty's placeholder (U+10EEEE, outside the BMP)
+        # and loses the rows around it; ConPTY hands it over intact.
+        print(f'SKIP {scenario} (Windows only)', flush=True)
+        return
     work = OUT / f'{scenario}-{time.time_ns()}'
     work.mkdir(parents=True)
     home, workspace = work/'home', work/'workspace'
