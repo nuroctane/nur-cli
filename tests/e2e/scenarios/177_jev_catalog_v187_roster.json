@@ -1,0 +1,13 @@
+{
+  "description": "The offline Jev library carries the JevBench v1.8.7 roster: new hosted engines connect directly, engines that left the roster stay usable, and a variant whose request setting nur cannot send is not offered as a direct endpoint.",
+  "setup_commands": [
+    {"args": ["jev", "models", "--search", "celeris"], "stdout_contains": ["JevBench v1.8.7 roster", "celeris-1-decision"]},
+    {"args": ["jev", "info", "celeris-1-decision"], "stdout_contains": ["public endpoint: https://inference.celeris.ai/celeris-1-decision/v1/systemone", "model: celeris-1-decision", "nur jev use --engine celeris-1-decision"]},
+    {"args": ["jev", "info", "djev"], "stdout_contains": ["public endpoint: https://api.djev.dev", "interface: djev"]},
+    {"args": ["jev", "info", "liquid-d1-ultra"], "stdout_contains": ["nur jev use --engine liquid-d1-ultra"]},
+    {"args": ["jev", "info", "singularity-super-decider-thinking"], "stdout_contains": ["\"thinking\":\"always\""], "stdout_lacks": ["public endpoint"]}
+  ],
+  "prompt": "Say ready.",
+  "script": [{"text": "Ready."}],
+  "expect": {"exit_code": 0, "requests": 1, "stdout_contains": ["Ready."]}
+}

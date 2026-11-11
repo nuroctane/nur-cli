@@ -3,7 +3,9 @@ import argparse, hashlib, json, pathlib, urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = 'fstandhartinger/model-market-comparison'
-PATH = 'data/raw/benchmarks/jevbench/v1.5/jevbench-v1.5.4-results.json'
+PATH = 'data/raw/benchmarks/jevbench/v1.8/jevbench-v1.8.7-results.json'
+# Since v1.6 endpoint_condition is the run's full prose; the catalog keeps a short label.
+KIND = {'api': 'hosted API', 'gpu': 'GPU', 'cpu': 'CPU', 'demo': 'demo'}
 
 def fetch(path, revision):
     with urllib.request.urlopen(f'https://raw.githubusercontent.com/{SOURCE}/{revision}/{path}', timeout=45) as r:
@@ -26,10 +28,13 @@ def main():
         elif 'Djev' in adapter or row['key'] == 'djev-thinking': protocol = 'djev'
         elif 'RemoteInproc' in adapter: protocol = 'run'
         elif 'ClassifierDev' in adapter: protocol = 'classifier-dev'
-        source = row.get('repo') or links.get(row['key'], {}).get('url') or f"https://www.benchmarkheaven.com/jev-models/{row['key']}"
+        # Since v1.8 some rows point repo at the benchmark's own page; a vendor link is the better source.
+        repo = row.get('repo')
+        if repo and 'benchmarkheaven.com/' in repo: repo = None
+        source = repo or links.get(row['key'], {}).get('url') or f"https://www.benchmarkheaven.com/jev-models/{row['key']}"
         engines.append(dict(id=row['key'], name=row['display'], source=source,
                             protocol=protocol, adapter=adapter, license=row.get('licence'),
-                            open=row.get('open'), hardware=row.get('gpu') or row.get('endpoint_condition'),
+                            open=row.get('open'), hardware=row.get('gpu') or KIND.get(row.get('endpoint_kind')),
                             support=row.get('support'), status=row.get('status'),
                             rank=row.get('rank'), model=None))
     # Deployment identifiers from public model cards/vendor docs, never the benchmark's private GPU URLs.
@@ -66,7 +71,7 @@ def main():
         if extra['id'] in roster:
             raise ValueError(f"{extra['id']} is now in the JevBench roster; drop its supplement")
         engines.append(extra)
-    payload = dict(version=1, benchmark='JevBench v1.5.4', revision=args.revision,
+    payload = dict(version=1, benchmark=f"JevBench {data['revision']}", revision=args.revision,
                    source=f'https://github.com/{SOURCE}/blob/{args.revision}/{PATH}',
                    sha256=hashlib.sha256(raw).hexdigest(), engines=engines)
     (ROOT/'src/jev_catalog.json').write_text(json.dumps(payload, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')

@@ -1,5 +1,5 @@
 {
-  "reviewed": "2026-10-16",
+  "reviewed": "2026-11-10",
   "note": "Jev-class decision models released after the pinned JevBench roster. Vendor-documented, unranked until JevBench measures them. `s1bench` is the macro accuracy S1Bench (bench.jakecuth.com, same six public suites as Jev 1.13.0, Jev = 0.775) reported on the review date; it is a third-party read, not a JevBench rank.",
   "engines": [
     {
@@ -11,33 +11,22 @@
       "license": "SubQ API terms",
       "open": "no",
       "hardware": "hosted (api.subq.ai)",
-      "support": {"choice": "native", "noul": "native", "score": "native", "images": "native"},
-      "status": {"status": "preview; not yet measured by JevBench", "s1bench": 0.825},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native",
+        "images": "native"
+      },
+      "status": {
+        "status": "preview; not yet measured by JevBench",
+        "s1bench": 0.825
+      },
       "rank": null,
       "model": "subq-snap-preview",
       "endpoint": "https://api.subq.ai/v1/systemone",
       "key_env": "SUBQ_API_KEY",
       "evidence": "https://bench.jakecuth.com/",
       "notes": "Drop-in System One schema (noul/choice/score, image states), 384K context, $0.05 per million input tokens and free output. Picked up automatically for compaction and tool gating whenever SUBQ_API_KEY is set and no other engine is selected."
-    },
-    {
-      "id": "mercury-decide",
-      "name": "Mercury Decide (Inception, via OpenRouter Decisions)",
-      "source": "https://openrouter.ai/inception/mercury-decide",
-      "protocol": "systemone",
-      "adapter": "",
-      "license": "OpenRouter terms",
-      "open": "no",
-      "hardware": "hosted (OpenRouter Decisions API)",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.802},
-      "rank": null,
-      "model": "inception/mercury-decide",
-      "endpoint": "https://openrouter.ai/api/alpha/decisions",
-      "key_env": "OPENROUTER_API_KEY",
-      "credential_provider": "openrouter",
-      "evidence": "https://bench.jakecuth.com/",
-      "notes": "OpenRouter's Decisions API takes the System One request body ({model, state, questions}). 66K context, $0.02 per million input tokens; `inception/mercury-decide:free` is the rate-limited free tier. Picked up automatically when OPENROUTER_API_KEY is set and no SubQ key or local bridge is present."
     },
     {
       "id": "span-01",
@@ -48,8 +37,15 @@
       "license": "OpenRouter terms",
       "open": "no",
       "hardware": "hosted (OpenRouter Decisions API)",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.716},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.716
+      },
       "rank": null,
       "model": "respan/span-01",
       "endpoint": "https://openrouter.ai/api/alpha/decisions",
@@ -67,8 +63,15 @@
       "license": "OpenRouter terms",
       "open": "no",
       "hardware": "hosted (OpenRouter Decisions API)",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.700},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.7
+      },
       "rank": null,
       "model": "respan/span-01-lite",
       "endpoint": "https://openrouter.ai/api/alpha/decisions",
@@ -86,29 +89,17 @@
       "license": "OpenRouter terms",
       "open": "no",
       "hardware": "hosted (OpenRouter Decisions API)",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "experimental; not yet measured by JevBench", "s1bench": 0.713},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "experimental; not yet measured by JevBench",
+        "s1bench": 0.713
+      },
       "rank": null,
       "model": "togethercomputer/tev1-4b-experimental",
-      "endpoint": "https://openrouter.ai/api/alpha/decisions",
-      "key_env": "OPENROUTER_API_KEY",
-      "credential_provider": "openrouter",
-      "evidence": "https://bench.jakecuth.com/",
-      "notes": "System One schema through OpenRouter's Decisions API."
-    },
-    {
-      "id": "liquid-d1",
-      "name": "Liquid D1 (Liquid AI, via OpenRouter Decisions)",
-      "source": "https://openrouter.ai/liquid/d1",
-      "protocol": "systemone",
-      "adapter": "",
-      "license": "OpenRouter terms",
-      "open": "no",
-      "hardware": "hosted (OpenRouter Decisions API)",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.712},
-      "rank": null,
-      "model": "liquid/d1",
       "endpoint": "https://openrouter.ai/api/alpha/decisions",
       "key_env": "OPENROUTER_API_KEY",
       "credential_provider": "openrouter",
@@ -124,8 +115,15 @@
       "license": "OpenRouter terms",
       "open": "no",
       "hardware": "hosted (OpenRouter Decisions API)",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.701},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.701
+      },
       "rank": null,
       "model": "upstage/solar-decide",
       "endpoint": "https://openrouter.ai/api/alpha/decisions",
@@ -143,8 +141,12 @@
       "license": "Fastino API terms",
       "open": "no",
       "hardware": "hosted (Fastino API)",
-      "support": {"choice": "native"},
-      "status": {"status": "released 2026-09-30; not yet measured by JevBench"},
+      "support": {
+        "choice": "native"
+      },
+      "status": {
+        "status": "released 2026-09-30; not yet measured by JevBench"
+      },
       "rank": null,
       "model": "fastino/glide",
       "endpoint": "https://api.fastino.ai/v1/systemone",
@@ -161,8 +163,14 @@
       "license": "Apache-2.0",
       "open": "yes",
       "hardware": "see the model card",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released 2026-10-01; not yet measured by JevBench"},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released 2026-10-01; not yet measured by JevBench"
+      },
       "rank": null,
       "model": "perplexity-ai/pplx-decider-v1-27b",
       "evidence": "https://huggingface.co/perplexity-ai/pplx-decider-v1-27b",
@@ -177,8 +185,15 @@
       "license": "see the model card",
       "open": "yes",
       "hardware": "4.66B; CPU-capable (S1Bench ran it on CPU at ~6 s/item), GPU recommended",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.757},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.757
+      },
       "rank": null,
       "model": "llm-semantic-router/Decision-1.0-Nox-4B",
       "evidence": "https://bench.jakecuth.com/",
@@ -193,8 +208,15 @@
       "license": "see the model card",
       "open": "yes",
       "hardware": "4.21B; CPU-capable, GPU recommended",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.742},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.742
+      },
       "rank": null,
       "model": "vllm-sr/Decision-2.0-Nox-4B",
       "evidence": "https://bench.jakecuth.com/",
@@ -209,44 +231,19 @@
       "license": "see the model card",
       "open": "yes",
       "hardware": "2.27B; CPU-capable",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.713},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.713
+      },
       "rank": null,
       "model": "llm-semantic-router/Decision-1.0-Sol-2B",
       "evidence": "https://bench.jakecuth.com/",
       "notes": "Smaller sibling of Decision 1.0 Nox; same serving recipe."
-    },
-    {
-      "id": "clef-flash",
-      "name": "Clef Flash (Cloudflare, 9B)",
-      "source": "https://huggingface.co/Cloudflare/clef-flash",
-      "protocol": "adapter",
-      "adapter": "",
-      "license": "see the model card",
-      "open": "yes",
-      "hardware": "9B GPU",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.757},
-      "rank": null,
-      "model": "Cloudflare/clef-flash",
-      "evidence": "https://bench.jakecuth.com/",
-      "notes": "Open weights. Serve behind a TypeSafe-compatible server or connect the model card's inference code as a Python adapter."
-    },
-    {
-      "id": "clef",
-      "name": "Clef (Cloudflare, 27B)",
-      "source": "https://huggingface.co/Cloudflare/clef",
-      "protocol": "adapter",
-      "adapter": "",
-      "license": "see the model card",
-      "open": "yes",
-      "hardware": "27B GPU",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.747},
-      "rank": null,
-      "model": "Cloudflare/clef",
-      "evidence": "https://bench.jakecuth.com/",
-      "notes": "Larger Clef. Same serving recipe as clef-flash."
     },
     {
       "id": "imajev-4b",
@@ -257,8 +254,15 @@
       "license": "see the repository",
       "open": "yes",
       "hardware": "4B GPU; 4K context, up to 50 options",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench (its RTX 5090 deployment is in the roster)", "s1bench": 0.774},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench (its RTX 5090 deployment is in the roster)",
+        "s1bench": 0.774
+      },
       "rank": null,
       "model": "mohit67890/imajev",
       "evidence": "https://bench.jakecuth.com/",
@@ -273,8 +277,15 @@
       "license": "see the repository",
       "open": "yes",
       "hardware": "2B GPU; 25K context, up to 50 options",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.751},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.751
+      },
       "rank": null,
       "model": "jev-style-2b",
       "evidence": "https://bench.jakecuth.com/",
@@ -289,8 +300,15 @@
       "license": "see the repository",
       "open": "yes",
       "hardware": "27B GPU (DGX Spark class)",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.715},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.715
+      },
       "rank": null,
       "model": "bjev",
       "evidence": "https://bench.jakecuth.com/",
@@ -305,8 +323,15 @@
       "license": "see the repository",
       "open": "yes",
       "hardware": "1.9B GPU; 4K context, up to 50 options",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.701},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.701
+      },
       "rank": null,
       "model": "strands-decider-2b",
       "evidence": "https://bench.jakecuth.com/",
@@ -321,8 +346,15 @@
       "license": "see the repository",
       "open": "yes",
       "hardware": "598M; runs on a laptop GPU",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.588},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.588
+      },
       "rank": null,
       "model": "agent-jev-0.6b",
       "evidence": "https://bench.jakecuth.com/",
@@ -337,8 +369,15 @@
       "license": "see the model card",
       "open": "yes",
       "hardware": "649M; CPU or any GPU",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.480},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.48
+      },
       "rank": null,
       "model": "FrontiersMind/Lumma-fev-0.6b",
       "evidence": "https://bench.jakecuth.com/",
@@ -353,48 +392,18 @@
       "license": "see the model card",
       "open": "yes",
       "hardware": "270M; CPU",
-      "support": {"choice": "native", "noul": "native"},
-      "status": {"status": "released; not yet measured by JevBench", "s1bench": 0.429},
+      "support": {
+        "choice": "native",
+        "noul": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench",
+        "s1bench": 0.429
+      },
       "rank": null,
       "model": "kaivoss/system-one-270m",
       "evidence": "https://bench.jakecuth.com/",
       "notes": "Smallest open System One fine-tune; up to 26 options. Accuracy is far below Jev."
-    },
-    {
-      "id": "amos-1-large",
-      "name": "AMOS 1 Large 27B (Scira, keyless hosted System One)",
-      "source": "https://amos.scira.ai/",
-      "protocol": "systemone",
-      "adapter": "",
-      "license": "Apache-2.0",
-      "open": "yes",
-      "hardware": "hosted (api.amos.scira.ai); open weights, 27B",
-      "support": {"choice": "native", "noul": "native", "score": "native", "multi": "native", "span": "native", "region": "native", "images": "native"},
-      "status": {"status": "released; not yet measured by JevBench"},
-      "rank": null,
-      "model": "amos-1-large",
-      "endpoint": "https://api.amos.scira.ai/v1/systemone",
-      "key_optional": true,
-      "evidence": "https://huggingface.co/collections/mukaddamzaid/amos-1",
-      "notes": "Speaks the System One schema natively and checks no API key (60 rpm, 20 concurrent, 4 MB cap), so `nur jev use --engine amos-1-large` works with nothing stored. Reports 94.9% Decision Bench and 84.7 JevBench hard (Jev 1.13.0 scores 74.1). Self-serve the same weights: `pip install ./amos-1-large/serve && python -m amos.serve amos-1-large --port 8000`, then `nur jev use --url http://127.0.0.1:8000`."
-    },
-    {
-      "id": "amos-1-medium",
-      "name": "AMOS 1 Medium 9B (Scira, keyless hosted System One)",
-      "source": "https://amos.scira.ai/",
-      "protocol": "systemone",
-      "adapter": "",
-      "license": "Apache-2.0",
-      "open": "yes",
-      "hardware": "hosted (api.amos.scira.ai); open weights, 9B",
-      "support": {"choice": "native", "noul": "native", "score": "native", "multi": "native", "span": "native", "region": "native", "images": "native"},
-      "status": {"status": "released; not yet measured by JevBench"},
-      "rank": null,
-      "model": "amos-1-medium",
-      "endpoint": "https://api.amos.scira.ai/v1/systemone",
-      "key_optional": true,
-      "evidence": "https://huggingface.co/collections/mukaddamzaid/amos-1",
-      "notes": "Keyless hosted System One endpoint; same serving and self-host recipe as amos-1-large."
     },
     {
       "id": "amos-1-small",
@@ -405,8 +414,18 @@
       "license": "Apache-2.0",
       "open": "yes",
       "hardware": "hosted (api.amos.scira.ai); open weights, 2B",
-      "support": {"choice": "native", "noul": "native", "score": "native", "multi": "native", "span": "native", "region": "native", "images": "native"},
-      "status": {"status": "released; not yet measured by JevBench"},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native",
+        "multi": "native",
+        "span": "native",
+        "region": "native",
+        "images": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench"
+      },
       "rank": null,
       "model": "amos-1-small",
       "endpoint": "https://api.amos.scira.ai/v1/systemone",
@@ -423,8 +442,18 @@
       "license": "Apache-2.0",
       "open": "yes",
       "hardware": "hosted (api.amos.scira.ai); open weights, 0.5B, 9K context",
-      "support": {"choice": "native", "noul": "native", "score": "native", "multi": "native", "span": "native", "region": "native", "images": "native"},
-      "status": {"status": "released; not yet measured by JevBench"},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native",
+        "multi": "native",
+        "span": "native",
+        "region": "native",
+        "images": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench"
+      },
       "rank": null,
       "model": "amos-1-mini",
       "endpoint": "https://api.amos.scira.ai/v1/systemone",
@@ -441,8 +470,14 @@
       "license": "Apache-2.0",
       "open": "yes",
       "hardware": "hosted (api.interfaze.ai); self-host needs an 80 GB GPU",
-      "support": {"choice": "via gateway", "noul": "via gateway", "score": "via gateway"},
-      "status": {"status": "released; not yet measured by JevBench"},
+      "support": {
+        "choice": "via gateway",
+        "noul": "via gateway",
+        "score": "via gateway"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench"
+      },
       "rank": null,
       "model": "interfaze-1-lite",
       "endpoint": "https://api.interfaze.ai/v1",
@@ -459,8 +494,14 @@
       "license": "Experiential Labs terms",
       "open": "no",
       "hardware": "hosted (api.experientiallabs.ai)",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "hosted Jev (jev-latest) behind the Experiential Labs gateway"},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "hosted Jev (jev-latest) behind the Experiential Labs gateway"
+      },
       "rank": null,
       "model": "jev-latest",
       "endpoint": "https://api.experientiallabs.ai/v1/systemone",
@@ -468,25 +509,6 @@
       "credential_provider": "experiential",
       "evidence": "https://platform.experientiallabs.ai/llms.txt",
       "notes": "The gateway serves the System One schema with the same xpl_ key as its chat API, so one `nur auth login --provider experiential` covers both. Select with `nur jev use --engine jev-via-experiential`."
-    },
-    {
-      "id": "liquid-d1-ultra",
-      "name": "Liquid d1-ultra (Liquid AI Console, hosted System One)",
-      "source": "https://console.liquid.ai/",
-      "protocol": "systemone",
-      "adapter": "",
-      "license": "Liquid AI API terms",
-      "open": "no",
-      "hardware": "hosted (api.liquid.ai)",
-      "support": {"choice": "native", "noul": "native", "score": "native", "images": "native"},
-      "status": {"status": "released 2026-10-15; not yet measured by JevBench"},
-      "rank": null,
-      "model": "d1-ultra",
-      "endpoint": "https://api.liquid.ai/decisions/v1/systemone",
-      "key_env": "LIQUID_AI_API_KEY",
-      "credential_provider": "liquidai",
-      "evidence": "https://www.liquid.ai/blog/d1-ultra",
-      "notes": "Liquid's strongest decision model: multimodal, 44 languages, #1 on the Artificial Analysis Decision Index at release. Speaks the System One schema natively at Liquid's own endpoint ($0.042 per million input tokens, no output tokens; each question is billed for the state and every image again). Keys come from console.liquid.ai (liquid_...). Store one with `nur jev login liquid-d1-ultra` or export LIQUID_AI_API_KEY; the liquid-d1-ultra, liquid-d1-direct and liquid-d1-free engines share that one slot. nur reads LIQUID_AI_API_KEY rather than the LIQUID_API_KEY Liquid's docs name, because LIQUID_API_KEY already belongs to the Liquid Inference chat route."
     },
     {
       "id": "liquid-d1-direct",
@@ -497,8 +519,15 @@
       "license": "Liquid AI API terms",
       "open": "no",
       "hardware": "hosted (api.liquid.ai)",
-      "support": {"choice": "native", "noul": "native", "score": "native", "images": "native"},
-      "status": {"status": "released; not yet measured by JevBench"},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native",
+        "images": "native"
+      },
+      "status": {
+        "status": "released; not yet measured by JevBench"
+      },
       "rank": null,
       "model": "d1",
       "endpoint": "https://api.liquid.ai/decisions/v1/systemone",
@@ -516,8 +545,14 @@
       "license": "Liquid AI API terms",
       "open": "no",
       "hardware": "hosted (api.liquid.ai)",
-      "support": {"choice": "native", "noul": "native", "score": "native"},
-      "status": {"status": "free tier; text only; not yet measured by JevBench"},
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "free tier; text only; not yet measured by JevBench"
+      },
       "rank": null,
       "model": "d1:free",
       "endpoint": "https://api.liquid.ai/decisions/v1/systemone",
@@ -525,6 +560,52 @@
       "credential_provider": "liquidai",
       "evidence": "https://docs.liquid.ai/lfm/models/d1",
       "notes": "Liquid's free d1 tier: text only (a request with images is refused). Keys come from console.liquid.ai (liquid_...). Store one with `nur jev login liquid-d1-ultra` or export LIQUID_AI_API_KEY; the liquid-d1-ultra, liquid-d1-direct and liquid-d1-free engines share that one slot. nur reads LIQUID_AI_API_KEY rather than the LIQUID_API_KEY Liquid's docs name, because LIQUID_API_KEY already belongs to the Liquid Inference chat route."
+    },
+    {
+      "id": "djev",
+      "name": "djev (Maisa, diffusion-gemma)",
+      "source": "https://github.com/Davipar/djev-dev",
+      "protocol": "djev",
+      "adapter": "images/djev/spec.json:jevbench.adapters.djev.DjevAdapter",
+      "license": "Apache-2.0 code; Google DiffusionGemma Apache-2.0 weights; no djev-specific weights",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "dropped from the JevBench roster at v1.8; kept for existing setups"
+      },
+      "rank": null,
+      "model": "djev",
+      "evidence": "https://github.com/Davipar/djev-dev",
+      "notes": "Durable receipts are polled only at the same origin; credentials never follow redirects. The local djev-dev server uses /v1/systemone, selected with --protocol systemone.",
+      "endpoint": "https://api.djev.dev"
+    },
+    {
+      "id": "djev-thinking",
+      "name": "djev (thinking)",
+      "source": "https://github.com/Davipar/djev-dev",
+      "protocol": "djev",
+      "adapter": "images/djev-thinking/spec.json:djev_thinking_v15.DjevThinkingV15Adapter",
+      "license": "Apache-2.0",
+      "open": "yes",
+      "hardware": "H100",
+      "support": {
+        "choice": "native",
+        "noul": "native",
+        "score": "native"
+      },
+      "status": {
+        "status": "dropped from the JevBench roster at v1.8; kept for existing setups"
+      },
+      "rank": null,
+      "model": "djev",
+      "evidence": "https://github.com/Davipar/djev-dev",
+      "notes": "Durable receipts are polled only at the same origin; credentials never follow redirects. The local djev-dev server uses /v1/systemone, selected with --protocol systemone.",
+      "endpoint": "https://api.djev.dev"
     }
   ]
 }

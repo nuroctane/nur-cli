@@ -4,7 +4,7 @@ title: Local engines (Jev contract, no key)
 
 ## Full Jev model library
 
-The pinned [JevBench v1.5.4 roster](jev-models.md) includes all 112 published systems, including variants and unmeasured entries, plus reviewed newer engines from [S1Bench](https://bench.jakecuth.com/) (SubQ Snap, the OpenRouter Decisions models, Cloudflare Clef, the Decision-Nox family, the keyless AMOS 1 sizes, Interfaze 1.1 Lite, and others; 142 entries in all). `nur jev models --search <text>` and `/jev models <text>` search it offline. `nur jev info <id>` and `/jev info <id>` show source, interface, model, hardware, deployment notes, and connection commands.
+The pinned [JevBench v1.8.7 roster](jev-models.md) includes all 354 published systems, including variants and unmeasured entries, plus reviewed engines JevBench does not list: newer ones from [S1Bench](https://bench.jakecuth.com/) (SubQ Snap, the OpenRouter Decisions models, the Decision-Nox family, the smaller keyless AMOS 1 sizes, Interfaze 1.1 Lite, and others) and djev, which left the roster at v1.8 (379 entries in all). `nur jev models --search <text>` and `/jev models <text>` search it offline. `nur jev info <id>` and `/jev info <id>` show source, interface, model, hardware, deployment notes, and connection commands.
 
 ```bash
 nur jev models --search mica

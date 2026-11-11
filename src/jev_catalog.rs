@@ -53,17 +53,22 @@ pub fn slot_engine(slot: &str) -> Option<&'static Engine> {
     slot.strip_prefix("jev:").and_then(|id| find(id).ok())
 }
 
-pub fn engines() -> &'static [Engine] {
-    static ENGINES: std::sync::OnceLock<Vec<Engine>> = std::sync::OnceLock::new();
-    ENGINES.get_or_init(|| {
-        #[derive(Deserialize)]
-        struct Catalog {
-            engines: Vec<Engine>,
-        }
-        serde_json::from_str::<Catalog>(include_str!("jev_catalog.json"))
+#[derive(Deserialize)]
+struct Catalog {
+    benchmark: String,
+    engines: Vec<Engine>,
+}
+
+fn catalog() -> &'static Catalog {
+    static CATALOG: std::sync::OnceLock<Catalog> = std::sync::OnceLock::new();
+    CATALOG.get_or_init(|| {
+        serde_json::from_str(include_str!("jev_catalog.json"))
             .expect("generated Jev catalog must be valid")
-            .engines
     })
+}
+
+pub fn engines() -> &'static [Engine] {
+    &catalog().engines
 }
 
 pub fn find(id: &str) -> Result<&'static Engine> {
@@ -89,9 +94,10 @@ pub fn list(search: Option<&str>, json: bool) -> String {
     }
     let unranked = engines().iter().filter(|e| e.rank.is_none()).count();
     let mut text = format!(
-        "Jev library - {} of {} engines (JevBench v1.5.4 roster and newer reviewed releases; {unranked} not yet ranked)\n",
+        "Jev library - {} of {} engines ({} roster and newer reviewed releases; {unranked} not yet ranked)\n",
         rows.len(),
-        engines().len()
+        engines().len(),
+        catalog().benchmark
     );
     for e in rows {
         text.push_str(&format!("  {:<44} {:<16} {}\n", e.id, e.protocol, e.name));
